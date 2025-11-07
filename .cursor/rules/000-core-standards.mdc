@@ -1,0 +1,16 @@
+---
+alwaysApply: true
+---
+
+Rust Code Standards
+
+- Prefer `cargo fmt` defaults; enforce `rustfmt.toml` settings if present.
+- Require `clippy --all-targets --all-features -D warnings` on CI; fix lints proactively.
+- Model ownership explicitly; avoid `clone()` unless the cost or semantics are justified in comments.
+- Encapsulate unsafe code behind safe abstractions with thorough safety docs.
+- Design APIs around traits and iterators; embrace `Result` and `Option` to make failure explicit.
+- Keep functions cohesive and under ~30 lines; extract helpers and modules instead of deep nesting.
+- Write unit tests alongside code, integration tests in `tests/`, and property tests when invariants matter.
+- Prefer `Arc` over `Rc` in async contexts; document Send/Sync guarantees for shared types.
+- Benchmark critical paths with `cargo bench` or Criterion and profile before micro-optimizing.
+- Treat warnings as errors; fail builds for unused code, dead modules, and missing `#[must_use]` where applicable.

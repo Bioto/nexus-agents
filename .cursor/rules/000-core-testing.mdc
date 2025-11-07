@@ -1,0 +1,18 @@
+---
+alwaysApply: true
+---
+
+Rust Testing Standards
+
+- **Test Organization**: Unit tests in `#[cfg(test)]` modules alongside code; integration tests in `tests/` directory; doc tests in documentation comments.
+- **Test Naming**: Use descriptive names that explain what is being tested; follow `test_<functionality>_<scenario>` pattern.
+- **Test Coverage**: Aim for high coverage on business logic; use `cargo tarpaulin` or `cargo llvm-cov` to measure; focus on edge cases and error paths.
+- **Property-Based Testing**: Use `proptest` or `quickcheck` for testing invariants and generating test cases; especially valuable for parsers, serializers, and data transformations.
+- **Mocking & Test Doubles**: Use `mockall` or `mockito` for external dependencies; prefer trait-based design to enable easy mocking; inject dependencies rather than hardcoding.
+- **Test Data**: Use builders or factories for complex test data; consider `fake` or `faker` crates for realistic test data generation.
+- **Async Testing**: Use `tokio::test` for async tests; prefer `tokio::test` over manual runtime setup; test cancellation and timeout scenarios.
+- **Error Testing**: Test both `Ok` and `Err` paths; verify error messages and error types; use `#[should_panic]` sparingly and only for unrecoverable errors.
+- **Integration Tests**: Test public APIs end-to-end; use separate test databases or in-memory stores; clean up test resources (files, network connections).
+- **Performance Tests**: Use `criterion` for benchmarks; separate benchmarks from unit tests; track performance regressions in CI.
+- **Test Isolation**: Each test should be independent; avoid shared mutable state; use `std::sync::Mutex` or `std::sync::RwLock` only when necessary for test setup.
+- **Documentation Tests**: Write doc tests that demonstrate usage; ensure doc tests compile and pass; use `# ` to hide setup code from documentation.

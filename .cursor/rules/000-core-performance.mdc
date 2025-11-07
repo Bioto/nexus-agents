@@ -1,0 +1,16 @@
+---
+alwaysApply: true
+---
+
+Rust Performance Optimization
+
+- **Measure First**: Profile with `perf`, `cargo flamegraph`, or `criterion` before optimizing; optimize hot paths, not cold code.
+- **Zero-Cost Abstractions**: Prefer iterators, closures, and trait objects; trust the compiler to optimize them away.
+- **Memory Layout**: Use `#[repr(C)]` or `#[repr(align(N))]` when layout matters; consider `Box<[T]>` vs `Vec<T>` for fixed-size collections.
+- **Allocation Strategy**: Minimize allocations in hot loops; reuse buffers with `clear()` or `retain()`; prefer stack allocation for small, short-lived data.
+- **Iterator Chains**: Compose iterator chains; they often compile to better code than manual loops and are more readable.
+- **SIMD & Unsafe**: Use `std::arch` for SIMD when profiling shows benefit; encapsulate unsafe optimizations behind safe APIs with documented safety invariants.
+- **Cache Locality**: Structure data for cache-friendly access patterns; consider `SmallVec` or `ArrayVec` for small collections; pack frequently accessed fields together.
+- **Async Performance**: Prefer `tokio::task::spawn_blocking` for CPU-bound work; use `tokio::sync::mpsc` over channels when appropriate; batch I/O operations.
+- **Compiler Hints**: Use `#[inline]` sparingly (let the compiler decide); mark cold paths with `#[cold]`; use `likely()`/`unlikely()` intrinsics for branch prediction when profiling shows benefit.
+- **Benchmarking**: Write benchmarks for critical paths; use `criterion` for statistical rigor; compare against baseline implementations; track regressions in CI.
