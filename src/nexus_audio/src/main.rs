@@ -61,13 +61,16 @@ fn init_logging() -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _log_path = init_logging();
-
+    // Parse CLI first so errors show in terminal
     let cli = Cli::parse();
+
+    // Initialize logging after parsing (so CLI errors go to terminal)
+    let _log_path = init_logging();
 
     match cli.command {
         Commands::Record(args) => cli::run_record(args)?,
         Commands::Listen(args) => cli::run_listen(args)?,
+        Commands::Speak(args) => cli::run_speak(args).await?,
     }
 
     Ok(())

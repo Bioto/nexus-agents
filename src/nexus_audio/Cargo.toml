@@ -25,7 +25,14 @@ ctrlc = "3.4"
 log = "0.4"
 simplelog = "0.12"
 whisper-rs = "0.15"
+reqwest = { workspace = true }
+rodio = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
 # VAD temporarily disabled - incompatible with current ONNX runtime
+# moshi-server removed - it's not used as a Rust dependency and requires CUDA
+# If needed, install it separately: cargo install --features cuda moshi-server@0.6.4
 # silero-vad-rs = "0.1"
 
 [target.'cfg(unix)'.dependencies]
