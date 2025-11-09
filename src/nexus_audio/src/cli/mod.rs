@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 
 /// Nexus Voice - Voice Interface for AI Agents
 #[derive(Parser)]
-#[command(name = "nexus-voice")]
+#[command(name = "nexus-audio")]
 #[command(about = "A voice interface for interacting with AI agents", long_about = None)]
 #[command(version)]
 pub struct Cli {

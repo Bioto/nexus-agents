@@ -23,7 +23,7 @@ fn init_logging() -> String {
 
             // Create log file with timestamp
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-            let log_file = log_dir.join(format!("nexus-voice_{}.log", timestamp));
+            let log_file = log_dir.join(format!("nexus-audio_{}.log", timestamp));
             let log_path = log_file.to_string_lossy().to_string();
 
             // Open log file for writing (for both logger and stderr)
