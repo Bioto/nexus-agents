@@ -1,5 +1,5 @@
 [workspace]
-members = ["src/nexus_voice","src/nexus_core"]
+members = ["src/nexus_audio","src/nexus_core"]
 resolver = "2"
 
 [workspace.dependencies]

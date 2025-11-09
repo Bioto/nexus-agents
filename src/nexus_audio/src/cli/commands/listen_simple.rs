@@ -73,7 +73,7 @@ pub struct ListenArgs {
     #[arg(
         short,
         long,
-        default_value = "src/nexus_voice/src/__models__/ggml-base.bin"
+        default_value = "src/nexus_audio/src/__models__/ggml-base.bin"
     )]
     pub model: PathBuf,
 

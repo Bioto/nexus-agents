@@ -1332,6 +1332,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "cpal",
+ "crossterm",
+ "ctrlc",
+ "hound",
+ "libc",
+ "log",
+ "ratatui",
+ "simplelog",
+ "thiserror 2.0.17",
+ "tokio",
+ "whisper-rs",
+]
+
+[[package]]
 name = "nexus-core"
 version = "0.1.0"
 dependencies = [
@@ -1352,26 +1372,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "uuid",
-]
-
-[[package]]
-name = "nexus-voice"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "cpal",
- "crossterm",
- "ctrlc",
- "hound",
- "libc",
- "log",
- "ratatui",
- "simplelog",
- "thiserror 2.0.17",
- "tokio",
- "whisper-rs",
 ]
 
 [[package]]

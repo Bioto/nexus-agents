@@ -1,10 +1,10 @@
 [package]
-name = "nexus-voice"
+name = "nexus-audio"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "nexus-voice"
+name = "nexus-audio"
 path = "src/main.rs"
 
 [[example]]
