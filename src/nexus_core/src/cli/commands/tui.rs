@@ -4,12 +4,12 @@ use crate::models::{Agent, ChatHistory, MessageRole, Result};
 use crate::services::SwarmCoordinatorService;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
-    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    Frame, Terminal,
 };
 use std::io;
 use textwrap;

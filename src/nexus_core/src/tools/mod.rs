@@ -1,7 +1,7 @@
 pub mod calculator;
 
-use crate::models::Result;
 use crate::models::tool::Tool;
+use crate::models::Result;
 use serde_json::Value;
 
 /// Trait for executable tools

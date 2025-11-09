@@ -5,13 +5,12 @@ use crate::models::Result;
 use crate::services::SwarmCoordinatorService;
 use clap::Args;
 use crossterm::terminal;
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
 /// Get the default model from DEFAULT_MODEL environment variable or fallback
 fn default_model() -> String {
-    std::env::var("DEFAULT_MODEL")
-        .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
+    std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
 }
 
 #[derive(Args)]

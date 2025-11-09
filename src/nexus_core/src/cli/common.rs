@@ -2,8 +2,7 @@ use clap::Args;
 
 /// Get the default model from DEFAULT_MODEL environment variable or fallback
 pub fn default_model() -> String {
-    std::env::var("DEFAULT_MODEL")
-        .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
+    std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
 }
 
 /// Common parameters shared across commands

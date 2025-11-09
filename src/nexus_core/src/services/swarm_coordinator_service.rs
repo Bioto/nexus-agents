@@ -1,9 +1,9 @@
 use crate::client::Client;
 use crate::factories::AgentFactory;
 use crate::models::{
-    Result,
     agent::AgentStore,
     chat::{ChatCompletionRequest, Message, MessageRole},
+    Result,
 };
 use crate::services::{AgentService, SwarmService};
 use std::sync::Arc;

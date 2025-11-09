@@ -1,12 +1,12 @@
 use crate::client::Client;
 use crate::factories::AgentFactory;
+use crate::models::task_manager::TaskManager;
 use crate::models::{
     agent::AgentStore,
     chat::{ChatCompletionRequest, Message},
     tasks::{TaskDecomposition, TaskError, TaskId},
 };
 use crate::services::AgentService;
-use crate::models::task_manager::TaskManager;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -45,7 +45,7 @@ pub struct TaskResult {
 #[derive(Debug, Clone)]
 pub struct SwarmResult {
     pub task_results: Vec<TaskResult>,
-    pub summary: String
+    pub summary: String,
 }
 
 fn default_model_for_swarm() -> String {

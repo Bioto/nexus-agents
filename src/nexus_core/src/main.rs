@@ -1,5 +1,5 @@
 use clap::Parser;
-use nexus_core::cli::{Cli, Commands, run_chat};
+use nexus_core::cli::{run_chat, Cli, Commands};
 
 #[tokio::main]
 async fn main() {

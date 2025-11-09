@@ -1,8 +1,8 @@
 use crate::models::chat::{ChatCompletionRequest, ResponseFormat};
 use crate::models::tool::Tool;
 use crate::tools::ToolRegistry;
-use quick_xml::Writer;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::Writer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Cursor;

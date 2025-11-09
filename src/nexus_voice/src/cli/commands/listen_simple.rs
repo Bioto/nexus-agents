@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[derive(Args)]
 pub struct ListenArgs {
     /// Target audio sample rate in Hz.
-    /// 
+    ///
     /// Default: 16000 (recommended for Whisper compatibility; values above this may waste compute, below reduces voice quality).
     /// Use typical 44100/48000 for hi-fi, but 16000 is optimal for speech recognition.
     #[arg(short = 'r', long, default_value = "16000")]
@@ -70,7 +70,11 @@ pub struct ListenArgs {
     pub min_speech_ms: u32,
 
     /// Path to Whisper model file
-    #[arg(short, long, default_value = "src/nexus_voice/src/__models__/ggml-base.bin")]
+    #[arg(
+        short,
+        long,
+        default_value = "src/nexus_voice/src/__models__/ggml-base.bin"
+    )]
     pub model: PathBuf,
 
     /// List all available audio input devices and exit
@@ -114,8 +118,11 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
         verbose: args.verbose,
     };
 
-    println!("🔄 Loading Whisper model from: {}", config.model_path.display());
-    
+    println!(
+        "🔄 Loading Whisper model from: {}",
+        config.model_path.display()
+    );
+
     // Create voice listener
     let mut listener = VoiceListener::new(config.clone())?;
 
@@ -123,7 +130,10 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
     println!("   Sample rate: {} Hz", config.sample_rate);
     println!("   Channels: {}", config.channels);
     println!("   Energy threshold: {}", config.energy_threshold);
-    println!("   Voice frequency range: {}-{} Hz", config.min_voice_freq, config.max_voice_freq);
+    println!(
+        "   Voice frequency range: {}-{} Hz",
+        config.min_voice_freq, config.max_voice_freq
+    );
     println!("   ZCR threshold: {}", config.zcr_threshold);
     if let Some(ref device) = config.device_name {
         println!("   Device: {}", device);
@@ -142,45 +152,78 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
         println!("💬 {}", transcription);
         println!();
     })?;
-    
+
     println!("👂 Listening... (speak to transcribe)\n");
     println!("💡 Using advanced voice detection (filters out typing/clicks)");
-    println!("   Will wait {:.1}s of silence before transcribing", config.silence_duration_ms as f32 / 1000.0);
-    
+    println!(
+        "   Will wait {:.1}s of silence before transcribing",
+        config.silence_duration_ms as f32 / 1000.0
+    );
+
     if config.verbose {
         println!("\n📊 Verbose mode - showing metrics:");
         println!("   ✓/✗ = overall detection | E = energy | Z = ZCR | F = frequency");
-        println!("   Thresholds: E>{:.3}, Z<{:.3}, F={}-{}Hz", 
-                config.energy_threshold, config.zcr_threshold, config.min_voice_freq, config.max_voice_freq);
+        println!(
+            "   Thresholds: E>{:.3}, Z<{:.3}, F={}-{}Hz",
+            config.energy_threshold,
+            config.zcr_threshold,
+            config.min_voice_freq,
+            config.max_voice_freq
+        );
     }
     println!();
 
     let mut last_voice_detected = false;
     let mut voice_start_metrics = None;
-    
+
     // Process audio with voice detection
     listener.listen(|metrics| {
         if config.verbose {
             let status = if metrics.is_voice { "✓" } else { "✗" };
-            let energy_ok = if metrics.energy > config.energy_threshold { "✓" } else { "✗" };
-            let zcr_ok = if metrics.zero_crossing_rate < config.zcr_threshold { "✓" } else { "✗" };
-            let freq_ok = if metrics.dominant_frequency == 0.0 || 
-                           (metrics.dominant_frequency >= config.min_voice_freq && 
-                            metrics.dominant_frequency <= config.max_voice_freq) { "✓" } else { "✗" };
-            
-            println!("{} E:{:.3}{} Z:{:.3}{} F:{:3.0}Hz{} | Voice: {}", 
-                    status,
-                    metrics.energy, energy_ok,
-                    metrics.zero_crossing_rate, zcr_ok,
-                    metrics.dominant_frequency, freq_ok,
-                    if metrics.is_voice { "YES" } else { "NO" });
+            let energy_ok = if metrics.energy > config.energy_threshold {
+                "✓"
+            } else {
+                "✗"
+            };
+            let zcr_ok = if metrics.zero_crossing_rate < config.zcr_threshold {
+                "✓"
+            } else {
+                "✗"
+            };
+            let freq_ok = if metrics.dominant_frequency == 0.0
+                || (metrics.dominant_frequency >= config.min_voice_freq
+                    && metrics.dominant_frequency <= config.max_voice_freq)
+            {
+                "✓"
+            } else {
+                "✗"
+            };
+
+            println!(
+                "{} E:{:.3}{} Z:{:.3}{} F:{:3.0}Hz{} | Voice: {}",
+                status,
+                metrics.energy,
+                energy_ok,
+                metrics.zero_crossing_rate,
+                zcr_ok,
+                metrics.dominant_frequency,
+                freq_ok,
+                if metrics.is_voice { "YES" } else { "NO" }
+            );
         }
-        
+
         // Track voice detection transitions
         if metrics.is_voice && !last_voice_detected {
-            voice_start_metrics = Some((metrics.energy, metrics.zero_crossing_rate, metrics.dominant_frequency));
+            voice_start_metrics = Some((
+                metrics.energy,
+                metrics.zero_crossing_rate,
+                metrics.dominant_frequency,
+            ));
             if let Some((e, z, f)) = voice_start_metrics {
-                println!("🎙️  Voice detected (energy: {:.3}, zcr: {:.3}, freq: {:.0}Hz)...", e, z, f);
+                println!(
+                    "🎙️  Voice detected (energy: {:.3}, zcr: {:.3}, freq: {:.0}Hz)...",
+                    e, z, f
+                );
             }
         }
         last_voice_detected = metrics.is_voice;

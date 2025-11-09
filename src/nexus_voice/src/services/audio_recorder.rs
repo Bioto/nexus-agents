@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Audio recording configuration
@@ -69,7 +69,8 @@ impl DeviceInfo {
                     // Look for the card name in brackets
                     if let Some(bracket_start) = line.find('[') {
                         if let Some(bracket_end) = line[bracket_start + 1..].find(']') {
-                            let card_in_brackets = line[bracket_start + 1..bracket_start + 1 + bracket_end].trim();
+                            let card_in_brackets =
+                                line[bracket_start + 1..bracket_start + 1 + bracket_end].trim();
                             if card_in_brackets == card_name {
                                 // Extract the full name after the dash
                                 if let Some(dash_pos) = line.find(" - ") {
@@ -88,13 +89,19 @@ impl DeviceInfo {
             if let Ok(entries) = std::fs::read_dir("/sys/class/sound") {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.is_dir() && path.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.starts_with("card")) {
+                    if path.is_dir()
+                        && path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map_or(false, |n| n.starts_with("card"))
+                    {
                         // Check if this card matches
                         if let Ok(id_content) = std::fs::read_to_string(path.join("id")) {
                             let id = id_content.trim();
                             if id == card_name {
                                 // Found matching card, read longname
-                                if let Ok(longname) = std::fs::read_to_string(path.join("longname")) {
+                                if let Ok(longname) = std::fs::read_to_string(path.join("longname"))
+                                {
                                     let full_name = longname.trim();
                                     if !full_name.is_empty() {
                                         return Some(full_name.to_string());
@@ -201,10 +208,7 @@ impl AudioRecorder {
             .map(|device| {
                 let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
                 let display_name = DeviceInfo::parse_device_name(&name);
-                let is_default = default_device
-                    .as_ref()
-                    .map(|d| d == &name)
-                    .unwrap_or(false);
+                let is_default = default_device.as_ref().map(|d| d == &name).unwrap_or(false);
                 Ok(DeviceInfo {
                     name,
                     display_name,
@@ -240,9 +244,7 @@ impl AudioRecorder {
     fn get_input_device(&self, config: &RecordingConfig) -> Result<Device> {
         if let Some(ref device_name) = config.device_name {
             self.find_input_device(device_name)?
-                .ok_or_else(|| {
-                    VoiceError::Audio(format!("Device '{}' not found", device_name))
-                })
+                .ok_or_else(|| VoiceError::Audio(format!("Device '{}' not found", device_name)))
         } else {
             self.default_input_device()
         }
@@ -256,7 +258,7 @@ impl AudioRecorder {
         config: &RecordingConfig,
     ) -> Result<SupportedStreamConfig> {
         let mut supported_configs: Vec<_> = device.supported_input_configs()?.collect();
-        
+
         // Sort by quality: prefer f32, then i32, then i16, then others
         supported_configs.sort_by(|a, b| {
             let quality_a = match a.sample_format() {
@@ -289,7 +291,10 @@ impl AudioRecorder {
         }
 
         // Try to find config with matching channels (any sample rate)
-        if let Some(supported) = supported_configs.iter().find(|c| c.channels() == target_channels) {
+        if let Some(supported) = supported_configs
+            .iter()
+            .find(|c| c.channels() == target_channels)
+        {
             let sample_rate = supported
                 .min_sample_rate()
                 .max(target_sample_rate.min(supported.max_sample_rate()));
@@ -331,10 +336,14 @@ impl AudioRecorder {
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        
+
         // Log the actual recording parameters for debugging
-        log::info!("Recording at {} Hz, {} channels, format: {:?}", 
-                   actual_sample_rate, actual_channels, sample_format);
+        log::info!(
+            "Recording at {} Hz, {} channels, format: {:?}",
+            actual_sample_rate,
+            actual_channels,
+            sample_format
+        );
 
         let writer = File::create(output_path)
             .map_err(|e| VoiceError::Io(e))
@@ -349,27 +358,48 @@ impl AudioRecorder {
         // Build the stream based on sample format
         // We convert all formats to i16 for WAV compatibility
         let stream = match sample_format {
-            SampleFormat::I8 => {
-                self.build_stream_i8(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
-            SampleFormat::I16 => {
-                self.build_stream_i16(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
-            SampleFormat::I32 => {
-                self.build_stream_i32(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
-            SampleFormat::U8 => {
-                self.build_stream_u8(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
-            SampleFormat::U16 => {
-                self.build_stream_u16(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
-            SampleFormat::F32 => {
-                self.build_stream_f32(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
-            SampleFormat::F64 => {
-                self.build_stream_f64(&device, &stream_config, Arc::clone(&wav_writer_arc), Arc::clone(&recording))?
-            }
+            SampleFormat::I8 => self.build_stream_i8(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
+            SampleFormat::I16 => self.build_stream_i16(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
+            SampleFormat::I32 => self.build_stream_i32(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
+            SampleFormat::U8 => self.build_stream_u8(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
+            SampleFormat::U16 => self.build_stream_u16(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
+            SampleFormat::F32 => self.build_stream_f32(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
+            SampleFormat::F64 => self.build_stream_f64(
+                &device,
+                &stream_config,
+                Arc::clone(&wav_writer_arc),
+                Arc::clone(&recording),
+            )?,
             _ => {
                 return Err(VoiceError::Audio(format!(
                     "Unsupported sample format: {:?}",
@@ -398,13 +428,13 @@ impl AudioRecorder {
         // Finalize WAV file
         // We need to drop the stream first, then finalize the writer
         drop(stream);
-        
+
         // Extract the writer from the Arc and Mutex to finalize it
         let mutex = Arc::try_unwrap(wav_writer_arc)
             .map_err(|_| VoiceError::Audio("Failed to unwrap WAV writer Arc".to_string()))?;
-        let writer = mutex
-            .into_inner()
-            .map_err(|e| VoiceError::Audio(format!("Failed to extract WAV writer from mutex: {}", e)))?;
+        let writer = mutex.into_inner().map_err(|e| {
+            VoiceError::Audio(format!("Failed to extract WAV writer from mutex: {}", e))
+        })?;
         writer
             .finalize()
             .map_err(|e| VoiceError::Audio(format!("Failed to finalize WAV file: {}", e)))?;
@@ -463,7 +493,9 @@ impl AudioRecorder {
         wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
         recording: Arc<AtomicBool>,
     ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: i8| s as f32 / i8::MAX as f32)
+        Self::build_stream_helper(device, config, wav_writer, recording, |s: i8| {
+            s as f32 / i8::MAX as f32
+        })
     }
 
     fn build_stream_i16(
@@ -473,7 +505,9 @@ impl AudioRecorder {
         wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
         recording: Arc<AtomicBool>,
     ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: i16| s as f32 / i16::MAX as f32)
+        Self::build_stream_helper(device, config, wav_writer, recording, |s: i16| {
+            s as f32 / i16::MAX as f32
+        })
     }
 
     fn build_stream_i32(
@@ -483,7 +517,9 @@ impl AudioRecorder {
         wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
         recording: Arc<AtomicBool>,
     ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: i32| s as f32 / i32::MAX as f32)
+        Self::build_stream_helper(device, config, wav_writer, recording, |s: i32| {
+            s as f32 / i32::MAX as f32
+        })
     }
 
     fn build_stream_u8(
@@ -493,7 +529,9 @@ impl AudioRecorder {
         wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
         recording: Arc<AtomicBool>,
     ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: u8| (s as f32 / u8::MAX as f32) * 2.0 - 1.0)
+        Self::build_stream_helper(device, config, wav_writer, recording, |s: u8| {
+            (s as f32 / u8::MAX as f32) * 2.0 - 1.0
+        })
     }
 
     fn build_stream_u16(
@@ -503,7 +541,9 @@ impl AudioRecorder {
         wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
         recording: Arc<AtomicBool>,
     ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: u16| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
+        Self::build_stream_helper(device, config, wav_writer, recording, |s: u16| {
+            (s as f32 / u16::MAX as f32) * 2.0 - 1.0
+        })
     }
 
     fn build_stream_f32(
@@ -527,11 +567,13 @@ impl AudioRecorder {
     }
 
     /// Stop a recording (for use with async/background recording)
+    #[allow(dead_code)]
     pub fn stop_recording(recording: &Arc<AtomicBool>) {
         recording.store(false, Ordering::Relaxed);
     }
 
     /// Create a recording handle that can be used to stop recording
+    #[allow(dead_code)]
     pub fn create_recording_handle() -> Arc<AtomicBool> {
         Arc::new(AtomicBool::new(true))
     }
@@ -556,27 +598,13 @@ impl AudioRecorder {
 
         // Build the stream based on sample format
         let stream = match sample_format {
-            SampleFormat::I8 => {
-                self.build_streaming_stream_i8(&device, &stream_config, tx)?
-            }
-            SampleFormat::I16 => {
-                self.build_streaming_stream_i16(&device, &stream_config, tx)?
-            }
-            SampleFormat::I32 => {
-                self.build_streaming_stream_i32(&device, &stream_config, tx)?
-            }
-            SampleFormat::U8 => {
-                self.build_streaming_stream_u8(&device, &stream_config, tx)?
-            }
-            SampleFormat::U16 => {
-                self.build_streaming_stream_u16(&device, &stream_config, tx)?
-            }
-            SampleFormat::F32 => {
-                self.build_streaming_stream_f32(&device, &stream_config, tx)?
-            }
-            SampleFormat::F64 => {
-                self.build_streaming_stream_f64(&device, &stream_config, tx)?
-            }
+            SampleFormat::I8 => self.build_streaming_stream_i8(&device, &stream_config, tx)?,
+            SampleFormat::I16 => self.build_streaming_stream_i16(&device, &stream_config, tx)?,
+            SampleFormat::I32 => self.build_streaming_stream_i32(&device, &stream_config, tx)?,
+            SampleFormat::U8 => self.build_streaming_stream_u8(&device, &stream_config, tx)?,
+            SampleFormat::U16 => self.build_streaming_stream_u16(&device, &stream_config, tx)?,
+            SampleFormat::F32 => self.build_streaming_stream_f32(&device, &stream_config, tx)?,
+            SampleFormat::F64 => self.build_streaming_stream_f64(&device, &stream_config, tx)?,
             _ => {
                 return Err(VoiceError::Audio(format!(
                     "Unsupported sample format: {:?}",
@@ -585,8 +613,12 @@ impl AudioRecorder {
             }
         };
 
-        log::info!("Streaming audio at {} Hz, {} channels, format: {:?}", 
-                   actual_sample_rate, actual_channels, sample_format);
+        log::info!(
+            "Streaming audio at {} Hz, {} channels, format: {:?}",
+            actual_sample_rate,
+            actual_channels,
+            sample_format
+        );
 
         Ok((stream, rx))
     }
@@ -612,7 +644,7 @@ impl AudioRecorder {
                     let sample_f32: f32 = convert(sample);
                     samples.push(sample_f32.clamp(-1.0, 1.0));
                 }
-                
+
                 // Send chunk (blocking - channel should be large enough)
                 // If channel is full, we'll drop samples (non-blocking would be better but mpsc doesn't have try_send)
                 if tx_clone.send(samples).is_err() {
@@ -662,7 +694,9 @@ impl AudioRecorder {
         config: &StreamConfig,
         tx: mpsc::Sender<Vec<f32>>,
     ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: u8| (s as f32 / u8::MAX as f32) * 2.0 - 1.0)
+        Self::build_streaming_stream_helper(device, config, tx, |s: u8| {
+            (s as f32 / u8::MAX as f32) * 2.0 - 1.0
+        })
     }
 
     fn build_streaming_stream_u16(
@@ -671,7 +705,9 @@ impl AudioRecorder {
         config: &StreamConfig,
         tx: mpsc::Sender<Vec<f32>>,
     ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: u16| (s as f32 / u16::MAX as f32) * 2.0 - 1.0)
+        Self::build_streaming_stream_helper(device, config, tx, |s: u16| {
+            (s as f32 / u16::MAX as f32) * 2.0 - 1.0
+        })
     }
 
     fn build_streaming_stream_f32(
@@ -726,4 +762,3 @@ mod tests {
         assert!(devices.is_ok() || devices.is_err());
     }
 }
-

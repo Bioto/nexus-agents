@@ -24,4 +24,3 @@ pub enum Commands {
 pub use commands::record::run_record;
 // pub use commands::listen::run_listen;  // Temporarily using simple version
 pub use commands::listen_simple::run_listen;
-

@@ -250,8 +250,7 @@ mod tests {
 
     /// Get the default model from DEFAULT_MODEL environment variable or fallback
     fn default_test_model() -> String {
-        std::env::var("DEFAULT_MODEL")
-            .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
+        std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
     }
 
     #[tokio::test]
@@ -269,8 +268,8 @@ mod tests {
     #[test]
     fn test_client_request_builder() {
         let model = default_test_model();
-        let request = ChatCompletionRequest::new(model, vec![Message::user("Hello")])
-            .with_temperature(0.7);
+        let request =
+            ChatCompletionRequest::new(model, vec![Message::user("Hello")]).with_temperature(0.7);
 
         assert_eq!(request.model, model);
         assert_eq!(request.temperature, Some(0.7));
@@ -331,8 +330,7 @@ mod tests {
 
         let client = Client::new("test-key", server.url());
         let model = default_test_model();
-        let request =
-            ChatCompletionRequest::new(model, vec![Message::user("Hello, world!")]);
+        let request = ChatCompletionRequest::new(model, vec![Message::user("Hello, world!")]);
 
         let response = client.chat_completion(request).await.unwrap();
 
@@ -432,7 +430,8 @@ mod tests {
     async fn test_chat_completion_network_error() {
         // Use an invalid URL to trigger a network error
         let client = Client::new("test-key", "http://127.0.0.1:1");
-        let request = ChatCompletionRequest::new("gpt-5-nano-2025-08-07", vec![Message::user("Hello")]);
+        let request =
+            ChatCompletionRequest::new("gpt-5-nano-2025-08-07", vec![Message::user("Hello")]);
 
         let result = client.chat_completion(request).await;
         assert!(result.is_err());

@@ -1,9 +1,9 @@
 use crate::error::{Result, VoiceError};
 use crate::services::{AudioRecorder, RecordingConfig};
 use cpal::traits::StreamTrait;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -13,10 +13,10 @@ fn calculate_zero_crossing_rate(samples: &[f32]) -> f32 {
     if samples.len() < 2 {
         return 0.0;
     }
-    
+
     let mut crossings = 0;
     let mut prev_sign = samples[0] >= 0.0;
-    
+
     for &sample in &samples[1..] {
         let sign = sample >= 0.0;
         if sign != prev_sign {
@@ -24,32 +24,32 @@ fn calculate_zero_crossing_rate(samples: &[f32]) -> f32 {
         }
         prev_sign = sign;
     }
-    
+
     crossings as f32 / samples.len() as f32
 }
 
 /// Estimate pitch using simple autocorrelation method
 fn estimate_pitch(samples: &[f32], sample_rate: u32) -> f32 {
     let min_period = (sample_rate as f32 / 400.0) as usize; // 400 Hz max
-    let max_period = (sample_rate as f32 / 50.0) as usize;  // 50 Hz min
-    
+    let max_period = (sample_rate as f32 / 50.0) as usize; // 50 Hz min
+
     if samples.len() < max_period * 2 {
         return 0.0; // Not enough samples
     }
-    
+
     let mut best_period = 0;
     let mut best_correlation = 0.0;
-    
+
     // Simple autocorrelation
     for period in min_period..max_period.min(samples.len() / 2) {
         let mut correlation = 0.0;
         let mut count = 0;
-        
+
         for i in 0..(samples.len() - period) {
             correlation += samples[i] * samples[i + period];
             count += 1;
         }
-        
+
         if count > 0 {
             correlation /= count as f32;
             if correlation > best_correlation {
@@ -58,7 +58,7 @@ fn estimate_pitch(samples: &[f32], sample_rate: u32) -> f32 {
             }
         }
     }
-    
+
     if best_period > 0 && best_correlation > 0.3 {
         sample_rate as f32 / best_period as f32
     } else {
@@ -122,6 +122,7 @@ pub struct VoiceMetrics {
 
 /// Transcription result containing the text and metadata
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TranscriptionResult {
     /// The transcribed text
     pub text: String,
@@ -132,11 +133,12 @@ pub struct TranscriptionResult {
 }
 
 /// Trait for handling transcription results
+#[allow(dead_code)]
 pub trait TranscriptionHandler: Send + 'static {
     /// Called when a new transcription is available
     /// Return false to stop listening
     fn on_transcription(&mut self, result: TranscriptionResult) -> bool;
-    
+
     /// Called when an error occurs during transcription
     fn on_error(&mut self, error: String) {
         log::error!("Transcription error: {}", error);
@@ -182,21 +184,23 @@ impl VoiceListener {
         F: Fn(&str) + Send + 'static,
     {
         let rx = self.start_with_channel()?;
-        
+
         // Spawn a thread to handle the receiver and call the callback
         thread::spawn(move || {
             while let Ok(result) = rx.recv() {
                 on_transcription(&result.text);
             }
         });
-        
+
         Ok(())
     }
-    
+
     /// Start listening and return a receiver for transcription results
     pub fn start_with_channel(&mut self) -> Result<mpsc::Receiver<TranscriptionResult>> {
         if self.running.load(Ordering::Relaxed) {
-            return Err(VoiceError::Other("Voice listener is already running".into()));
+            return Err(VoiceError::Other(
+                "Voice listener is already running".into(),
+            ));
         }
 
         self.running.store(true, Ordering::Relaxed);
@@ -209,7 +213,7 @@ impl VoiceListener {
         // Spawn transcription thread
         let model_path = self.config.model_path.clone();
         let running = Arc::clone(&self.running);
-        
+
         let transcription_handle = thread::spawn(move || {
             // Create Whisper context in this thread
             let ctx = match WhisperContext::new_with_params(
@@ -229,7 +233,8 @@ impl VoiceListener {
                     Ok((audio_data, duration_seconds)) => {
                         match ctx.create_state() {
                             Ok(mut state) => {
-                                let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+                                let mut params =
+                                    FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
                                 params.set_language(Some("en"));
                                 params.set_translate(false);
                                 params.set_print_progress(false);
@@ -257,7 +262,7 @@ impl VoiceListener {
                                         duration_seconds,
                                         timestamp: std::time::SystemTime::now(),
                                     };
-                                    
+
                                     if tx_results.send(result).is_err() {
                                         // Receiver dropped, exit
                                         break;
@@ -278,14 +283,15 @@ impl VoiceListener {
         self.transcription_handle = Some(transcription_handle);
         Ok(rx_results)
     }
-    
+
     /// Start listening with a custom transcription handler
+    #[allow(dead_code)]
     pub fn start_with_handler<H>(&mut self, mut handler: H) -> Result<()>
     where
         H: TranscriptionHandler,
     {
         let rx = self.start_with_channel()?;
-        
+
         // Spawn a thread to handle the receiver with the handler
         let running = Arc::clone(&self.running);
         thread::spawn(move || {
@@ -297,7 +303,7 @@ impl VoiceListener {
                 }
             }
         });
-        
+
         Ok(())
     }
 
@@ -316,7 +322,8 @@ impl VoiceListener {
 
         // Start audio stream
         let (stream, rx) = self.recorder.stream_audio_chunks(config)?;
-        stream.play()
+        stream
+            .play()
             .map_err(|e| VoiceError::Audio(format!("Failed to start stream: {}", e)))?;
 
         let mut audio_buffer = Vec::new();
@@ -330,16 +337,17 @@ impl VoiceListener {
                     audio_buffer.extend_from_slice(&chunk);
 
                     // Voice detection
-                    let energy: f32 = chunk.iter().map(|&s| s * s).sum::<f32>() / chunk.len() as f32;
+                    let energy: f32 =
+                        chunk.iter().map(|&s| s * s).sum::<f32>() / chunk.len() as f32;
                     let energy_sqrt = energy.sqrt();
                     let zcr = calculate_zero_crossing_rate(&chunk);
                     let dominant_freq = estimate_pitch(&chunk, self.config.sample_rate);
 
                     let is_voice = energy_sqrt > self.config.energy_threshold
                         && zcr < self.config.zcr_threshold
-                        && (dominant_freq == 0.0 || 
-                            (dominant_freq >= self.config.min_voice_freq && 
-                             dominant_freq <= self.config.max_voice_freq));
+                        && (dominant_freq == 0.0
+                            || (dominant_freq >= self.config.min_voice_freq
+                                && dominant_freq <= self.config.max_voice_freq));
 
                     // Report metrics if verbose
                     if self.config.verbose && energy_sqrt > 0.001 {
@@ -372,20 +380,26 @@ impl VoiceListener {
                                 is_speaking = false;
 
                                 // Only transcribe if we have enough audio
-                                let speech_duration_ms = (speech_buffer.len() as f32 / 
-                                    self.config.sample_rate as f32 * 1000.0) as u32;
-                                    
+                                let speech_duration_ms =
+                                    (speech_buffer.len() as f32 / self.config.sample_rate as f32
+                                        * 1000.0) as u32;
+
                                 if speech_duration_ms >= self.config.min_speech_ms {
                                     // Send to transcription thread with duration
-                                    let duration_seconds = speech_buffer.len() as f32 / self.config.sample_rate as f32;
+                                    let duration_seconds =
+                                        speech_buffer.len() as f32 / self.config.sample_rate as f32;
                                     if let Some(ref tx) = self.transcription_tx {
-                                        if let Err(e) = tx.try_send((speech_buffer.clone(), duration_seconds)) {
+                                        if let Err(e) =
+                                            tx.try_send((speech_buffer.clone(), duration_seconds))
+                                        {
                                             match e {
                                                 mpsc::TrySendError::Full(_) => {
                                                     log::warn!("Transcription queue full");
                                                 }
                                                 mpsc::TrySendError::Disconnected(_) => {
-                                                    log::error!("Transcription thread disconnected");
+                                                    log::error!(
+                                                        "Transcription thread disconnected"
+                                                    );
                                                     break;
                                                 }
                                             }
@@ -413,13 +427,15 @@ impl VoiceListener {
             }
         }
 
-        stream.pause()
+        stream
+            .pause()
             .map_err(|e| VoiceError::Audio(format!("Failed to stop stream: {}", e)))?;
 
         Ok(())
     }
 
     /// Stop listening
+    #[allow(dead_code)]
     pub fn stop(&mut self) -> Result<()> {
         self.running.store(false, Ordering::Relaxed);
 
@@ -439,6 +455,7 @@ impl VoiceListener {
     }
 
     /// Check if the listener is currently running
+    #[allow(dead_code)]
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::Relaxed)
     }

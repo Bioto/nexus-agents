@@ -422,8 +422,7 @@ mod tests {
 
     /// Get the default model from DEFAULT_MODEL environment variable or fallback
     fn default_test_model() -> String {
-        std::env::var("DEFAULT_MODEL")
-            .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
+        std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
     }
 
     #[test]
@@ -436,10 +435,9 @@ mod tests {
     #[test]
     fn test_chat_completion_request_serialization() {
         let model = default_test_model();
-        let request =
-            ChatCompletionRequest::new(&model, vec![Message::user("Hello, world!")])
-                .with_temperature(0.7)
-                .with_max_tokens(100);
+        let request = ChatCompletionRequest::new(&model, vec![Message::user("Hello, world!")])
+            .with_temperature(0.7)
+            .with_max_tokens(100);
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains(&model));

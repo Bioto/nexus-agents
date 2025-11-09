@@ -1,9 +1,7 @@
 use crate::models::agent::{Agent, AgentBuilder, AgentStore};
-use crate::models::tasks::{TaskAssignment, TaskDecomposition};
 use crate::models::task_manager::TaskManager;
-use crate::tools::{
-    ExecutableTool, ToolRegistry, calculator::Calculator
-};
+use crate::models::tasks::{TaskAssignment, TaskDecomposition};
+use crate::tools::{calculator::Calculator, ExecutableTool, ToolRegistry};
 
 /// Factory for creating pre-configured agents with their tool registries
 pub struct AgentFactory;
@@ -147,11 +145,9 @@ mod tests {
 
         assert_eq!(agent.name, "Task Decomposition Agent");
         assert!(agent.description.contains("decomposes"));
-        assert!(
-            agent
-                .system_prompt
-                .contains("Task Decomposition Specialist")
-        );
+        assert!(agent
+            .system_prompt
+            .contains("Task Decomposition Specialist"));
 
         // Verify structured output is configured
         assert!(agent.response_format().is_some());

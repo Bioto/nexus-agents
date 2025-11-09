@@ -71,4 +71,3 @@ impl From<cpal::PauseStreamError> for VoiceError {
         VoiceError::Audio(format!("Pause stream error: {}", err))
     }
 }
-

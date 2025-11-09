@@ -2,10 +2,10 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::Cursor;
 
-use crate::models::AgentStore;
 use crate::models::tasks::{Task, TaskError, TaskId, TaskStatus};
-use quick_xml::Writer;
+use crate::models::AgentStore;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::Writer;
 use uuid::Uuid;
 
 /// In-memory task manager that tracks tasks, their status, and inter-task dependencies.
