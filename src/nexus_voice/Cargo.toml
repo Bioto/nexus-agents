@@ -1,0 +1,32 @@
+[package]
+name = "nexus-voice"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nexus-voice"
+path = "src/main.rs"
+
+[[example]]
+name = "wake_word_assistant"
+path = "examples/wake_word_assistant.rs"
+
+[dependencies]
+ratatui = { workspace = true }
+crossterm = "0.28"
+cpal = "0.15"
+tokio = { workspace = true, features = ["full"] }
+anyhow = "1.0"
+clap = { workspace = true }
+thiserror = "2.0"
+chrono = "0.4"
+hound = "3.5"
+ctrlc = "3.4"
+log = "0.4"
+simplelog = "0.12"
+whisper-rs = "0.15"
+# VAD temporarily disabled - incompatible with current ONNX runtime
+# silero-vad-rs = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
