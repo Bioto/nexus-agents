@@ -42,6 +42,10 @@ pub struct SpeakArgs {
     #[arg(long)]
     pub local: bool,
 
+    /// Use WebSocket RPC mode (faster, streaming) instead of HTTP REST
+    #[arg(long)]
+    pub websocket: bool,
+
     /// Kyutai TTS server endpoint URL (overrides local mode)
     #[arg(long)]
     pub endpoint: Option<String>,
@@ -54,9 +58,15 @@ pub struct SpeakArgs {
 pub async fn run_speak(args: SpeakArgs) -> Result<()> {
     // Handle list voices command
     if args.list_voices {
+        let endpoint = args.endpoint.clone();
+        let websocket_mode = args.websocket || endpoint.as_ref()
+            .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+            .unwrap_or(false);
+
         let config = TtsConfig {
-            endpoint: args.endpoint,
+            endpoint,
             local: args.local,
+            websocket: websocket_mode,
             python_cmd: args.python,
             voice: None,
             rate: None,
@@ -103,17 +113,26 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
     }
 
     // Build TTS configuration (clone values since we'll use them again)
-    // If endpoint is provided, use HTTP mode; otherwise use local flag or default to HTTP
+    // Determine mode: if endpoint starts with ws:// or wss://, use WebSocket mode
+    let endpoint = args.endpoint.clone().or_else(|| {
+        if args.local {
+            None // Local mode - no endpoint
+        } else if args.websocket {
+            Some("ws://localhost:8089/api/tts_streaming".to_string())
+        } else {
+            // Default to Moshi server (HTTP)
+            Some("http://localhost:8089/api/tts_streaming".to_string())
+        }
+    });
+    
+    let websocket_mode = args.websocket || endpoint.as_ref()
+        .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+        .unwrap_or(false);
+
     let config = TtsConfig {
-        endpoint: args.endpoint.clone().or_else(|| {
-            if args.local {
-                None // Local mode - no endpoint
-            } else {
-                // Default to Moshi server
-                Some("http://localhost:8089/api/tts_streaming".to_string())
-            }
-        }),
+        endpoint,
         local: args.local && args.endpoint.is_none(), // Only local if explicitly set and no endpoint
+        websocket: websocket_mode,
         python_cmd: args.python.clone(),
         voice: args.voice.clone(),
         rate: Some(args.rate),

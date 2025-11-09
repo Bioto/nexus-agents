@@ -1,35 +1,49 @@
 use crate::error::{Result, VoiceError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
+use cpal::StreamConfig;
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_tungstenite::{connect_async, tungstenite::{Message, client::IntoClientRequest}};
+use futures_util::{SinkExt, StreamExt};
+use url::Url;
+use rmp_serde::{Deserializer, Serializer};
+use serde::{Deserialize, Serialize};
 
 // Text-to-speech service using Kyutai TTS.
 //
 // # Setup
 //
-// This service supports local execution via Python subprocess or HTTP server.
+// This service supports three modes:
 //
-// For local Python execution:
-// 1. Install Kyutai TTS: `pip install kyutai-tts` or follow Kyutai setup instructions
-// 2. Set KYUTAI_TTS_MODE=local (or use --local flag)
-// 3. The service will call Python directly
+// 1. Local Python execution:
+//    - Install Kyutai TTS: `pip install kyutai-tts` or follow Kyutai setup instructions
+//    - Set KYUTAI_TTS_MODE=local (or use --local flag)
+//    - The service will call Python directly
 //
-// For HTTP server mode:
-// 1. Start a Kyutai TTS server (e.g., using Unmute framework)
-// 2. Set KYUTAI_TTS_URL environment variable or use --endpoint
-// 3. Default endpoint: http://localhost:8000/tts
+// 2. HTTP REST API mode:
+//    - Start a Kyutai TTS server (e.g., using Unmute framework)
+//    - Set KYUTAI_TTS_URL environment variable or use --endpoint
+//    - Default endpoint: http://localhost:8089/api/tts_streaming
+//
+// 3. WebSocket RPC mode (recommended for better performance):
+//    - Start moshi-server: `moshi-server worker --config configs/config-tts.toml`
+//    - Set KYUTAI_TTS_MODE=websocket or use --websocket flag
+//    - Default WebSocket URL: ws://localhost:8089/api/tts_streaming
+//    - Uses MessagePack encoding for efficient streaming
 
 /// Configuration for text-to-speech synthesis
 #[derive(Debug, Clone)]
 pub struct TtsConfig {
     /// Kyutai TTS server endpoint URL (None = use local Python execution)
+    /// For WebSocket mode, use ws:// or wss:// protocol
     pub endpoint: Option<String>,
-    /// Use local Python execution instead of HTTP server
+    /// Use local Python execution instead of HTTP/WebSocket server
     pub local: bool,
+    /// Use WebSocket RPC mode instead of HTTP REST (faster, streaming)
+    pub websocket: bool,
     /// Python command/path (default: "python3")
     pub python_cmd: Option<String>,
     /// Voice to use (None = default voice)
@@ -44,24 +58,33 @@ pub struct TtsConfig {
 
 impl Default for TtsConfig {
     fn default() -> Self {
-        // Check if local mode is requested via environment variable
-        let local = std::env::var("KYUTAI_TTS_MODE")
-            .map(|v| v == "local")
-            .unwrap_or(false); // Default to HTTP mode (Moshi server)
+        // Check mode via environment variable
+        let mode = std::env::var("KYUTAI_TTS_MODE")
+            .unwrap_or_else(|_| "websocket".to_string()); // Default to WebSocket for better performance
+        
+        let local = mode == "local";
+        let websocket = mode == "websocket" || mode == "ws";
 
-        // Default to Moshi server endpoint if not in local mode
-        let endpoint = if !local {
+        // Default endpoint based on mode
+        let endpoint = if local {
+            None
+        } else if websocket {
+            Some(
+                std::env::var("KYUTAI_TTS_URL")
+                    .unwrap_or_else(|_| "ws://localhost:8089/api/tts_streaming".to_string()),
+            )
+        } else {
+            // HTTP mode
             Some(
                 std::env::var("KYUTAI_TTS_URL")
                     .unwrap_or_else(|_| "http://localhost:8089/api/tts_streaming".to_string()),
             )
-        } else {
-            None
         };
 
         Self {
             endpoint,
             local,
+            websocket,
             python_cmd: None,
             voice: None,
             rate: Some(0.5),
@@ -71,12 +94,27 @@ impl Default for TtsConfig {
     }
 }
 
+/// Message types for WebSocket RPC protocol
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum TtsMessage {
+    #[serde(rename = "Text")]
+    Text { text: String },
+    #[serde(rename = "Eos")]
+    Eos,
+    #[serde(rename = "Audio")]
+    Audio { pcm: Vec<f32> },
+    #[serde(rename = "Ready")]
+    Ready,
+}
+
 /// Text-to-speech service using Kyutai TTS
 pub struct TextToSpeech {
     http_client: Option<reqwest::Client>,
     endpoint: Option<String>,
     python_cmd: String,
     local_mode: bool,
+    websocket_mode: bool,
     current_sink: Arc<Mutex<Option<Sink>>>,
 }
 
@@ -88,18 +126,19 @@ impl TextToSpeech {
 
     /// Create a new TTS instance with configuration
     pub fn with_config(config: TtsConfig) -> Result<Self> {
-        let local_mode = if config.endpoint.is_some() {
-            false // If endpoint is explicitly set, use HTTP mode
-        } else {
-            config.local // Otherwise use config setting
-        };
+        let local_mode = config.local;
+        let websocket_mode = config.websocket && !local_mode;
 
         let (http_client, endpoint) = if local_mode {
             (None, None)
+        } else if websocket_mode {
+            // WebSocket mode - no HTTP client needed
+            (None, config.endpoint)
         } else {
+            // HTTP mode
             let endpoint = config.endpoint.or_else(|| {
                 std::env::var("KYUTAI_TTS_URL").ok()
-            }).unwrap_or_else(|| "http://localhost:8089/tts".to_string());
+            }).unwrap_or_else(|| "http://localhost:8089/api/tts_streaming".to_string());
 
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -118,6 +157,7 @@ impl TextToSpeech {
             endpoint,
             python_cmd,
             local_mode,
+            websocket_mode,
             current_sink: Arc::new(Mutex::new(None)),
         })
     }
@@ -126,6 +166,8 @@ impl TextToSpeech {
     async fn synthesize(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
         if self.local_mode {
             self.synthesize_local(text, config).await
+        } else if self.websocket_mode {
+            self.synthesize_websocket(text, config).await
         } else {
             self.synthesize_http(text, config).await
         }
@@ -267,7 +309,7 @@ except Exception as e:
         let api_key = std::env::var("KYUTAI_API_KEY")
             .unwrap_or_else(|_| "public_token".to_string());
 
-        let mut request = http_client
+        let request = http_client
             .post(endpoint)
             .header("Content-Type", "application/json")
             .header("kyutai-api-key", &api_key);
@@ -323,6 +365,271 @@ except Exception as e:
         // The server might return raw WAV, so we'll let rodio try to decode it
         // If that fails, we'll try to handle it as raw PCM
         Ok(audio_data.to_vec())
+    }
+
+    /// Generate speech using WebSocket RPC (faster, streaming)
+    async fn synthesize_websocket(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
+        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
+            VoiceError::Configuration("WebSocket endpoint not configured".to_string())
+        })?;
+
+        log::info!("Connecting to TTS WebSocket: {}", endpoint);
+        log::info!("Text to synthesize: {}", text);
+
+        // Parse URL and add query parameters
+        let mut url = Url::parse(endpoint)
+            .map_err(|e| VoiceError::Api(format!("Invalid WebSocket URL: {}", e)))?;
+
+        // Get voice from config or environment
+        let voice = config.voice.clone().unwrap_or_else(|| {
+            std::env::var("KYUTAI_TTS_VOICE")
+                .unwrap_or_else(|_| "expresso/ex03-ex01_happy_001_channel1_334s.wav".to_string())
+        });
+
+        // Add query parameters
+        url.query_pairs_mut()
+            .append_pair("voice", &voice)
+            .append_pair("format", "PcmMessagePack");
+
+        log::debug!("WebSocket URL with params: {}", url);
+
+        // Get API key
+        let api_key = std::env::var("KYUTAI_API_KEY")
+            .unwrap_or_else(|_| "public_token".to_string());
+
+        // Connect to WebSocket - use tungstenite's client request builder which handles handshake
+        // The IntoClientRequest trait creates a request with proper WebSocket handshake headers,
+        // then we add our custom header
+        let mut request = url.as_str()
+            .into_client_request()
+            .map_err(|e| VoiceError::Api(format!("Failed to create WebSocket request: {}", e)))?;
+        
+        // Add custom API key header
+        use http::HeaderValue;
+        request.headers_mut().insert(
+            "kyutai-api-key",
+            HeaderValue::from_str(&api_key)
+                .map_err(|e| VoiceError::Api(format!("Failed to create header value: {}", e)))?
+        );
+
+        let (ws_stream, _) = connect_async(request)
+            .await
+            .map_err(|e| {
+                let err_msg = format!(
+                    "Failed to connect to TTS WebSocket at {}: {}. Make sure moshi-server is running.",
+                    endpoint, e
+                );
+                log::error!("{}", err_msg);
+                VoiceError::Api(err_msg)
+            })?;
+
+        log::info!("Connected to TTS WebSocket");
+
+        let (mut write, mut read) = ws_stream.split();
+
+        // Spawn task to send text
+        let text_to_send = text.to_string();
+        let send_handle = tokio::spawn(async move {
+            // Split text into words and send each as a Text message
+            for word in text_to_send.split_whitespace() {
+                let msg = TtsMessage::Text {
+                    text: word.to_string(),
+                };
+                let mut buf = Vec::new();
+                msg.serialize(&mut Serializer::new(&mut buf))
+                    .map_err(|e| VoiceError::Api(format!("Failed to serialize message: {}", e)))?;
+
+                write.send(Message::Binary(buf)).await
+                    .map_err(|e| VoiceError::Api(format!("Failed to send text: {}", e)))?;
+            }
+
+            // Send EOS message
+            let eos_msg = TtsMessage::Eos;
+            let mut buf = Vec::new();
+            eos_msg.serialize(&mut Serializer::new(&mut buf))
+                .map_err(|e| VoiceError::Api(format!("Failed to serialize EOS: {}", e)))?;
+
+            write.send(Message::Binary(buf)).await
+                .map_err(|e| VoiceError::Api(format!("Failed to send EOS: {}", e)))?;
+
+            Ok::<(), VoiceError>(())
+        });
+
+        // Set up streaming audio playback
+        const SAMPLE_RATE: u32 = 24000; // Kyutai TTS uses 24kHz
+        let volume = config.volume.unwrap_or(1.0);
+        
+        // Create a channel for streaming audio chunks
+        let (audio_tx, mut audio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+        let playback_finished = Arc::new(tokio::sync::Notify::new());
+        let playback_finished_clone = Arc::clone(&playback_finished);
+
+        // Use a ring buffer for streaming audio
+        // Use std::sync::Mutex because the audio callback is blocking
+        use std::collections::VecDeque;
+        use std::sync::Mutex as StdMutex;
+        let audio_queue = Arc::new(StdMutex::new(VecDeque::<f32>::new()));
+        let audio_queue_for_callback = Arc::clone(&audio_queue);
+        let audio_queue_for_feeder = Arc::clone(&audio_queue);
+        let finished_flag = Arc::new(StdMutex::new(false));
+
+        // Start a blocking thread to manage the audio stream
+        // The stream must stay in the same thread
+        let finished_flag_for_thread = Arc::clone(&finished_flag);
+        std::thread::spawn(move || {
+            let host = cpal::default_host();
+            let device = match host.default_output_device() {
+                Some(d) => d,
+                None => {
+                    log::error!("No default output device available");
+                    return;
+                }
+            };
+
+            // Create stream config
+            let config = StreamConfig {
+                channels: 1,
+                sample_rate: cpal::SampleRate(SAMPLE_RATE),
+                buffer_size: cpal::BufferSize::Default,
+            };
+
+            // Build output stream
+            let stream = match device.build_output_stream(
+                &config,
+                {
+                    let audio_queue = Arc::clone(&audio_queue_for_callback);
+                    move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                        let mut queue = audio_queue.lock().unwrap();
+                        for sample in data.iter_mut() {
+                            if let Some(s) = queue.pop_front() {
+                                *sample = (s * volume).clamp(-1.0, 1.0);
+                            } else {
+                                *sample = 0.0; // Silence if no data available
+                            }
+                        }
+                    }
+                },
+                |err| {
+                    log::error!("Audio stream error: {}", err);
+                },
+                None,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("Failed to build output stream: {}", e);
+                    return;
+                }
+            };
+
+            // Play the stream
+            if let Err(e) = stream.play() {
+                log::error!("Failed to play audio stream: {}", e);
+                return;
+            }
+
+            log::info!("Streaming audio playback started");
+
+            // Keep the stream alive until finished flag is set and queue is empty
+            loop {
+                let is_finished = *finished_flag_for_thread.lock().unwrap();
+                let queue_len = {
+                    let queue = audio_queue_for_callback.lock().unwrap();
+                    queue.len()
+                };
+                
+                if is_finished && queue_len == 0 {
+                    // Wait a bit more to ensure last samples play
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    break;
+                }
+                
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            // Stop the stream
+            let _ = stream.pause();
+            log::info!("Streaming audio playback completed");
+        });
+
+        // Spawn task to feed audio chunks from async context
+        let playback_handle = tokio::spawn(async move {
+            while let Some(chunk) = audio_rx.recv().await {
+                let chunk_len = chunk.len();
+                let mut queue = audio_queue_for_feeder.lock().unwrap();
+                queue.extend(chunk);
+                log::debug!("Added {} samples to playback queue (queue size: {})", 
+                    chunk_len, queue.len());
+            }
+            // Signal that we're done receiving
+            *finished_flag.lock().unwrap() = true;
+            playback_finished_clone.notify_one();
+        });
+
+        // Receive audio chunks and stream them to playback
+        let mut total_samples = 0;
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(Message::Binary(data)) => {
+                    let mut de = Deserializer::new(&data[..]);
+                    match TtsMessage::deserialize(&mut de) {
+                        Ok(TtsMessage::Audio { pcm }) => {
+                            total_samples += pcm.len();
+                            log::debug!("Received {} PCM samples (total: {})", pcm.len(), total_samples);
+                            // Send chunk to playback immediately
+                            if let Err(e) = audio_tx.send(pcm) {
+                                log::error!("Failed to send audio chunk to playback: {}", e);
+                                break;
+                            }
+                        }
+                        Ok(TtsMessage::Ready) => {
+                            log::debug!("Server sent Ready message - connection established");
+                        }
+                        Ok(_) => {
+                            // Other message types (Text, Eos) - ignore on receive
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to deserialize message: {}", e);
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => {
+                    log::info!("WebSocket closed by server");
+                    break;
+                }
+                Ok(_) => {
+                    // Other message types - ignore
+                }
+                Err(e) => {
+                    log::error!("WebSocket error: {}", e);
+                    // Close the audio channel to signal end
+                    drop(audio_tx);
+                    return Err(VoiceError::Api(format!("WebSocket error: {}", e)));
+                }
+            }
+        }
+
+        // Wait for send task to complete
+        if let Err(e) = send_handle.await {
+            log::error!("Send task error: {:?}", e);
+        }
+
+        // Close the audio channel to signal end of streaming
+        drop(audio_tx);
+
+        if total_samples == 0 {
+            return Err(VoiceError::Api("No audio data received from TTS server".to_string()));
+        }
+
+        log::info!("Received {} PCM samples ({} seconds) - streaming complete", 
+            total_samples, 
+            total_samples as f32 / SAMPLE_RATE as f32);
+
+        // Wait for playback to finish
+        playback_finished.notified().await;
+        let _ = playback_handle.await;
+
+        // Return empty buffer since we streamed directly
+        Ok(Vec::new())
     }
 
     /// Fix malformed WAV file by correcting data chunk size

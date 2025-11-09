@@ -30,6 +30,11 @@ rodio = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+rmp-serde = "1.1"
+url = "2.5"
+futures-util = "0.3"
+http = "1.1"
 # VAD temporarily disabled - incompatible with current ONNX runtime
 # moshi-server removed - it's not used as a Rust dependency and requires CUDA
 # If needed, install it separately: cargo install --features cuda moshi-server@0.6.4

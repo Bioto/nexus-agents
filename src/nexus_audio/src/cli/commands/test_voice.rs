@@ -51,7 +51,7 @@ pub struct TestVoiceArgs {
     pub model: PathBuf,
 
     /// Text to speak back when the phrase is detected
-    #[arg(long, default_value = "I heard you say this is a test!")]
+    #[arg(long, default_value = "I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! ")]
     pub response: String,
 
     /// Voice to use for TTS response
@@ -69,6 +69,10 @@ pub struct TestVoiceArgs {
     /// Use local Python execution for TTS instead of HTTP server
     #[arg(long)]
     pub local: bool,
+
+    /// Use WebSocket RPC mode (faster, streaming) instead of HTTP REST
+    #[arg(long)]
+    pub websocket: bool,
 
     /// Kyutai TTS server endpoint URL
     #[arg(long)]
@@ -112,15 +116,29 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
     .map_err(|e| crate::error::VoiceError::Other(format!("Failed to set Ctrl+C handler: {}", e)))?;
 
     // Build TTS configuration
+    // Default to WebSocket mode for better performance (can be overridden with --endpoint or --local)
+    let endpoint = args.endpoint.clone().or_else(|| {
+        if args.local {
+            None
+        } else {
+            // Default to WebSocket for better performance
+            Some("ws://localhost:8089/api/tts_streaming".to_string())
+        }
+    });
+    
+    // Determine WebSocket mode: explicit flag, or auto-detect from endpoint URL
+    let websocket_mode = if args.local {
+        false
+    } else {
+        args.websocket || endpoint.as_ref()
+            .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+            .unwrap_or(true) // Default to true (WebSocket) if no endpoint specified
+    };
+
     let tts_config = TtsConfig {
-        endpoint: args.endpoint.clone().or_else(|| {
-            if args.local {
-                None
-            } else {
-                Some("http://localhost:8089/api/tts_streaming".to_string())
-            }
-        }),
+        endpoint,
         local: args.local && args.endpoint.is_none(),
+        websocket: websocket_mode,
         python_cmd: None,
         voice: args.voice.clone(),
         rate: Some(args.rate),
@@ -162,7 +180,8 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
     });
 
     // Run listen() in a separate thread (it blocks)
-    let listen_handle = std::thread::spawn(move || {
+    // Don't wait for it - we'll start TTS immediately when phrase is detected
+    let _listen_handle = std::thread::spawn(move || {
         println!("🔍 Debug: Listen thread started");
         let result = listener.listen(|_metrics| {
             // We don't need verbose metrics for this command
@@ -179,16 +198,11 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
         .map_err(|e| crate::error::VoiceError::Other(format!("Task error: {:?}", e)))?;
     println!("🔍 Debug: Received from phrase_rx: {:?}", response_text.is_some());
 
-    // Stop the listener (this will cause listen() to exit)
-    // Note: We can't call stop() here because listener was moved into the thread
-    // But listen() will exit when the running flag is set to false
-    // For now, we'll just wait for the thread to finish
-    let _ = listen_handle.join();
-
-    // Speak the response if phrase was detected
+    // Speak the response immediately if phrase was detected (don't wait for listener to stop)
     if let Some(text) = response_text {
         println!("🗣️  Speaking response...\n");
         let mut tts = TextToSpeech::with_config(tts_config.clone())?;
+        // Start speaking immediately - streaming will begin as soon as first chunk arrives
         tts.speak_sync(&text, true, &tts_config).await?;
         println!("✅ Response spoken successfully!");
     } else {
