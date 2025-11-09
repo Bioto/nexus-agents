@@ -228,9 +228,12 @@ impl VoiceListener {
             };
 
             // Process transcription requests
+            log::debug!("Transcription thread started, waiting for audio data...");
             while running.load(Ordering::Relaxed) {
                 match rx_transcribe.recv_timeout(Duration::from_millis(100)) {
                     Ok((audio_data, duration_seconds)) => {
+                        log::debug!("Received audio data for transcription: {} samples, {:.2}s", 
+                            audio_data.len(), duration_seconds);
                         match ctx.create_state() {
                             Ok(mut state) => {
                                 let mut params =
@@ -240,6 +243,7 @@ impl VoiceListener {
                                 params.set_print_progress(false);
                                 params.set_print_special(false);
 
+                                log::debug!("Running Whisper transcription...");
                                 if let Err(e) = state.full(params, &audio_data) {
                                     log::error!("Transcription error: {}", e);
                                     continue;
@@ -256,6 +260,7 @@ impl VoiceListener {
                                 }
 
                                 let text = transcription.trim().to_string();
+                                log::debug!("Transcription result: \"{}\" ({} segments)", text, num_segments);
                                 if !text.is_empty() {
                                     let result = TranscriptionResult {
                                         text,
@@ -263,10 +268,16 @@ impl VoiceListener {
                                         timestamp: std::time::SystemTime::now(),
                                     };
 
+                                    log::debug!("Sending transcription result to channel...");
                                     if tx_results.send(result).is_err() {
+                                        log::warn!("Failed to send transcription result - receiver dropped");
                                         // Receiver dropped, exit
                                         break;
+                                    } else {
+                                        log::debug!("Successfully sent transcription result");
                                     }
+                                } else {
+                                    log::debug!("Transcription is empty, skipping");
                                 }
                             }
                             Err(e) => {
@@ -275,9 +286,13 @@ impl VoiceListener {
                         }
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        log::warn!("Transcription channel disconnected");
+                        break;
+                    }
                 }
             }
+            log::debug!("Transcription thread exiting");
         });
 
         self.transcription_handle = Some(transcription_handle);
@@ -361,6 +376,7 @@ impl VoiceListener {
 
                     if is_voice {
                         if !is_speaking {
+                            log::debug!("Voice detected, starting speech capture");
                             is_speaking = true;
                         }
                         silence_duration = 0;
@@ -377,6 +393,8 @@ impl VoiceListener {
                             }
 
                             if silence_duration >= self.config.silence_duration_ms {
+                                log::debug!("Silence detected ({}ms), ending speech capture. Buffer size: {} samples", 
+                                    silence_duration, speech_buffer.len());
                                 is_speaking = false;
 
                                 // Only transcribe if we have enough audio
@@ -384,10 +402,14 @@ impl VoiceListener {
                                     (speech_buffer.len() as f32 / self.config.sample_rate as f32
                                         * 1000.0) as u32;
 
+                                log::debug!("Speech duration: {}ms (min required: {}ms)", 
+                                    speech_duration_ms, self.config.min_speech_ms);
                                 if speech_duration_ms >= self.config.min_speech_ms {
                                     // Send to transcription thread with duration
                                     let duration_seconds =
                                         speech_buffer.len() as f32 / self.config.sample_rate as f32;
+                                    log::debug!("Sending {} samples ({:.2}s) to transcription thread", 
+                                        speech_buffer.len(), duration_seconds);
                                     if let Some(ref tx) = self.transcription_tx {
                                         if let Err(e) =
                                             tx.try_send((speech_buffer.clone(), duration_seconds))
@@ -403,7 +425,11 @@ impl VoiceListener {
                                                     break;
                                                 }
                                             }
+                                        } else {
+                                            log::debug!("Successfully sent audio to transcription thread");
                                         }
+                                    } else {
+                                        log::warn!("transcription_tx is None - transcription not initialized?");
                                     }
                                 }
 

@@ -71,6 +71,7 @@ async fn main() -> Result<()> {
         Commands::Record(args) => cli::run_record(args)?,
         Commands::Listen(args) => cli::run_listen(args)?,
         Commands::Speak(args) => cli::run_speak(args).await?,
+        Commands::TestVoice(args) => cli::run_test_voice(args).await?,
     }
 
     Ok(())
