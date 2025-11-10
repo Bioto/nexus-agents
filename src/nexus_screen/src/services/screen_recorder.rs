@@ -23,16 +23,18 @@ pub struct RecordingConfig {
     pub output_path: PathBuf,
     pub monitor_index: Option<usize>,
     pub include_audio: bool,
+    pub fast: bool, // Capture as fast as possible, ignore target FPS
 }
 
 impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
-            framerate: 60,
+            framerate: 30,
             duration_secs: None,
             output_path: PathBuf::from("recording.mp4"),
             monitor_index: None,
             include_audio: true,
+            fast: false,
         }
     }
 }
@@ -229,22 +231,59 @@ impl ScreenRecorder {
             
             // Copy line by line to handle stride correctly
             let frame_data = input_frame.data_mut(0);
-
-            for y in 0..frame_h {
-                let src_offset = y * src_stride;
-                let dst_offset = y * dst_stride;
-                
-                // Convert RGBA to RGB24 for this row
-                for x in 0..frame_w {
-                    let src_idx = src_offset + (x * 4);
-                    let dst_idx = dst_offset + (x * 3);
+            
+            // Convert RGBA to RGB24 - use actual buffer sizes, not calculated
+            // FFmpeg frames may have padding/alignment, so use actual available buffer
+            let actual_rgb_len = frame_data.len();
+            let min_rows = (actual_rgb_len / dst_stride).min(frame_h);
+            
+            // Use optimized unsafe conversion - we know the sizes are correct
+            // Only process rows that fit in the buffer
+            unsafe {
+                for y in 0..min_rows {
+                    let src_offset = y * src_stride;
+                    let dst_offset = y * dst_stride;
                     
-                    if dst_idx + 2 < frame_data.len() && src_idx + 3 < rgba_data.len() {
-                        frame_data[dst_idx] = rgba_data[src_idx];         // R
-                        frame_data[dst_idx + 1] = rgba_data[src_idx + 1]; // G
-                        frame_data[dst_idx + 2] = rgba_data[src_idx + 2]; // B
+                    // Convert RGBA to RGB24 for this row
+                    let mut src_ptr = rgba_data.as_ptr().add(src_offset);
+                    let mut dst_ptr = frame_data.as_mut_ptr().add(dst_offset);
+                    
+                    // Process pixels in groups of 4 for better cache locality
+                    let chunks = frame_w / 4;
+                    let remainder = frame_w % 4;
+                    
+                    for _ in 0..chunks {
+                        // Process 4 pixels at once
+                        *dst_ptr = *src_ptr;         // R1
+                        *dst_ptr.add(1) = *src_ptr.add(1); // G1
+                        *dst_ptr.add(2) = *src_ptr.add(2); // B1
+                        *dst_ptr.add(3) = *src_ptr.add(4); // R2
+                        *dst_ptr.add(4) = *src_ptr.add(5); // G2
+                        *dst_ptr.add(5) = *src_ptr.add(6); // B2
+                        *dst_ptr.add(6) = *src_ptr.add(8); // R3
+                        *dst_ptr.add(7) = *src_ptr.add(9); // G3
+                        *dst_ptr.add(8) = *src_ptr.add(10); // B3
+                        *dst_ptr.add(9) = *src_ptr.add(12); // R4
+                        *dst_ptr.add(10) = *src_ptr.add(13); // G4
+                        *dst_ptr.add(11) = *src_ptr.add(14); // B4
+                        
+                        src_ptr = src_ptr.add(16); // 4 pixels * 4 bytes
+                        dst_ptr = dst_ptr.add(12); // 4 pixels * 3 bytes
+                    }
+                    
+                    // Handle remainder pixels
+                    for _ in 0..remainder {
+                        *dst_ptr = *src_ptr;         // R
+                        *dst_ptr.add(1) = *src_ptr.add(1); // G
+                        *dst_ptr.add(2) = *src_ptr.add(2); // B
+                        src_ptr = src_ptr.add(4);
+                        dst_ptr = dst_ptr.add(3);
                     }
                 }
+            }
+            
+            if min_rows < frame_h {
+                eprintln!("WARNING: Only converted {} of {} rows (buffer size limitation)", min_rows, frame_h);
             }
 
             // Scale from RGB24 to YUV420P
@@ -357,7 +396,6 @@ impl ScreenRecorder {
                         Ok(()) => {
                             flush_packet.set_stream(ostream_idx);
                             // Ensure flush packets have monotonic timestamps in stream time_base
-                            let offset = pts_offset.unwrap_or(0);
                             let final_stream_dts = if let Some(last) = last_dts {
                                 last + dts_increment // Increment by one frame period
                             } else {
@@ -382,12 +420,14 @@ impl ScreenRecorder {
             frame_num += 1;
 
             // Maintain target FPS - sleep if we have time left in this frame period
+            // Skip sleep if we're already behind (can't catch up anyway) or if fast mode is enabled
             let frame_elapsed = loop_start.elapsed();
-            if frame_elapsed < frame_interval {
+            if !config.fast && frame_elapsed < frame_interval {
                 std::thread::sleep(frame_interval - frame_elapsed);
-            } else if frame_num < 5 {
-                eprintln!("Warning: Frame {} took {:?}, target was {:?}", 
-                    frame_num - 1, frame_elapsed, frame_interval);
+            } else if !config.fast && frame_num <= 10 {
+                // Only warn for first few frames to avoid spam (and only in non-fast mode)
+                eprintln!("Warning: Frame {} took {:?}, target was {:?} (behind by {:?})", 
+                    frame_num - 1, frame_elapsed, frame_interval, frame_elapsed - frame_interval);
             }
         }
 

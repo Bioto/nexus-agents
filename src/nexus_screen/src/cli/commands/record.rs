@@ -15,9 +15,13 @@ pub struct RecordArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
-    /// Frame rate in fps (default: 60)
+    /// Frame rate in fps (default: 30, note: actual capture rate may be lower)
     #[arg(short = 'f', long, default_value = "60")]
     pub fps: u32,
+    
+    /// Capture as fast as possible (ignore target FPS, maximize frame count)
+    #[arg(long)]
+    pub fast: bool,
 
     /// Disable audio capture
     #[arg(long)]
@@ -65,6 +69,7 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
         output_path,
         monitor_index: args.monitor,
         include_audio: !args.no_audio,
+        fast: args.fast,
     };
 
     // Create recorder with config
@@ -73,7 +78,11 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
 
     println!("🎬 Starting screen recording...");
     println!("   Output: {}", config.output_path.display());
-    println!("   Frame rate: {} fps", config.framerate);
+    if config.fast {
+        println!("   Mode: Fast (capture as fast as possible)");
+    } else {
+        println!("   Frame rate: {} fps (target)", config.framerate);
+    }
     if let Some(idx) = config.monitor_index {
         println!("   Monitor: {}", idx);
     }
