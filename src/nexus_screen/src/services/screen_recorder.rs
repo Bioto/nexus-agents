@@ -1,5 +1,4 @@
 use anyhow::{self, Result};
-use xcap::Monitor;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use std::sync::Arc;
@@ -14,6 +13,8 @@ use ffmpeg::{
     frame::Video,
     packet::Packet,
     Rational,
+    media::Type,
+    device::input,
 };
 
 #[derive(Clone, Debug)]
@@ -40,7 +41,8 @@ impl Default for RecordingConfig {
 }
 
 pub struct ScreenRecorder {
-    monitor: Monitor,
+    width: u32,
+    height: u32,
     config: RecordingConfig,
 }
 
@@ -51,39 +53,75 @@ impl ScreenRecorder {
     }
 
     pub fn new_with_config(config: RecordingConfig) -> Result<Self> {
-        let monitors = Monitor::all()
-            .map_err(|e| anyhow::anyhow!("Failed to enumerate monitors: {}", e))?;
-        let monitor = if let Some(idx) = config.monitor_index {
-            monitors.get(idx)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Invalid monitor index: {}", idx))?
-        } else {
-            monitors.iter()
-                .find(|m| m.is_primary().map_or(false, |p| p))
-                .or_else(|| monitors.first())
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("No available monitors"))?
-        };
-        // Remove caching as id() comparison not possible without Eq
-        Ok(Self { monitor, config })
+        // For now, we'll get dimensions when we start recording
+        // Default to common resolution - will be updated from FFmpeg input
+        Ok(Self { 
+            width: 1920, 
+            height: 1080, 
+            config 
+        })
+    }
+    
+    fn get_input_format_and_url(monitor_index: Option<usize>, fps: u32) -> Result<(String, String, Vec<(String, String)>)> {
+        #[cfg(target_os = "linux")]
+        {
+            // Linux: use x11grab
+            // Format: x11grab -i :display.screen+x,y -framerate fps -video_size WxH
+            // Default to :0.0 (primary display, screen 0)
+            let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0.0".to_string());
+            
+            // Ensure the display string has a screen number (format: :display.screen)
+            // If it's just :display, add .0 for screen 0
+            // x11grab format: :display.screen+x,y (offset coordinates)
+            let base_url = if display.contains('.') {
+                display.clone()
+            } else {
+                format!("{}.0", display)
+            };
+            // Add offset coordinates if not already present (required by x11grab format)
+            let url = if base_url.contains('+') {
+                base_url
+            } else {
+                format!("{}+0,0", base_url)
+            };
+            
+            // x11grab options
+            let mut options = vec![
+                ("framerate".to_string(), fps.to_string()),
+                // video_size will be set after we know the screen size, or use a default
+                // For now, we'll let FFmpeg detect it
+            ];
+            
+            Ok(("x11grab".to_string(), url, options))
+        }
+        
+        #[cfg(target_os = "macos")]
+        {
+            // macOS: use avfoundation
+            // Format: avfoundation -i "device_index:audio_index" -framerate fps
+            // For screen capture, device_index is typically 1 (screen), audio_index can be :none or a number
+            let device_index = monitor_index.map(|i| i.to_string()).unwrap_or_else(|| "1".to_string());
+            let url = format!("{}:none", device_index); // :none means no audio
+            
+            // avfoundation options
+            let options = vec![
+                ("framerate".to_string(), fps.to_string()),
+            ];
+            
+            Ok(("avfoundation".to_string(), url, options))
+        }
+        
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Err(anyhow::anyhow!("Screen capture not supported on this platform"))
+        }
     }
 
     pub fn capture_screenshot_to_file(&self, output_path: &str) -> Result<()> {
-        let img = self.monitor
-            .capture_image()
-            .map_err(|e| anyhow::anyhow!("Screenshot capture failed: {}", e))?;
-
-        let (width, height) = (img.width() as usize, img.height() as usize);
-        let expected_size = width * height * 4;
-        let actual_size = img.as_raw().len();
-        if actual_size != expected_size {
-            return Err(anyhow::anyhow!("Invalid image size: expected {}, got {}", expected_size, actual_size));
-        }
-
-        img.save(output_path)
-            .map_err(|e| anyhow::anyhow!("Failed to save screenshot to {}: {}", output_path, e))?;
-
-        Ok(())
+        // Use FFmpeg to capture a single frame
+        // This is a simplified version - for full implementation, we'd use FFmpeg input
+        // For now, return an error suggesting to use the record function
+        Err(anyhow::anyhow!("Screenshot capture via FFmpeg not yet implemented. Use record function instead."))
     }
 
     pub fn record(&self, config: RecordingConfig, stop_signal: Arc<AtomicBool>) -> Result<()> {
@@ -97,11 +135,47 @@ impl ScreenRecorder {
             .ok_or_else(|| anyhow::anyhow!("No H.264 encoder available"))?;
         let stream = octx.add_stream(codec)?;
         
-        // Get monitor dimensions and pad to even numbers (required for H.264/YUV420P)
-        let raw_width = self.monitor.width()?;
-        let raw_height = self.monitor.height()?;
+        // Setup FFmpeg input for screen capture
+        let (input_format_name, input_url, _input_options) = Self::get_input_format_and_url(config.monitor_index, fps)?;
+        println!("Using input format: {}, URL: {}", input_format_name, input_url);
+        
+        // Find the input format using device iterator (working approach from Test 15)
+        let input_format = input::video()
+            .find(|f| {
+                if let ffmpeg::Format::Input(input) = f {
+                    input.name() == input_format_name
+                } else {
+                    false
+                }
+            })
+            .ok_or_else(|| anyhow::anyhow!("Input format '{}' not found. Make sure FFmpeg was compiled with support for this format.", input_format_name))?;
+        
+        // Use format::open() with explicit format (this is the working approach)
+        let mut ctx = format::open(&input_url, &input_format)
+            .map_err(|e| anyhow::anyhow!("Failed to open input '{}' with format '{}': {:?}", input_url, input_format_name, e))?;
+        
+        // Extract input context from the format context
+        let mut ictx = match ctx {
+            format::Context::Input(ictx) => ictx,
+            _ => return Err(anyhow::anyhow!("Expected input context, got output context")),
+        };
+        
+        let input_stream = ictx.streams().best(Type::Video)
+            .ok_or_else(|| anyhow::anyhow!("No video stream found in input"))?;
+        let input_stream_index = input_stream.index();
+        
+        // Get decoder
+        let codec_ctx = input_stream.codec();
+        let decoder_result = codec_ctx.decoder();
+        let mut decoder = decoder_result.video()?;
+        
+        // Get actual dimensions from input stream
+        let raw_width = decoder.width();
+        let raw_height = decoder.height();
         let width = if raw_width % 2 == 0 { raw_width } else { raw_width + 1 };
         let height = if raw_height % 2 == 0 { raw_height } else { raw_height + 1 };
+        
+        println!("Screen dimensions: {}x{} (padded to {}x{})", raw_width, raw_height, width, height);
         
         let ostream_idx = stream.index();
         let mut encoder_ctx = stream.codec().encoder().video()?;
@@ -159,18 +233,27 @@ impl ScreenRecorder {
             result
         };
 
-        let mut input_frame = Video::new(Pixel::RGB24, raw_width, raw_height);
+        // Input frames from FFmpeg will be in the decoder's format
+        // We may need to scale if dimensions don't match or format differs
+        let input_pixel_format = decoder.format();
+        let mut input_frame = Video::new(input_pixel_format, raw_width, raw_height);
         let mut scaled_frame = Video::new(Pixel::YUV420P, width, height);
 
-        let mut scaler = Scaler::get(
-            Pixel::RGB24,
-            raw_width,
-            raw_height,
-            Pixel::YUV420P,
-            width,
-            height,
-            Flags::BILINEAR,
-        ).map_err(|e| anyhow::anyhow!("Scaler init failed: {}", e))?;
+        // Only create scaler if we need to convert format or resize
+        let needs_scaling = input_pixel_format != Pixel::YUV420P || raw_width != width || raw_height != height;
+        let mut scaler = if needs_scaling {
+            Some(Scaler::get(
+                input_pixel_format,
+                raw_width,
+                raw_height,
+                Pixel::YUV420P,
+                width,
+                height,
+                Flags::BILINEAR,
+            ).map_err(|e| anyhow::anyhow!("Scaler init failed: {}", e))?)
+        } else {
+            None
+        };
 
         let mut frame_num: i64 = 0;
         let mut last_dts: Option<i64> = None; // Track last DTS in stream time_base to ensure monotonicity
@@ -208,94 +291,69 @@ impl ScreenRecorder {
                 break;
             }
 
-            // Capture frame manually using capture_image
+            // Read frame from FFmpeg input
             let capture_start = Instant::now();
-            let img = match self.monitor.capture_image() {
-                Ok(img) => img,
-                Err(e) => {
-                    eprintln!("Failed to capture frame {}: {}", frame_num, e);
-                    log::warn!("Failed to capture frame {}: {}", frame_num, e);
-                    std::thread::sleep(frame_interval);
-                    continue;
+            
+            // Use packets() iterator to read from input
+            // For live capture, we need to read one packet at a time
+            let mut got_frame = false;
+            for (stream, mut pkt) in ictx.packets() {
+                if stream.index() == input_stream_index {
+                    // Decode the packet into a frame
+                    decoder.send_packet(&pkt)?;
+                    match decoder.receive_frame(&mut input_frame) {
+                        Ok(()) => {
+                            // Got a frame!
+                            got_frame = true;
+                            break;
+                        }
+                        Err(ffmpeg::Error::Other { errno: -11 }) => {
+                            // EAGAIN - need more packets, continue reading
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to decode frame {}: {:?}", frame_num, e);
+                            if !config.fast {
+                                std::thread::sleep(frame_interval);
+                            }
+                            continue;
+                        }
+                    }
                 }
-            };
+            }
+            
+            if !got_frame {
+                // No frame available yet, skip this iteration
+                if !config.fast {
+                    std::thread::sleep(frame_interval);
+                }
+                continue;
+            }
+            
             let capture_elapsed = capture_start.elapsed();
 
-            // Convert RgbaImage to RGB24 with proper stride handling
-            let (frame_w, frame_h) = (img.width() as usize, img.height() as usize);
-            let rgba_data = img.as_raw();
-            
-            // Get stride before borrowing frame_data mutably
-            let src_stride = frame_w * 4; // RGBA source stride
-            let dst_stride = input_frame.stride(0); // FFmpeg frame stride
-            
-            // Copy line by line to handle stride correctly
-            let frame_data = input_frame.data_mut(0);
-            
-            // Convert RGBA to RGB24 - use actual buffer sizes, not calculated
-            // FFmpeg frames may have padding/alignment, so use actual available buffer
-            let actual_rgb_len = frame_data.len();
-            let min_rows = (actual_rgb_len / dst_stride).min(frame_h);
-            
-            // Use optimized unsafe conversion - we know the sizes are correct
-            // Only process rows that fit in the buffer
-            unsafe {
-                for y in 0..min_rows {
-                    let src_offset = y * src_stride;
-                    let dst_offset = y * dst_stride;
-                    
-                    // Convert RGBA to RGB24 for this row
-                    let mut src_ptr = rgba_data.as_ptr().add(src_offset);
-                    let mut dst_ptr = frame_data.as_mut_ptr().add(dst_offset);
-                    
-                    // Process pixels in groups of 4 for better cache locality
-                    let chunks = frame_w / 4;
-                    let remainder = frame_w % 4;
-                    
-                    for _ in 0..chunks {
-                        // Process 4 pixels at once
-                        *dst_ptr = *src_ptr;         // R1
-                        *dst_ptr.add(1) = *src_ptr.add(1); // G1
-                        *dst_ptr.add(2) = *src_ptr.add(2); // B1
-                        *dst_ptr.add(3) = *src_ptr.add(4); // R2
-                        *dst_ptr.add(4) = *src_ptr.add(5); // G2
-                        *dst_ptr.add(5) = *src_ptr.add(6); // B2
-                        *dst_ptr.add(6) = *src_ptr.add(8); // R3
-                        *dst_ptr.add(7) = *src_ptr.add(9); // G3
-                        *dst_ptr.add(8) = *src_ptr.add(10); // B3
-                        *dst_ptr.add(9) = *src_ptr.add(12); // R4
-                        *dst_ptr.add(10) = *src_ptr.add(13); // G4
-                        *dst_ptr.add(11) = *src_ptr.add(14); // B4
-                        
-                        src_ptr = src_ptr.add(16); // 4 pixels * 4 bytes
-                        dst_ptr = dst_ptr.add(12); // 4 pixels * 3 bytes
-                    }
-                    
-                    // Handle remainder pixels
-                    for _ in 0..remainder {
-                        *dst_ptr = *src_ptr;         // R
-                        *dst_ptr.add(1) = *src_ptr.add(1); // G
-                        *dst_ptr.add(2) = *src_ptr.add(2); // B
-                        src_ptr = src_ptr.add(4);
-                        dst_ptr = dst_ptr.add(3);
-                    }
-                }
-            }
-            
-            if min_rows < frame_h {
-                eprintln!("WARNING: Only converted {} of {} rows (buffer size limitation)", min_rows, frame_h);
-            }
-
-            // Scale from RGB24 to YUV420P
+            // Scale/convert frame if needed
             let scale_start = Instant::now();
-            scaler.run(&input_frame, &mut scaled_frame)?;
+            if needs_scaling {
+                if let Some(ref mut s) = scaler {
+                    s.run(&input_frame, &mut scaled_frame)?;
+                }
+                scaled_frame.set_pts(Some(frame_num));
+            } else {
+                input_frame.set_pts(Some(frame_num));
+            }
             let scale_elapsed = scale_start.elapsed();
-
-            scaled_frame.set_pts(Some(frame_num));
+            
+            // Get reference to the frame we'll encode
+            let frame_to_encode = if needs_scaling {
+                &scaled_frame
+            } else {
+                &input_frame
+            };
 
             // Encode frame
             let encode_start = Instant::now();
-            video_encoder.send_frame(&scaled_frame)?;
+            video_encoder.send_frame(frame_to_encode)?;
 
             // Calculate PTS and DTS in stream time_base
             // PTS represents when the frame should be displayed

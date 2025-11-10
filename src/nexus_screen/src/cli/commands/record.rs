@@ -39,17 +39,25 @@ pub struct RecordArgs {
 pub fn run_record(args: RecordArgs) -> Result<()> {
     // Handle list monitors command
     if args.list_monitors {
-        let monitors = xcap::Monitor::all()
-            .map_err(|e| ScreenError::Screen(format!("Failed to enumerate monitors: {}", e)))?;
-        println!("🖥️  Available monitors:\n");
-        for (i, monitor) in monitors.iter().enumerate() {
-            let is_primary = monitor.is_primary().unwrap_or(false);
-            let primary_marker = if is_primary { " [PRIMARY]" } else { "" };
-            let width = monitor.width().unwrap_or(0);
-            let height = monitor.height().unwrap_or(0);
-            println!("  {}. {}x{}{}", i, width, height, primary_marker);
+        #[cfg(target_os = "linux")]
+        {
+            println!("🖥️  Available displays:\n");
+            println!("  Note: On Linux, x11grab uses X11 display format (:display.screen)");
+            println!("  Default: :0.0 (primary display)\n");
+            println!("  Use -m/--monitor to specify display (e.g., :0.1 for second screen)");
         }
-        println!("\n💡 Tip: Use -m/--monitor to select a monitor by index");
+        #[cfg(target_os = "macos")]
+        {
+            println!("🖥️  Available displays:\n");
+            println!("  Note: On macOS, avfoundation uses device indices");
+            println!("  Run: ffmpeg -f avfoundation -list_devices true -i \"\"");
+            println!("  to see available screen capture devices\n");
+            println!("  Use -m/--monitor to specify device index (default: 1)");
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            println!("Screen capture not supported on this platform");
+        }
         return Ok(());
     }
 
