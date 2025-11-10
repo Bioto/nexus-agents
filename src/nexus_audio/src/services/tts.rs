@@ -1,16 +1,19 @@
 use crate::error::{Result, VoiceError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
+use futures_util::{SinkExt, StreamExt};
+use rmp_serde::{Deserializer, Serializer};
 use rodio::{Decoder, OutputStream, Sink};
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio_tungstenite::{connect_async, tungstenite::{Message, client::IntoClientRequest}};
-use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, Message},
+};
 use url::Url;
-use rmp_serde::{Deserializer, Serializer};
-use serde::{Deserialize, Serialize};
 
 // Text-to-speech service using Kyutai TTS.
 //
@@ -59,9 +62,8 @@ pub struct TtsConfig {
 impl Default for TtsConfig {
     fn default() -> Self {
         // Check mode via environment variable
-        let mode = std::env::var("KYUTAI_TTS_MODE")
-            .unwrap_or_else(|_| "websocket".to_string()); // Default to WebSocket for better performance
-        
+        let mode = std::env::var("KYUTAI_TTS_MODE").unwrap_or_else(|_| "websocket".to_string()); // Default to WebSocket for better performance
+
         let local = mode == "local";
         let websocket = mode == "websocket" || mode == "ws";
 
@@ -136,9 +138,10 @@ impl TextToSpeech {
             (None, config.endpoint)
         } else {
             // HTTP mode
-            let endpoint = config.endpoint.or_else(|| {
-                std::env::var("KYUTAI_TTS_URL").ok()
-            }).unwrap_or_else(|| "http://localhost:8089/api/tts_streaming".to_string());
+            let endpoint = config
+                .endpoint
+                .or_else(|| std::env::var("KYUTAI_TTS_URL").ok())
+                .unwrap_or_else(|| "http://localhost:8089/api/tts_streaming".to_string());
 
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -148,7 +151,8 @@ impl TextToSpeech {
             (Some(client), Some(endpoint))
         };
 
-        let python_cmd = config.python_cmd
+        let python_cmd = config
+            .python_cmd
             .or_else(|| std::env::var("PYTHON").ok())
             .unwrap_or_else(|| "python3".to_string());
 
@@ -228,16 +232,26 @@ except Exception as e:
         // Write script to temp file
         let temp_dir = std::env::temp_dir();
         let script_path = temp_dir.join(format!("kyutai_tts_{}.py", std::process::id()));
-        std::fs::write(&script_path, script)
-            .map_err(|e| VoiceError::Io(e))?;
+        std::fs::write(&script_path, script).map_err(|e| VoiceError::Io(e))?;
 
         // Build command
         let mut cmd = Command::new(&self.python_cmd);
         cmd.arg(&script_path);
         cmd.arg(text);
         cmd.arg(config.voice.as_ref().map(|v| v.as_str()).unwrap_or("None"));
-        cmd.arg(config.rate.map(|r| r.to_string()).unwrap_or_else(|| "0.5".to_string()));
-        cmd.arg(config.language.as_ref().map(|l| l.as_str()).unwrap_or("None"));
+        cmd.arg(
+            config
+                .rate
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "0.5".to_string()),
+        );
+        cmd.arg(
+            config
+                .language
+                .as_ref()
+                .map(|l| l.as_str())
+                .unwrap_or("None"),
+        );
 
         // Execute and capture output
         let output = tokio::process::Command::from(cmd)
@@ -259,7 +273,7 @@ except Exception as e:
         // Decode base64 audio
         let audio_b64 = String::from_utf8(output.stdout)
             .map_err(|e| VoiceError::Api(format!("Invalid output from Python: {}", e)))?;
-        
+
         use base64::Engine;
         let audio_data = base64::engine::general_purpose::STANDARD
             .decode(audio_b64.trim())
@@ -270,13 +284,15 @@ except Exception as e:
 
     /// Generate speech using HTTP API
     async fn synthesize_http(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
-            VoiceError::Configuration("HTTP endpoint not configured".to_string())
-        })?;
+        let endpoint = self
+            .endpoint
+            .as_ref()
+            .ok_or_else(|| VoiceError::Configuration("HTTP endpoint not configured".to_string()))?;
 
-        let http_client = self.http_client.as_ref().ok_or_else(|| {
-            VoiceError::Configuration("HTTP client not initialized".to_string())
-        })?;
+        let http_client = self
+            .http_client
+            .as_ref()
+            .ok_or_else(|| VoiceError::Configuration("HTTP client not initialized".to_string()))?;
 
         log::info!("Calling TTS endpoint: {}", endpoint);
         log::info!("Text to synthesize: {}", text);
@@ -295,37 +311,37 @@ except Exception as e:
         });
 
         if let Some(rate) = config.rate {
-            payload["speed"] = serde_json::Value::Number(serde_json::Number::from_f64(rate as f64).unwrap());
+            payload["speed"] =
+                serde_json::Value::Number(serde_json::Number::from_f64(rate as f64).unwrap());
         }
 
         if let Some(ref language) = config.language {
             payload["language"] = serde_json::Value::String(language.clone());
         }
 
-        log::debug!("Request payload: {}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+        log::debug!(
+            "Request payload: {}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
 
         // Make HTTP request to Moshi/Kyutai TTS
         // Check if API key is needed (from config or env)
-        let api_key = std::env::var("KYUTAI_API_KEY")
-            .unwrap_or_else(|_| "public_token".to_string());
+        let api_key =
+            std::env::var("KYUTAI_API_KEY").unwrap_or_else(|_| "public_token".to_string());
 
         let request = http_client
             .post(endpoint)
             .header("Content-Type", "application/json")
             .header("kyutai-api-key", &api_key);
 
-        let response = request
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| {
-                let err_msg = format!(
-                    "Failed to connect to TTS server at {}: {}. Make sure the server is running.",
-                    endpoint, e
-                );
-                log::error!("{}", err_msg);
-                VoiceError::Api(err_msg)
-            })?;
+        let response = request.json(&payload).send().await.map_err(|e| {
+            let err_msg = format!(
+                "Failed to connect to TTS server at {}: {}. Make sure the server is running.",
+                endpoint, e
+            );
+            log::error!("{}", err_msg);
+            VoiceError::Api(err_msg)
+        })?;
 
         let status = response.status();
         log::info!("TTS server response status: {}", status);
@@ -350,14 +366,11 @@ except Exception as e:
         log::info!("Response content-type: {}", content_type);
 
         // Get audio data
-        let audio_data = response
-            .bytes()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to read audio data: {}", e);
-                log::error!("{}", err_msg);
-                VoiceError::Api(err_msg)
-            })?;
+        let audio_data = response.bytes().await.map_err(|e| {
+            let err_msg = format!("Failed to read audio data: {}", e);
+            log::error!("{}", err_msg);
+            VoiceError::Api(err_msg)
+        })?;
 
         log::info!("Received {} bytes of audio data", audio_data.len());
 
@@ -394,34 +407,33 @@ except Exception as e:
         log::debug!("WebSocket URL with params: {}", url);
 
         // Get API key
-        let api_key = std::env::var("KYUTAI_API_KEY")
-            .unwrap_or_else(|_| "public_token".to_string());
+        let api_key =
+            std::env::var("KYUTAI_API_KEY").unwrap_or_else(|_| "public_token".to_string());
 
         // Connect to WebSocket - use tungstenite's client request builder which handles handshake
         // The IntoClientRequest trait creates a request with proper WebSocket handshake headers,
         // then we add our custom header
-        let mut request = url.as_str()
+        let mut request = url
+            .as_str()
             .into_client_request()
             .map_err(|e| VoiceError::Api(format!("Failed to create WebSocket request: {}", e)))?;
-        
+
         // Add custom API key header
         use http::HeaderValue;
         request.headers_mut().insert(
             "kyutai-api-key",
             HeaderValue::from_str(&api_key)
-                .map_err(|e| VoiceError::Api(format!("Failed to create header value: {}", e)))?
+                .map_err(|e| VoiceError::Api(format!("Failed to create header value: {}", e)))?,
         );
 
-        let (ws_stream, _) = connect_async(request)
-            .await
-            .map_err(|e| {
-                let err_msg = format!(
-                    "Failed to connect to TTS WebSocket at {}: {}. Make sure moshi-server is running.",
-                    endpoint, e
-                );
-                log::error!("{}", err_msg);
-                VoiceError::Api(err_msg)
-            })?;
+        let (ws_stream, _) = connect_async(request).await.map_err(|e| {
+            let err_msg = format!(
+                "Failed to connect to TTS WebSocket at {}: {}. Make sure moshi-server is running.",
+                endpoint, e
+            );
+            log::error!("{}", err_msg);
+            VoiceError::Api(err_msg)
+        })?;
 
         log::info!("Connected to TTS WebSocket");
 
@@ -439,17 +451,22 @@ except Exception as e:
                 msg.serialize(&mut Serializer::new(&mut buf))
                     .map_err(|e| VoiceError::Api(format!("Failed to serialize message: {}", e)))?;
 
-                write.send(Message::Binary(buf)).await
+                write
+                    .send(Message::Binary(buf))
+                    .await
                     .map_err(|e| VoiceError::Api(format!("Failed to send text: {}", e)))?;
             }
 
             // Send EOS message
             let eos_msg = TtsMessage::Eos;
             let mut buf = Vec::new();
-            eos_msg.serialize(&mut Serializer::new(&mut buf))
+            eos_msg
+                .serialize(&mut Serializer::new(&mut buf))
                 .map_err(|e| VoiceError::Api(format!("Failed to serialize EOS: {}", e)))?;
 
-            write.send(Message::Binary(buf)).await
+            write
+                .send(Message::Binary(buf))
+                .await
                 .map_err(|e| VoiceError::Api(format!("Failed to send EOS: {}", e)))?;
 
             Ok::<(), VoiceError>(())
@@ -458,7 +475,7 @@ except Exception as e:
         // Set up streaming audio playback
         const SAMPLE_RATE: u32 = 24000; // Kyutai TTS uses 24kHz
         let volume = config.volume.unwrap_or(1.0);
-        
+
         // Create a channel for streaming audio chunks
         let (audio_tx, mut audio_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
         let playback_finished = Arc::new(tokio::sync::Notify::new());
@@ -536,13 +553,13 @@ except Exception as e:
                     let queue = audio_queue_for_callback.lock().unwrap();
                     queue.len()
                 };
-                
+
                 if is_finished && queue_len == 0 {
                     // Wait a bit more to ensure last samples play
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     break;
                 }
-                
+
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
@@ -557,8 +574,11 @@ except Exception as e:
                 let chunk_len = chunk.len();
                 let mut queue = audio_queue_for_feeder.lock().unwrap();
                 queue.extend(chunk);
-                log::debug!("Added {} samples to playback queue (queue size: {})", 
-                    chunk_len, queue.len());
+                log::debug!(
+                    "Added {} samples to playback queue (queue size: {})",
+                    chunk_len,
+                    queue.len()
+                );
             }
             // Signal that we're done receiving
             *finished_flag.lock().unwrap() = true;
@@ -574,7 +594,11 @@ except Exception as e:
                     match TtsMessage::deserialize(&mut de) {
                         Ok(TtsMessage::Audio { pcm }) => {
                             total_samples += pcm.len();
-                            log::debug!("Received {} PCM samples (total: {})", pcm.len(), total_samples);
+                            log::debug!(
+                                "Received {} PCM samples (total: {})",
+                                pcm.len(),
+                                total_samples
+                            );
                             // Send chunk to playback immediately
                             if let Err(e) = audio_tx.send(pcm) {
                                 log::error!("Failed to send audio chunk to playback: {}", e);
@@ -617,12 +641,16 @@ except Exception as e:
         drop(audio_tx);
 
         if total_samples == 0 {
-            return Err(VoiceError::Api("No audio data received from TTS server".to_string()));
+            return Err(VoiceError::Api(
+                "No audio data received from TTS server".to_string(),
+            ));
         }
 
-        log::info!("Received {} PCM samples ({} seconds) - streaming complete", 
-            total_samples, 
-            total_samples as f32 / SAMPLE_RATE as f32);
+        log::info!(
+            "Received {} PCM samples ({} seconds) - streaming complete",
+            total_samples,
+            total_samples as f32 / SAMPLE_RATE as f32
+        );
 
         // Wait for playback to finish
         playback_finished.notified().await;
@@ -646,12 +674,12 @@ except Exception as e:
         }
 
         let mut fixed = audio_data.to_vec();
-        
+
         // Find the "data" chunk (usually after "fmt " chunk)
         // Search for "data" chunk marker
         let mut data_pos = None;
         for i in 0..fixed.len().saturating_sub(8) {
-            if &fixed[i..i+4] == b"data" {
+            if &fixed[i..i + 4] == b"data" {
                 data_pos = Some(i);
                 break;
             }
@@ -669,10 +697,14 @@ except Exception as e:
 
                 // Calculate actual data size (from data start to end of file, minus 8 for "data" + size)
                 let actual_data_size = fixed.len().saturating_sub(pos + 8);
-                
+
                 // If chunk size doesn't match, fix it
                 if chunk_size != actual_data_size {
-                    log::warn!("Fixing WAV data chunk size: {} -> {}", chunk_size, actual_data_size);
+                    log::warn!(
+                        "Fixing WAV data chunk size: {} -> {}",
+                        chunk_size,
+                        actual_data_size
+                    );
                     let new_size = actual_data_size as u32;
                     fixed[pos + 4..pos + 8].copy_from_slice(&new_size.to_le_bytes());
                 }
@@ -684,71 +716,80 @@ except Exception as e:
 
     /// Play audio data using rodio
     async fn play_audio(&self, audio_data: Vec<u8>, volume: f32) -> Result<()> {
-        log::info!("Playing audio: {} bytes, volume: {}", audio_data.len(), volume);
+        log::info!(
+            "Playing audio: {} bytes, volume: {}",
+            audio_data.len(),
+            volume
+        );
 
         // Stop any currently playing audio
         self.stop().await?;
 
         // Create output stream
-        let (_stream, stream_handle) = OutputStream::try_default()
-            .map_err(|e| {
-                let err_msg = format!("Failed to create audio output stream: {}", e);
-                log::error!("{}", err_msg);
-                VoiceError::Audio(err_msg)
-            })?;
+        let (_stream, stream_handle) = OutputStream::try_default().map_err(|e| {
+            let err_msg = format!("Failed to create audio output stream: {}", e);
+            log::error!("{}", err_msg);
+            VoiceError::Audio(err_msg)
+        })?;
 
         log::debug!("Audio output stream created");
 
         // Decode audio - check if it's WAV format first (server returns audio/wav)
         use rodio::Source;
-        
+
         let source: Box<dyn Source<Item = f32> + Send> = {
             // Check if it's a WAV file (starts with "RIFF" or content-type is audio/wav)
             if audio_data.len() >= 4 && &audio_data[0..4] == b"RIFF" {
                 log::info!("Detected WAV format, decoding with hound");
-                
+
                 // Try to fix WAV file if it's malformed
                 let fixed_audio = self.fix_wav_file(&audio_data)?;
-                
+
                 // Use hound to decode WAV directly
-                let mut reader = hound::WavReader::new(Cursor::new(fixed_audio))
-                    .map_err(|e| {
-                        let err_msg = format!("Failed to decode WAV with hound: {}", e);
-                        log::error!("{}", err_msg);
-                        VoiceError::Audio(err_msg)
-                    })?;
-                
+                let mut reader = hound::WavReader::new(Cursor::new(fixed_audio)).map_err(|e| {
+                    let err_msg = format!("Failed to decode WAV with hound: {}", e);
+                    log::error!("{}", err_msg);
+                    VoiceError::Audio(err_msg)
+                })?;
+
                 let spec = reader.spec();
-                log::info!("WAV spec: {} Hz, {} channels, {} bits", 
-                    spec.sample_rate, spec.channels, spec.bits_per_sample);
-                
+                log::info!(
+                    "WAV spec: {} Hz, {} channels, {} bits",
+                    spec.sample_rate,
+                    spec.channels,
+                    spec.bits_per_sample
+                );
+
                 // Read all samples based on bit depth
                 let samples: Vec<f32> = match spec.bits_per_sample {
-                    16 => {
-                        reader.samples::<i16>()
-                            .map(|s| {
-                                s.map(|sample| sample as f32 / 32768.0)
-                                    .map_err(|e| VoiceError::Audio(format!("Failed to read sample: {}", e)))
+                    16 => reader
+                        .samples::<i16>()
+                        .map(|s| {
+                            s.map(|sample| sample as f32 / 32768.0).map_err(|e| {
+                                VoiceError::Audio(format!("Failed to read sample: {}", e))
                             })
-                            .collect::<std::result::Result<Vec<_>, _>>()?
-                    }
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
                     24 => {
                         // 24-bit samples - read as i32 and shift
-                        reader.samples::<i32>()
+                        reader
+                            .samples::<i32>()
                             .map(|s| {
                                 s.map(|sample| (sample >> 8) as f32 / 8388608.0)
-                                    .map_err(|e| VoiceError::Audio(format!("Failed to read sample: {}", e)))
+                                    .map_err(|e| {
+                                        VoiceError::Audio(format!("Failed to read sample: {}", e))
+                                    })
                             })
                             .collect::<std::result::Result<Vec<_>, _>>()?
                     }
-                    32 => {
-                        reader.samples::<i32>()
-                            .map(|s| {
-                                s.map(|sample| sample as f32 / 2147483648.0)
-                                    .map_err(|e| VoiceError::Audio(format!("Failed to read sample: {}", e)))
+                    32 => reader
+                        .samples::<i32>()
+                        .map(|s| {
+                            s.map(|sample| sample as f32 / 2147483648.0).map_err(|e| {
+                                VoiceError::Audio(format!("Failed to read sample: {}", e))
                             })
-                            .collect::<std::result::Result<Vec<_>, _>>()?
-                    }
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()?,
                     _ => {
                         return Err(VoiceError::Audio(format!(
                             "Unsupported bit depth: {} bits",
@@ -756,21 +797,25 @@ except Exception as e:
                         )));
                     }
                 };
-                
+
                 log::info!("Decoded {} samples from WAV", samples.len());
-                
+
                 // Play audio using cpal directly (more reliable for raw PCM)
-                return self.play_pcm_samples(samples, spec.sample_rate, spec.channels, volume).await;
+                return self
+                    .play_pcm_samples(samples, spec.sample_rate, spec.channels, volume)
+                    .await;
             } else {
                 // Try rodio's auto-detection for other formats
                 log::info!("Trying rodio auto-detection for audio format");
                 let cursor = Cursor::new(audio_data);
-                let decoder = Decoder::new(cursor)
-                    .map_err(|e| {
-                        let err_msg = format!("Failed to decode audio: {}. Audio format may not be supported.", e);
-                        log::error!("{}", err_msg);
-                        VoiceError::Audio(err_msg)
-                    })?;
+                let decoder = Decoder::new(cursor).map_err(|e| {
+                    let err_msg = format!(
+                        "Failed to decode audio: {}. Audio format may not be supported.",
+                        e
+                    );
+                    log::error!("{}", err_msg);
+                    VoiceError::Audio(err_msg)
+                })?;
                 Box::new(decoder.convert_samples::<f32>())
             }
         };
@@ -781,12 +826,11 @@ except Exception as e:
         let source = source.amplify(volume.max(0.0).min(1.0));
 
         // Create sink and play
-        let sink = Sink::try_new(&stream_handle)
-            .map_err(|e| {
-                let err_msg = format!("Failed to create audio sink: {}", e);
-                log::error!("{}", err_msg);
-                VoiceError::Audio(err_msg)
-            })?;
+        let sink = Sink::try_new(&stream_handle).map_err(|e| {
+            let err_msg = format!("Failed to create audio sink: {}", e);
+            log::error!("{}", err_msg);
+            VoiceError::Audio(err_msg)
+        })?;
 
         sink.append(source);
         sink.play();
@@ -807,8 +851,12 @@ except Exception as e:
         channels: u16,
         volume: f32,
     ) -> Result<()> {
-        log::info!("Playing {} PCM samples at {} Hz, {} channels", 
-            samples.len(), sample_rate, channels);
+        log::info!(
+            "Playing {} PCM samples at {} Hz, {} channels",
+            samples.len(),
+            sample_rate,
+            channels
+        );
 
         // Stop any currently playing audio
         self.stop().await?;
@@ -860,9 +908,9 @@ except Exception as e:
             .map_err(|e| VoiceError::Audio(format!("Failed to build output stream: {}", e)))?;
 
         // Play the stream
-        stream.play().map_err(|e| {
-            VoiceError::Audio(format!("Failed to play audio stream: {}", e))
-        })?;
+        stream
+            .play()
+            .map_err(|e| VoiceError::Audio(format!("Failed to play audio stream: {}", e)))?;
 
         log::info!("Audio playback started with cpal");
 
@@ -871,9 +919,9 @@ except Exception as e:
         tokio::time::sleep(tokio::time::Duration::from_millis(duration_ms + 100)).await;
 
         // Stop the stream
-        stream.pause().map_err(|e| {
-            VoiceError::Audio(format!("Failed to pause audio stream: {}", e))
-        })?;
+        stream
+            .pause()
+            .map_err(|e| VoiceError::Audio(format!("Failed to pause audio stream: {}", e)))?;
 
         log::info!("Audio playback completed");
 
@@ -893,7 +941,12 @@ except Exception as e:
     }
 
     /// Speak the given text and wait for completion
-    pub async fn speak_sync(&mut self, text: &str, interrupt: bool, config: &TtsConfig) -> Result<()> {
+    pub async fn speak_sync(
+        &mut self,
+        text: &str,
+        interrupt: bool,
+        config: &TtsConfig,
+    ) -> Result<()> {
         self.speak(text, interrupt, config).await?;
         self.wait().await?;
         Ok(())
@@ -942,7 +995,7 @@ except Exception as e:
             })?;
 
             let voices_endpoint = endpoint.replace("/tts", "/voices");
-            
+
             let response = http_client
                 .get(&voices_endpoint)
                 .send()
@@ -966,14 +1019,8 @@ except Exception as e:
             Ok(voices
                 .into_iter()
                 .map(|v| VoiceInfo {
-                    name: v["name"]
-                        .as_str()
-                        .unwrap_or("unknown")
-                        .to_string(),
-                    language: v["language"]
-                        .as_str()
-                        .unwrap_or("en")
-                        .to_string(),
+                    name: v["name"].as_str().unwrap_or("unknown").to_string(),
+                    language: v["language"].as_str().unwrap_or("en").to_string(),
                     gender: v["gender"].as_str().map(|s| s.to_string()),
                 })
                 .collect())

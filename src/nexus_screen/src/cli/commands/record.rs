@@ -1,5 +1,5 @@
 use crate::error::{Result, ScreenError};
-use crate::services::{ScreenRecorder, RecordingConfig};
+use crate::services::{RecordingConfig, ScreenRecorder};
 use clap::Args;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -18,7 +18,7 @@ pub struct RecordArgs {
     /// Frame rate in fps (default: 30, note: actual capture rate may be lower)
     #[arg(short = 'f', long, default_value = "60")]
     pub fps: u32,
-    
+
     /// Capture as fast as possible (ignore target FPS, maximize frame count)
     #[arg(long)]
     pub fast: bool,
@@ -39,24 +39,33 @@ pub struct RecordArgs {
 pub fn run_record(args: RecordArgs) -> Result<()> {
     // Handle list monitors command
     if args.list_monitors {
-        #[cfg(target_os = "linux")]
-        {
-            println!("🖥️  Available displays:\n");
-            println!("  Note: On Linux, x11grab uses X11 display format (:display.screen)");
-            println!("  Default: :0.0 (primary display)\n");
-            println!("  Use -m/--monitor to specify display (e.g., :0.1 for second screen)");
-        }
-        #[cfg(target_os = "macos")]
-        {
-            println!("🖥️  Available displays:\n");
-            println!("  Note: On macOS, avfoundation uses device indices");
-            println!("  Run: ffmpeg -f avfoundation -list_devices true -i \"\"");
-            println!("  to see available screen capture devices\n");
-            println!("  Use -m/--monitor to specify device index (default: 1)");
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            println!("Screen capture not supported on this platform");
+        match ScreenRecorder::list_monitors() {
+            Ok(monitors) => {
+                println!("🖥️  Available monitors:\n");
+                for monitor in &monitors {
+                    let primary_marker = if monitor.is_primary { " [PRIMARY]" } else { "" };
+                    println!(
+                        "  {}. {}{}",
+                        monitor.index, monitor.display_name, primary_marker
+                    );
+                }
+                println!("\n💡 Tip: Use -m/--monitor with the index number (e.g., -m 0 or -m 1) to select a monitor");
+            }
+            Err(e) => {
+                eprintln!("❌ Failed to enumerate monitors: {}", e);
+                #[cfg(target_os = "linux")]
+                {
+                    eprintln!("\nNote: Make sure xrandr is installed (sudo apt-get install x11-xserver-utils)");
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    eprintln!("\nNote: Make sure ffmpeg is installed with avfoundation support");
+                }
+                return Err(ScreenError::Other(format!(
+                    "Failed to list monitors: {}",
+                    e
+                )));
+            }
         }
         return Ok(());
     }
@@ -117,13 +126,12 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
             println!("\n\n🛑 Stopping recording...");
             stop_signal_clone.store(true, std::sync::atomic::Ordering::Relaxed);
         })
-        .map_err(|e| {
-            ScreenError::Other(format!("Failed to set Ctrl+C handler: {}", e))
-        })?;
+        .map_err(|e| ScreenError::Other(format!("Failed to set Ctrl+C handler: {}", e)))?;
     }
 
     // Start recording
-    recorder.record(config, stop_signal)
+    recorder
+        .record(config, stop_signal)
         .map_err(|e| ScreenError::VideoEncoding(format!("Recording failed: {}", e)))?;
 
     println!("\n✅ Recording saved successfully!");

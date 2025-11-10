@@ -59,9 +59,11 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
     // Handle list voices command
     if args.list_voices {
         let endpoint = args.endpoint.clone();
-        let websocket_mode = args.websocket || endpoint.as_ref()
-            .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
-            .unwrap_or(false);
+        let websocket_mode = args.websocket
+            || endpoint
+                .as_ref()
+                .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+                .unwrap_or(false);
 
         let config = TtsConfig {
             endpoint,
@@ -124,10 +126,12 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
             Some("http://localhost:8089/api/tts_streaming".to_string())
         }
     });
-    
-    let websocket_mode = args.websocket || endpoint.as_ref()
-        .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
-        .unwrap_or(false);
+
+    let websocket_mode = args.websocket
+        || endpoint
+            .as_ref()
+            .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+            .unwrap_or(false);
 
     let config = TtsConfig {
         endpoint,
@@ -166,10 +170,10 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
         tts.speak(&args.text, args.interrupt, &tts_config).await?;
         println!("✅ Speech started (running in background)");
     } else {
-        tts.speak_sync(&args.text, args.interrupt, &tts_config).await?;
+        tts.speak_sync(&args.text, args.interrupt, &tts_config)
+            .await?;
         println!("✅ Speech completed");
     }
 
     Ok(())
 }
-

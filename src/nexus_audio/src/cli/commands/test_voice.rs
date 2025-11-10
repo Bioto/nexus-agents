@@ -51,7 +51,10 @@ pub struct TestVoiceArgs {
     pub model: PathBuf,
 
     /// Text to speak back when the phrase is detected
-    #[arg(long, default_value = "I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! ")]
+    #[arg(
+        long,
+        default_value = "I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! I heard you say this is a test! "
+    )]
     pub response: String,
 
     /// Voice to use for TTS response
@@ -125,14 +128,16 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
             Some("ws://localhost:8089/api/tts_streaming".to_string())
         }
     });
-    
+
     // Determine WebSocket mode: explicit flag, or auto-detect from endpoint URL
     let websocket_mode = if args.local {
         false
     } else {
-        args.websocket || endpoint.as_ref()
-            .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
-            .unwrap_or(true) // Default to true (WebSocket) if no endpoint specified
+        args.websocket
+            || endpoint
+                .as_ref()
+                .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+                .unwrap_or(true) // Default to true (WebSocket) if no endpoint specified
     };
 
     let tts_config = TtsConfig {
@@ -161,11 +166,14 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
         while let Ok(result) = rx.recv() {
             let raw_text = result.text.trim();
             let transcription = raw_text.to_lowercase();
-            
+
             println!("💬 Heard (raw): \"{}\"", raw_text);
             println!("🔍 Debug: Lowercase version: \"{}\"", transcription);
             println!("🔍 Debug: Looking for: \"this is a test\"");
-            println!("🔍 Debug: Contains check: {}", transcription.contains("this is a test"));
+            println!(
+                "🔍 Debug: Contains check: {}",
+                transcription.contains("this is a test")
+            );
 
             // Check if transcription contains "this is a test"
             if transcription.contains("this is a test") {
@@ -194,9 +202,13 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
     let response_text = tokio::task::spawn_blocking(move || {
         println!("🔍 Debug: Blocking on phrase_rx.recv()...");
         phrase_rx.recv().ok()
-    }).await
-        .map_err(|e| crate::error::VoiceError::Other(format!("Task error: {:?}", e)))?;
-    println!("🔍 Debug: Received from phrase_rx: {:?}", response_text.is_some());
+    })
+    .await
+    .map_err(|e| crate::error::VoiceError::Other(format!("Task error: {:?}", e)))?;
+    println!(
+        "🔍 Debug: Received from phrase_rx: {:?}",
+        response_text.is_some()
+    );
 
     // Speak the response immediately if phrase was detected (don't wait for listener to stop)
     if let Some(text) = response_text {
@@ -211,4 +223,3 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
 
     Ok(())
 }
-

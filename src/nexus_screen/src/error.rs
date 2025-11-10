@@ -38,4 +38,3 @@ impl From<anyhow::Error> for ScreenError {
         ScreenError::Other(err.to_string())
     }
 }
-

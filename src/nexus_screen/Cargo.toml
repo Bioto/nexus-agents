@@ -7,9 +7,6 @@ edition = "2021"
 name = "nexus-screen"
 path = "src/main.rs"
 
-[[example]]
-name = "test_x11grab"
-path = "test_x11grab.rs"
 
 [dependencies]
 ratatui = { workspace = true }

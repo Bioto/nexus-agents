@@ -232,8 +232,11 @@ impl VoiceListener {
             while running.load(Ordering::Relaxed) {
                 match rx_transcribe.recv_timeout(Duration::from_millis(100)) {
                     Ok((audio_data, duration_seconds)) => {
-                        log::debug!("Received audio data for transcription: {} samples, {:.2}s", 
-                            audio_data.len(), duration_seconds);
+                        log::debug!(
+                            "Received audio data for transcription: {} samples, {:.2}s",
+                            audio_data.len(),
+                            duration_seconds
+                        );
                         match ctx.create_state() {
                             Ok(mut state) => {
                                 let mut params =
@@ -260,7 +263,11 @@ impl VoiceListener {
                                 }
 
                                 let text = transcription.trim().to_string();
-                                log::debug!("Transcription result: \"{}\" ({} segments)", text, num_segments);
+                                log::debug!(
+                                    "Transcription result: \"{}\" ({} segments)",
+                                    text,
+                                    num_segments
+                                );
                                 if !text.is_empty() {
                                     let result = TranscriptionResult {
                                         text,
@@ -402,14 +409,20 @@ impl VoiceListener {
                                     (speech_buffer.len() as f32 / self.config.sample_rate as f32
                                         * 1000.0) as u32;
 
-                                log::debug!("Speech duration: {}ms (min required: {}ms)", 
-                                    speech_duration_ms, self.config.min_speech_ms);
+                                log::debug!(
+                                    "Speech duration: {}ms (min required: {}ms)",
+                                    speech_duration_ms,
+                                    self.config.min_speech_ms
+                                );
                                 if speech_duration_ms >= self.config.min_speech_ms {
                                     // Send to transcription thread with duration
                                     let duration_seconds =
                                         speech_buffer.len() as f32 / self.config.sample_rate as f32;
-                                    log::debug!("Sending {} samples ({:.2}s) to transcription thread", 
-                                        speech_buffer.len(), duration_seconds);
+                                    log::debug!(
+                                        "Sending {} samples ({:.2}s) to transcription thread",
+                                        speech_buffer.len(),
+                                        duration_seconds
+                                    );
                                     if let Some(ref tx) = self.transcription_tx {
                                         if let Err(e) =
                                             tx.try_send((speech_buffer.clone(), duration_seconds))
@@ -426,7 +439,9 @@ impl VoiceListener {
                                                 }
                                             }
                                         } else {
-                                            log::debug!("Successfully sent audio to transcription thread");
+                                            log::debug!(
+                                                "Successfully sent audio to transcription thread"
+                                            );
                                         }
                                     } else {
                                         log::warn!("transcription_tx is None - transcription not initialized?");

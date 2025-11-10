@@ -7,10 +7,6 @@ edition = "2021"
 name = "nexus-audio"
 path = "src/main.rs"
 
-[[example]]
-name = "wake_word_assistant"
-path = "examples/wake_word_assistant.rs"
-
 [dependencies]
 ratatui = { workspace = true }
 crossterm = "0.28"

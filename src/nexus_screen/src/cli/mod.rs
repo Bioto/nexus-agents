@@ -21,6 +21,5 @@ pub enum Commands {
 }
 
 // Re-export command handlers for convenience
-pub use commands::screenshot::run_screenshot;
 pub use commands::record::run_record;
-
+pub use commands::screenshot::run_screenshot;
