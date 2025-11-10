@@ -85,6 +85,8 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
         duration_secs: args.duration,
         output_path,
         monitor_index: args.monitor,
+        window_id: None,
+        window_title: None,
         include_audio: !args.no_audio,
         fast: args.fast,
     };

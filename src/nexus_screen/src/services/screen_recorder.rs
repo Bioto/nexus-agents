@@ -17,12 +17,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::window_info::{WindowInfo, WindowInfoService};
+
 #[derive(Clone, Debug)]
 pub struct RecordingConfig {
     pub framerate: u32,
     pub duration_secs: Option<u64>,
     pub output_path: PathBuf,
     pub monitor_index: Option<usize>,
+    pub window_id: Option<String>, // Record a specific window by ID
+    pub window_title: Option<String>, // Record a specific window by title pattern
     pub include_audio: bool,
     pub fast: bool, // Capture as fast as possible, ignore target FPS
 }
@@ -46,6 +50,8 @@ impl Default for RecordingConfig {
             duration_secs: None,
             output_path: PathBuf::from("recording.mp4"),
             monitor_index: None,
+            window_id: None,
+            window_title: None,
             include_audio: true,
             fast: false,
         }
@@ -92,6 +98,59 @@ impl ScreenRecorder {
                 "Monitor enumeration not supported on this platform"
             ))
         }
+    }
+
+    /// Get windows on a specific monitor
+    /// Uses window geometry to determine which windows are on the monitor
+    pub fn get_windows_on_monitor(monitor_index: usize) -> Result<Vec<WindowInfo>> {
+        let monitors = Self::list_monitors()?;
+        let monitor = monitors
+            .get(monitor_index)
+            .ok_or_else(|| anyhow::anyhow!("Monitor index {} not found", monitor_index))?;
+
+        let monitor_x = monitor.offset_x.unwrap_or(0);
+        let monitor_y = monitor.offset_y.unwrap_or(0);
+        let monitor_width = monitor
+            .resolution
+            .as_ref()
+            .and_then(|r| r.split('x').next())
+            .and_then(|w| w.parse::<i32>().ok())
+            .unwrap_or(1920);
+        let monitor_height = monitor
+            .resolution
+            .as_ref()
+            .and_then(|r| r.split('x').nth(1))
+            .and_then(|h| h.parse::<i32>().ok())
+            .unwrap_or(1080);
+
+        let all_windows = WindowInfoService::list_windows()?;
+        let mut windows_on_monitor = Vec::new();
+
+        for window in all_windows {
+            if let Some(geom) = &window.geometry {
+                // Check if window overlaps with monitor bounds
+                let window_right = geom.x + geom.width as i32;
+                let window_bottom = geom.y + geom.height as i32;
+                let monitor_right = monitor_x + monitor_width;
+                let monitor_bottom = monitor_y + monitor_height;
+
+                // Window overlaps if it's not completely outside monitor bounds
+                if !(window_right <= monitor_x
+                    || geom.x >= monitor_right
+                    || window_bottom <= monitor_y
+                    || geom.y >= monitor_bottom)
+                {
+                    windows_on_monitor.push(window);
+                }
+            }
+        }
+
+        Ok(windows_on_monitor)
+    }
+
+    /// Get the active window information
+    pub fn get_active_window() -> Result<Option<WindowInfo>> {
+        WindowInfoService::get_active_window()
     }
 
     #[cfg(target_os = "linux")]
@@ -393,6 +452,7 @@ impl ScreenRecorder {
 
     fn get_input_format_and_url(
         monitor_index: Option<usize>,
+        window_info: Option<&WindowInfo>,
         fps: u32,
     ) -> Result<(String, String, Vec<(String, String)>)> {
         #[cfg(target_os = "linux")]
@@ -412,54 +472,68 @@ impl ScreenRecorder {
                 &display
             };
 
-            // Step 1: Get monitor info to extract name and offset
-            // We'll use the exact same method as the working command
-            let (monitor_name, offset_x, offset_y) = if let Some(idx) = monitor_index {
-                if let Ok(monitors) = Self::list_monitors_linux() {
-                    if let Some(monitor) = monitors.get(idx) {
-                        let ox = monitor.offset_x.unwrap_or(0);
-                        let oy = monitor.offset_y.unwrap_or(0);
-                        (Some(monitor.name.clone()), ox, oy)
+            // If window_info is provided, use window geometry for recording
+            let (offset_x, offset_y, video_size_str) = if let Some(window) = window_info {
+                if let Some(geom) = &window.geometry {
+                    let size = format!("{}x{}", geom.width, geom.height);
+                    (geom.x, geom.y, Some(size))
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Window geometry not available for window: {}",
+                        window.window_id
+                    ));
+                }
+            } else {
+                // Step 1: Get monitor info to extract name and offset
+                // We'll use the exact same method as the working command
+                let (monitor_name, ox, oy) = if let Some(idx) = monitor_index {
+                    if let Ok(monitors) = Self::list_monitors_linux() {
+                        if let Some(monitor) = monitors.get(idx) {
+                            let ox = monitor.offset_x.unwrap_or(0);
+                            let oy = monitor.offset_y.unwrap_or(0);
+                            (Some(monitor.name.clone()), ox, oy)
+                        } else {
+                            eprintln!("WARNING: Monitor index {} not found", idx);
+                            (None, 0, 0)
+                        }
                     } else {
-                        eprintln!("WARNING: Monitor index {} not found", idx);
+                        eprintln!("WARNING: Failed to list monitors");
                         (None, 0, 0)
                     }
                 } else {
-                    eprintln!("WARNING: Failed to list monitors");
                     (None, 0, 0)
-                }
-            } else {
-                (None, 0, 0)
-            };
+                };
 
-            // Step 2: Extract video_size using the EXACT same method as the working command
-            // Command: xrandr | awk '/DP-0 connected/ {pos = $3; sub(/\+.*/, "", pos); print pos; exit}'
-            let video_size_str = if let Some(ref name) = monitor_name {
-                let output = Command::new("xrandr").output().ok();
-                if let Some(output) = output {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let mut found = None;
-                    for line in stdout.lines() {
-                        // Match line like: "DP-0 connected 2560x1440+0+1080 ..."
-                        if line.contains(&format!("{} connected", name)) {
-                            let parts: Vec<&str> = line.split_whitespace().collect();
-                            if parts.len() >= 3 {
-                                let pos_str = parts[2]; // This is "2560x1440+0+1080"
-                                                        // Extract resolution by removing everything after first '+'
-                                if let Some(plus_pos) = pos_str.find('+') {
-                                    let resolution = &pos_str[..plus_pos]; // "2560x1440"
-                                    found = Some(resolution.to_string());
-                                    break; // Found it, exit loop
+                // Step 2: Extract video_size using the EXACT same method as the working command
+                // Command: xrandr | awk '/DP-0 connected/ {pos = $3; sub(/\+.*/, "", pos); print pos; exit}'
+                let video_size_str = if let Some(ref name) = monitor_name {
+                    let output = Command::new("xrandr").output().ok();
+                    if let Some(output) = output {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let mut found = None;
+                        for line in stdout.lines() {
+                            // Match line like: "DP-0 connected 2560x1440+0+1080 ..."
+                            if line.contains(&format!("{} connected", name)) {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                if parts.len() >= 3 {
+                                    let pos_str = parts[2]; // This is "2560x1440+0+1080"
+                                                            // Extract resolution by removing everything after first '+'
+                                    if let Some(plus_pos) = pos_str.find('+') {
+                                        let resolution = &pos_str[..plus_pos]; // "2560x1440"
+                                        found = Some(resolution.to_string());
+                                        break; // Found it, exit loop
+                                    }
                                 }
                             }
                         }
+                        found
+                    } else {
+                        None
                     }
-                    found
                 } else {
                     None
-                }
-            } else {
-                None
+                };
+                (ox, oy, video_size_str)
             };
 
             // Step 3: Build URL - use :1.0 hardcoded (as in working command)
@@ -511,12 +585,21 @@ impl ScreenRecorder {
         output_path: &str,
         monitor_index: Option<usize>,
     ) -> Result<()> {
+        self.capture_screenshot_to_file_with_window(output_path, monitor_index, None)
+    }
+
+    pub fn capture_screenshot_to_file_with_window(
+        &self,
+        output_path: &str,
+        monitor_index: Option<usize>,
+        window_info: Option<&WindowInfo>,
+    ) -> Result<()> {
         use image::{ImageBuffer, Rgb, RgbImage};
 
         // Use the same monitor selection logic as recording
         let fps = 30; // FPS doesn't matter for single frame, but required for x11grab
         let (input_format_name, input_url, input_options) =
-            Self::get_input_format_and_url(monitor_index, fps)?;
+            Self::get_input_format_and_url(monitor_index, window_info, fps)?;
 
         // Find the input format
         let input_format = input::video()
@@ -645,9 +728,19 @@ impl ScreenRecorder {
             .ok_or_else(|| anyhow::anyhow!("No H.264 encoder available"))?;
         let stream = octx.add_stream(codec)?;
 
+        // Resolve window info if window_id or window_title is specified
+        let window_info = if let Some(ref window_id) = config.window_id {
+            WindowInfoService::get_window_by_id(window_id)?
+        } else if let Some(ref window_title) = config.window_title {
+            let windows = WindowInfoService::get_windows_by_title(window_title)?;
+            windows.first().cloned()
+        } else {
+            None
+        };
+
         // Setup FFmpeg input for screen capture
         let (input_format_name, input_url, input_options) =
-            Self::get_input_format_and_url(config.monitor_index, fps)?;
+            Self::get_input_format_and_url(config.monitor_index, window_info.as_ref(), fps)?;
         println!(
             "Using input format: {}, URL: {}",
             input_format_name, input_url
