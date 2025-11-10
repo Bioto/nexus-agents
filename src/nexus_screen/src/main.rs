@@ -54,6 +54,7 @@ async fn main() -> Result<()> {
     let _log_path = init_logging();
 
     match cli.command {
+        Commands::Screenshot(args) => cli::run_screenshot(args)?,
         Commands::Record(args) => cli::run_record(args)?,
     }
 

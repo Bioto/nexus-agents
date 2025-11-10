@@ -2,8 +2,8 @@ use crate::error::{Result, ScreenError};
 use crate::services::{ScreenRecorder, RecordingConfig};
 use clap::Args;
 use std::path::PathBuf;
-use std::time::Duration;
-use xcap::Monitor;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 #[derive(Args)]
 pub struct RecordArgs {
@@ -33,13 +33,21 @@ pub struct RecordArgs {
 }
 
 pub fn run_record(args: RecordArgs) -> Result<()> {
-    // Handle --list-monitors flag
+    // Handle list monitors command
     if args.list_monitors {
-        list_available_monitors()?;
+        let monitors = xcap::Monitor::all()
+            .map_err(|e| ScreenError::Screen(format!("Failed to enumerate monitors: {}", e)))?;
+        println!("🖥️  Available monitors:\n");
+        for (i, monitor) in monitors.iter().enumerate() {
+            let is_primary = monitor.is_primary().unwrap_or(false);
+            let primary_marker = if is_primary { " [PRIMARY]" } else { "" };
+            let width = monitor.width().unwrap_or(0);
+            let height = monitor.height().unwrap_or(0);
+            println!("  {}. {}x{}{}", i, width, height, primary_marker);
+        }
+        println!("\n💡 Tip: Use -m/--monitor to select a monitor by index");
         return Ok(());
     }
-
-    let recorder = ScreenRecorder::new()?;
 
     // Determine output file path
     let output_path = if let Some(path) = args.output {
@@ -52,80 +60,55 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
 
     // Build recording configuration
     let config = RecordingConfig {
-        fps: args.fps,
-        duration: args.duration.map(Duration::from_secs),
-        output_path: output_path.clone(),
-        include_audio: !args.no_audio,
+        framerate: args.fps,
+        duration_secs: args.duration,
+        output_path,
         monitor_index: args.monitor,
+        include_audio: !args.no_audio,
     };
 
-    println!("🎥 Starting screen recording...");
+    // Create recorder with config
+    let recorder = ScreenRecorder::new_with_config(config.clone())
+        .map_err(|e| ScreenError::Screen(format!("Failed to initialize recorder: {}", e)))?;
+
+    println!("🎬 Starting screen recording...");
     println!("   Output: {}", config.output_path.display());
-    println!("   Frame rate: {} fps", config.fps);
-    println!("   Audio: {}", if config.include_audio { "enabled" } else { "disabled" });
+    println!("   Frame rate: {} fps", config.framerate);
     if let Some(idx) = config.monitor_index {
         println!("   Monitor: {}", idx);
+    }
+    if config.include_audio {
+        println!("   Audio: enabled");
     } else {
-        println!("   Monitor: Primary");
+        println!("   Audio: disabled");
     }
 
-    if config.duration.is_some() {
-        println!("   Duration: {:?}", config.duration);
+    if config.duration_secs.is_some() {
+        println!("   Duration: {:?} seconds", config.duration_secs);
         println!("\n⏹️  Recording will stop automatically...");
     } else {
         println!("\n⏹️  Press Ctrl+C to stop recording...");
     }
 
+    // Create stop signal
+    let stop_signal = Arc::new(AtomicBool::new(false));
+    let stop_signal_clone = Arc::clone(&stop_signal);
+
     // Handle Ctrl+C gracefully
-    // Note: We don't set a handler here since the recording loop in the service
-    // uses an AtomicBool that can be checked. The Ctrl+C will naturally terminate
-    // the process, and the service will handle cleanup.
+    if config.duration_secs.is_none() {
+        ctrlc::set_handler(move || {
+            println!("\n\n🛑 Stopping recording...");
+            stop_signal_clone.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+        .map_err(|e| {
+            ScreenError::Other(format!("Failed to set Ctrl+C handler: {}", e))
+        })?;
+    }
 
     // Start recording
-    recorder.record_to_file(config)?;
+    recorder.record(config, stop_signal)
+        .map_err(|e| ScreenError::VideoEncoding(format!("Recording failed: {}", e)))?;
 
-    println!("\n✅ Recording saved to: {}", output_path.display());
+    println!("\n✅ Recording saved successfully!");
     Ok(())
 }
-
-/// List all available monitors
-fn list_available_monitors() -> Result<()> {
-    let monitors = Monitor::all()
-        .map_err(|e| ScreenError::ScreenCapture(format!("Failed to get monitors: {}", e)))?;
-    
-    if monitors.is_empty() {
-        println!("No monitors found.");
-        return Ok(());
-    }
-    
-    println!("📺 Available monitors:");
-    println!();
-    
-    for (idx, monitor) in monitors.iter().enumerate() {
-        let width = monitor.width().unwrap_or(0);
-        let height = monitor.height().unwrap_or(0);
-        let x = monitor.x().unwrap_or(0);
-        let y = monitor.y().unwrap_or(0);
-        
-        println!("Monitor {}: {}x{} at position ({}, {})", 
-            idx, width, height, x, y);
-        
-        // Try to get monitor name if available
-        if let Ok(name) = monitor.name() {
-            println!("  Name: {}", name);
-        }
-        
-        // Mark if it's the first monitor (typically primary)
-        if idx == 0 {
-            println!("  Primary: Yes (first monitor)");
-        }
-        
-        println!();
-    }
-    
-    println!("To record a specific monitor, use: --monitor <index>");
-    println!("Example: cargo run -p nexus-screen -- record --monitor 1");
-    
-    Ok(())
-}
-

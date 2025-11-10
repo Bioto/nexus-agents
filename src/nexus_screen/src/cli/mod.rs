@@ -14,10 +14,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Record the entire screen to a video file
+    /// Capture a screenshot of the screen
+    Screenshot(commands::screenshot::ScreenshotArgs),
+    /// Record the screen to a video file
     Record(commands::record::RecordArgs),
 }
 
 // Re-export command handlers for convenience
+pub use commands::screenshot::run_screenshot;
 pub use commands::record::run_record;
 
