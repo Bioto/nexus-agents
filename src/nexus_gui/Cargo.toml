@@ -1,0 +1,8 @@
+[package]
+name = "nexus_gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.12", features = ["svg"] }
+clap = { workspace = true }
