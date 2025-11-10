@@ -20,4 +20,3 @@ pub enum Commands {
 
 // Re-export command handlers for convenience
 pub use commands::show::run_show;
-

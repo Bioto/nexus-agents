@@ -25,7 +25,7 @@ pub struct RecordingConfig {
     pub duration_secs: Option<u64>,
     pub output_path: PathBuf,
     pub monitor_index: Option<usize>,
-    pub window_id: Option<String>, // Record a specific window by ID
+    pub window_id: Option<String>,    // Record a specific window by ID
     pub window_title: Option<String>, // Record a specific window by title pattern
     pub include_audio: bool,
     pub fast: bool, // Capture as fast as possible, ignore target FPS

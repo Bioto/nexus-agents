@@ -37,7 +37,9 @@ pub fn run_show(args: ShowArgs) -> iced::Result {
     let padding = 20.0;
     let screen_width = 1920.0; // Default, window manager will clamp
 
-    let x_position = args.x.unwrap_or_else(|| screen_width - window_size - padding);
+    let x_position = args
+        .x
+        .unwrap_or_else(|| screen_width - window_size - padding);
     let y_position = args.y.unwrap_or(padding);
 
     let mut settings = Settings::with_flags(args);
@@ -118,4 +120,3 @@ impl Application for App {
         Theme::Dark
     }
 }
-

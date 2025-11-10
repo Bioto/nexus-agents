@@ -1,0 +1,17 @@
+[package]
+name = "nexus"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nexus"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+anyhow = "1.0"
+nexus-audio = { path = "../nexus_audio" }
+nexus-screen = { path = "../nexus_screen" }
+tokio = { workspace = true }
+nexus-gui = { path = "../nexus_gui" }
+nexus-core = { path = "../nexus_core" }

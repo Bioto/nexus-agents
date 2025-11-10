@@ -1,5 +1,5 @@
 [package]
-name = "nexus_gui"
+name = "nexus-gui"
 version = "0.1.0"
 edition = "2021"
 

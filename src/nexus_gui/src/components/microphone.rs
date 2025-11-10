@@ -49,9 +49,9 @@ impl MicrophoneIcon {
             .padding(12)
             .center_x()
             .center_y()
-            .style(iced::theme::Container::Custom(Box::new(MicContainerStyle {
-                background_color,
-            })))
+            .style(iced::theme::Container::Custom(Box::new(
+                MicContainerStyle { background_color },
+            )))
             .into()
     }
 
@@ -94,9 +94,9 @@ impl MicrophoneIcon {
             .padding(12)
             .center_x()
             .center_y()
-            .style(iced::theme::Container::Custom(Box::new(MicContainerStyle {
-                background_color,
-            })))
+            .style(iced::theme::Container::Custom(Box::new(
+                MicContainerStyle { background_color },
+            )))
             .into()
     }
 

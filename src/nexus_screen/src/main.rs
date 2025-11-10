@@ -1,11 +1,5 @@
-mod cli;
-mod error;
-mod services;
-mod tui;
-
 use clap::Parser;
-use cli::{Cli, Commands};
-use error::Result;
+use nexus_screen::{Cli, Commands, Result};
 use simplelog::{CombinedLogger, Config, LevelFilter, WriteLogger};
 use std::fs::File;
 use std::sync::OnceLock;
@@ -54,8 +48,8 @@ async fn main() -> Result<()> {
     let _log_path = init_logging();
 
     match cli.command {
-        Commands::Screenshot(args) => cli::run_screenshot(args)?,
-        Commands::Record(args) => cli::run_record(args)?,
+        Commands::Screenshot(args) => nexus_screen::run_screenshot(args)?,
+        Commands::Record(args) => nexus_screen::run_record(args)?,
     }
 
     Ok(())

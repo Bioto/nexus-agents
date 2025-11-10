@@ -136,15 +136,12 @@ impl WindowInfoService {
 
     #[cfg(target_os = "linux")]
     fn list_windows_wmctrl() -> Result<Vec<WindowInfo>> {
-        let output = Command::new("wmctrl")
-            .arg("-l")
-            .output()
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to run wmctrl: {}. Is wmctrl installed? (sudo apt install wmctrl)",
-                    e
-                )
-            })?;
+        let output = Command::new("wmctrl").arg("-l").output().map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to run wmctrl: {}. Is wmctrl installed? (sudo apt install wmctrl)",
+                e
+            )
+        })?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!(
@@ -415,9 +412,7 @@ impl WindowInfoService {
     #[cfg(target_os = "linux")]
     fn get_active_window_linux() -> Result<Option<WindowInfo>> {
         // Try xdotool first
-        let output = Command::new("xdotool")
-            .arg("getactivewindow")
-            .output();
+        let output = Command::new("xdotool").arg("getactivewindow").output();
 
         if let Ok(output) = output {
             if output.status.success() {
@@ -565,10 +560,7 @@ impl WindowInfoService {
         end tell
         "#;
 
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()?;
+        let output = Command::new("osascript").arg("-e").arg(script).output()?;
 
         if output.status.success() {
             // Parse the output (format is complex, simplified here)
@@ -591,10 +583,7 @@ impl WindowInfoService {
         end tell
         "#;
 
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()?;
+        let output = Command::new("osascript").arg("-e").arg(script).output()?;
 
         if !output.status.success() {
             return Ok(None);
@@ -627,10 +616,7 @@ impl WindowInfoService {
             pid
         );
 
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()?;
+        let output = Command::new("osascript").arg("-e").arg(&script).output()?;
 
         if !output.status.success() {
             return Ok(Vec::new());
@@ -640,4 +626,3 @@ impl WindowInfoService {
         Ok(Vec::new())
     }
 }
-

@@ -2879,6 +2879,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
+name = "nexus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "nexus-audio",
+ "nexus-core",
+ "nexus-gui",
+ "nexus-screen",
+ "tokio",
+]
+
+[[package]]
 name = "nexus-audio"
 version = "0.1.0"
 dependencies = [
@@ -2932,6 +2945,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-gui"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "iced",
+]
+
+[[package]]
 name = "nexus-screen"
 version = "0.1.0"
 dependencies = [
@@ -2950,14 +2971,6 @@ dependencies = [
  "simplelog",
  "thiserror 2.0.17",
  "tokio",
-]
-
-[[package]]
-name = "nexus_gui"
-version = "0.1.0"
-dependencies = [
- "clap",
- "iced",
 ]
 
 [[package]]

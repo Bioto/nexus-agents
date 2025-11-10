@@ -4,7 +4,8 @@ members = [
     "src/nexus_core",
     "src/nexus_gui",
     "src/nexus_screen",
-    "src/nexus_gui"
+    "src/nexus_gui",
+    "src/nexus"
 ]
 resolver = "2"
 
