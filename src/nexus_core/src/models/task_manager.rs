@@ -98,7 +98,7 @@ impl TaskManager {
         Ok(task
             .requirements
             .iter()
-            .all(|req| self.tasks.get(req).map_or(false, Task::is_completed)))
+            .all(|req| self.tasks.get(req).is_some_and(Task::is_completed)))
     }
 
     pub fn assign_task(
@@ -169,7 +169,7 @@ impl TaskManager {
             let unmet = task
                 .requirements
                 .iter()
-                .filter(|req| self.tasks.get(req).map_or(false, |t| !t.is_completed()))
+                .filter(|req| self.tasks.get(req).is_some_and(|t| !t.is_completed()))
                 .count();
 
             if unmet == 0 {

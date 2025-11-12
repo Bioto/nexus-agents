@@ -36,6 +36,12 @@ pub struct ChatState {
     pending_file_content: Option<MessageContent>, // Processed file content ready to send
 }
 
+impl Default for ChatState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChatState {
     pub fn new() -> Self {
         Self {
@@ -420,7 +426,7 @@ pub async fn run(
                             // Use agent service if we have an agent
                             if let Some(agent) = agent {
                                 if stream {
-                                    let service = AgentService::new(&client, agent);
+                                    let service = AgentService::new(client, agent);
                                     let stream_tx_clone = stream_tx.clone();
 
                                     tokio::spawn(async move {
@@ -489,7 +495,7 @@ pub async fn run(
 
                                     state.status = String::from("Streaming (agent mode)...");
                                 } else {
-                                    let service = AgentService::new(&client, agent);
+                                    let service = AgentService::new(client, agent);
                                     let stream_tx_clone = stream_tx.clone();
 
                                     tokio::spawn(async move {
@@ -711,7 +717,7 @@ fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) {
     // In ratatui 0.29, WidgetRef types need to be rendered differently
     let widget = explorer.widget();
     use ratatui::widgets::WidgetRef;
-    widget.render_ref(area, &mut f.buffer_mut());
+    widget.render_ref(area, f.buffer_mut());
 }
 
 /// Check if a file is an image based on its extension
@@ -827,11 +833,7 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
     // Account for borders (2 lines) when calculating visible height
     let visible_height = (area.height.saturating_sub(2)) as usize;
     let max_lines = lines.len();
-    let max_scroll = if max_lines > visible_height {
-        max_lines - visible_height
-    } else {
-        0
-    };
+    let max_scroll = max_lines.saturating_sub(visible_height);
 
     if state.scroll_offset == usize::MAX {
         state.scroll_offset = max_scroll;

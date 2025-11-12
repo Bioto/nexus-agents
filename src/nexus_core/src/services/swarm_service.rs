@@ -256,35 +256,32 @@ impl SwarmService {
         {
             for assignment in task_assignments {
                 if let Some(task_id_str) = assignment.get("task_id").and_then(|v| v.as_str()) {
-                    match Uuid::parse_str(task_id_str) {
-                        Ok(task_id) => {
-                            if let Some(task) = self.task_manager.get(&task_id) {
-                                if task.assigned_to.is_some() || task.is_completed() {
-                                    continue;
-                                }
+                    if let Ok(task_id) = Uuid::parse_str(task_id_str) {
+                        if let Some(task) = self.task_manager.get(&task_id) {
+                            if task.assigned_to.is_some() || task.is_completed() {
+                                continue;
                             }
-                            let mut chosen_agent_id =
-                                available_agents[next_agent_index % available_agents.len()];
-                            if let Some(agent_id_str) =
-                                assignment.get("agent_id").and_then(|v| v.as_str())
-                            {
-                                match Uuid::parse_str(agent_id_str) {
-                                    Ok(candidate)
-                                        if self.agent_store.get_agent(&candidate).is_some() =>
-                                    {
-                                        chosen_agent_id = candidate;
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            self.task_manager.assign_task(
-                                task_id,
-                                chosen_agent_id,
-                                &self.agent_store,
-                            )?;
-                            next_agent_index += 1;
                         }
-                        Err(_) => {}
+                        let mut chosen_agent_id =
+                            available_agents[next_agent_index % available_agents.len()];
+                        if let Some(agent_id_str) =
+                            assignment.get("agent_id").and_then(|v| v.as_str())
+                        {
+                            match Uuid::parse_str(agent_id_str) {
+                                Ok(candidate)
+                                    if self.agent_store.get_agent(&candidate).is_some() =>
+                                {
+                                    chosen_agent_id = candidate;
+                                }
+                                _ => {}
+                            }
+                        }
+                        self.task_manager.assign_task(
+                            task_id,
+                            chosen_agent_id,
+                            &self.agent_store,
+                        )?;
+                        next_agent_index += 1;
                     }
                 }
             }

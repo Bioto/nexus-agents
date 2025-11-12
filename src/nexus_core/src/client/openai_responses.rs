@@ -296,8 +296,7 @@ impl LLMClient for ResponsesClient {
                                         break;
                                     }
 
-                                    if line_str.starts_with("data: ") {
-                                        let json_str = &line_str[6..];
+                                    if let Some(json_str) = line_str.strip_prefix("data: ") {
                                         // Try to parse as Responses API format first
                                         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(json_str) {
                                             

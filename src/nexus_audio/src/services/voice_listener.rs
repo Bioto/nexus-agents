@@ -388,69 +388,67 @@ impl VoiceListener {
                         }
                         silence_duration = 0;
                         speech_buffer.extend_from_slice(&chunk);
-                    } else {
-                        if is_speaking {
-                            silence_duration += 100; // We check every 100ms
+                    } else if is_speaking {
+                        silence_duration += 100; // We check every 100ms
 
-                            // Continue recording during short pauses
-                            if silence_duration < 300 {
-                                speech_buffer.extend_from_slice(&chunk);
-                            } else if silence_duration <= self.config.silence_duration_ms / 2 {
-                                speech_buffer.extend_from_slice(&chunk);
-                            }
+                        // Continue recording during short pauses
+                        if silence_duration < 300 {
+                            speech_buffer.extend_from_slice(&chunk);
+                        } else if silence_duration <= self.config.silence_duration_ms / 2 {
+                            speech_buffer.extend_from_slice(&chunk);
+                        }
 
-                            if silence_duration >= self.config.silence_duration_ms {
-                                log::debug!("Silence detected ({}ms), ending speech capture. Buffer size: {} samples", 
-                                    silence_duration, speech_buffer.len());
-                                is_speaking = false;
+                        if silence_duration >= self.config.silence_duration_ms {
+                            log::debug!("Silence detected ({}ms), ending speech capture. Buffer size: {} samples", 
+                                silence_duration, speech_buffer.len());
+                            is_speaking = false;
 
-                                // Only transcribe if we have enough audio
-                                let speech_duration_ms =
-                                    (speech_buffer.len() as f32 / self.config.sample_rate as f32
-                                        * 1000.0) as u32;
+                            // Only transcribe if we have enough audio
+                            let speech_duration_ms =
+                                (speech_buffer.len() as f32 / self.config.sample_rate as f32
+                                    * 1000.0) as u32;
 
+                            log::debug!(
+                                "Speech duration: {}ms (min required: {}ms)",
+                                speech_duration_ms,
+                                self.config.min_speech_ms
+                            );
+                            if speech_duration_ms >= self.config.min_speech_ms {
+                                // Send to transcription thread with duration
+                                let duration_seconds =
+                                    speech_buffer.len() as f32 / self.config.sample_rate as f32;
                                 log::debug!(
-                                    "Speech duration: {}ms (min required: {}ms)",
-                                    speech_duration_ms,
-                                    self.config.min_speech_ms
+                                    "Sending {} samples ({:.2}s) to transcription thread",
+                                    speech_buffer.len(),
+                                    duration_seconds
                                 );
-                                if speech_duration_ms >= self.config.min_speech_ms {
-                                    // Send to transcription thread with duration
-                                    let duration_seconds =
-                                        speech_buffer.len() as f32 / self.config.sample_rate as f32;
-                                    log::debug!(
-                                        "Sending {} samples ({:.2}s) to transcription thread",
-                                        speech_buffer.len(),
-                                        duration_seconds
-                                    );
-                                    if let Some(ref tx) = self.transcription_tx {
-                                        if let Err(e) =
-                                            tx.try_send((speech_buffer.clone(), duration_seconds))
-                                        {
-                                            match e {
-                                                mpsc::TrySendError::Full(_) => {
-                                                    log::warn!("Transcription queue full");
-                                                }
-                                                mpsc::TrySendError::Disconnected(_) => {
-                                                    log::error!(
-                                                        "Transcription thread disconnected"
-                                                    );
-                                                    break;
-                                                }
+                                if let Some(ref tx) = self.transcription_tx {
+                                    if let Err(e) =
+                                        tx.try_send((speech_buffer.clone(), duration_seconds))
+                                    {
+                                        match e {
+                                            mpsc::TrySendError::Full(_) => {
+                                                log::warn!("Transcription queue full");
                                             }
-                                        } else {
-                                            log::debug!(
-                                                "Successfully sent audio to transcription thread"
-                                            );
+                                            mpsc::TrySendError::Disconnected(_) => {
+                                                log::error!(
+                                                    "Transcription thread disconnected"
+                                                );
+                                                break;
+                                            }
                                         }
                                     } else {
-                                        log::warn!("transcription_tx is None - transcription not initialized?");
+                                        log::debug!(
+                                            "Successfully sent audio to transcription thread"
+                                        );
                                     }
+                                } else {
+                                    log::warn!("transcription_tx is None - transcription not initialized?");
                                 }
-
-                                speech_buffer.clear();
-                                silence_duration = 0;
                             }
+
+                            speech_buffer.clear();
+                            silence_duration = 0;
                         }
                     }
 

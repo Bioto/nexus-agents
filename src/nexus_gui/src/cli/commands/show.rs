@@ -39,7 +39,7 @@ pub fn run_show(args: ShowArgs) -> iced::Result {
 
     let x_position = args
         .x
-        .unwrap_or_else(|| screen_width - window_size - padding);
+        .unwrap_or(screen_width - window_size - padding);
     let y_position = args.y.unwrap_or(padding);
 
     let mut settings = Settings::with_flags(args);

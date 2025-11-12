@@ -180,8 +180,7 @@ impl TextToSpeech {
     /// Generate speech using local Python subprocess
     async fn synthesize_local(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
         // Create a Python script to call Kyutai TTS
-        let script = format!(
-            r#"
+        let script = r#"
 import sys
 import json
 import base64
@@ -199,7 +198,7 @@ try:
             from unmute.tts import TTS
             tts = TTS()
         except ImportError:
-            print(json.dumps({{"error": "Kyutai TTS not installed. Install with: pip install kyutai-tts"}}), file=sys.stderr)
+            print(json.dumps({"error": "Kyutai TTS not installed. Install with: pip install kyutai-tts"}), file=sys.stderr)
             sys.exit(1)
     
     # Generate speech
@@ -224,21 +223,20 @@ try:
     print(base64.b64encode(buffer.getvalue()).decode())
     
 except Exception as e:
-    print(json.dumps({{"error": str(e)}}), file=sys.stderr)
+    print(json.dumps({"error": str(e)}), file=sys.stderr)
     sys.exit(1)
-"#
-        );
+"#.to_string();
 
         // Write script to temp file
         let temp_dir = std::env::temp_dir();
         let script_path = temp_dir.join(format!("kyutai_tts_{}.py", std::process::id()));
-        std::fs::write(&script_path, script).map_err(|e| VoiceError::Io(e))?;
+        std::fs::write(&script_path, script).map_err(VoiceError::Io)?;
 
         // Build command
         let mut cmd = Command::new(&self.python_cmd);
         cmd.arg(&script_path);
         cmd.arg(text);
-        cmd.arg(config.voice.as_ref().map(|v| v.as_str()).unwrap_or("None"));
+        cmd.arg(config.voice.as_deref().unwrap_or("None"));
         cmd.arg(
             config
                 .rate
@@ -247,9 +245,7 @@ except Exception as e:
         );
         cmd.arg(
             config
-                .language
-                .as_ref()
-                .map(|l| l.as_str())
+                .language.as_deref()
                 .unwrap_or("None"),
         );
 

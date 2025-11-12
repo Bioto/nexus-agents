@@ -307,7 +307,7 @@ impl ScreenRecorder {
 
                                     // Parse offsets
                                     let offsets: Vec<&str> = s.split('+').skip(1).collect();
-                                    let ox = offsets.get(0).and_then(|x| x.parse::<i32>().ok());
+                                    let ox = offsets.first().and_then(|x| x.parse::<i32>().ok());
                                     let oy = offsets.get(1).and_then(|y| y.parse::<i32>().ok());
 
                                     (resolution, ox, oy)
@@ -839,7 +839,7 @@ impl ScreenRecorder {
             use ffmpeg::ffi::*;
             let ctx_ptr = encoder_ctx.as_mut_ptr();
             (*ctx_ptr).flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
-            (*ctx_ptr).flags2 |= AV_CODEC_FLAG2_FAST as i32;
+            (*ctx_ptr).flags2 |= AV_CODEC_FLAG2_FAST;
         }
 
         let mut video_encoder = encoder_ctx.open_as(codec)?;
@@ -873,7 +873,7 @@ impl ScreenRecorder {
         // Helper function to convert timestamp from encoder time_base to stream time_base
         // Formula: stream_ts = encoder_ts * (encoder_tb.num * stream_tb.den) / (encoder_tb.den * stream_tb.num)
         let convert_to_stream_ts = |encoder_ts: i64| -> i64 {
-            let num = encoder_ts as i64
+            let num = encoder_ts
                 * encoder_time_base.numerator() as i64
                 * stream_time_base.denominator() as i64;
             let den = encoder_time_base.denominator() as i64 * stream_time_base.numerator() as i64;
@@ -936,8 +936,8 @@ impl ScreenRecorder {
         // Calculate expected duration for debugging
         let calculate_expected_duration = |total_frames: i64| -> f64 {
             let duration_in_encoder_tb = total_frames as f64 / fps as f64;
-            let duration_in_seconds = duration_in_encoder_tb;
-            duration_in_seconds
+            
+            duration_in_encoder_tb
         };
 
         loop {

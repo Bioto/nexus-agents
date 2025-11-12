@@ -93,7 +93,7 @@ impl DeviceInfo {
                         && path
                             .file_name()
                             .and_then(|n| n.to_str())
-                            .map_or(false, |n| n.starts_with("card"))
+                            .is_some_and(|n| n.starts_with("card"))
                     {
                         // Check if this card matches
                         if let Ok(id_content) = std::fs::read_to_string(path.join("id")) {
@@ -217,7 +217,7 @@ impl AudioRecorder {
             })
             .collect();
 
-        Ok(devices?)
+        devices
     }
 
     /// Find an input device by name
@@ -331,7 +331,7 @@ impl AudioRecorder {
         // Create WAV writer with optimal settings
         // Use 16-bit for compatibility, but record at higher sample rate for quality
         let spec = WavSpec {
-            channels: actual_channels as u16,
+            channels: actual_channels,
             sample_rate: actual_sample_rate,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
@@ -346,7 +346,7 @@ impl AudioRecorder {
         );
 
         let writer = File::create(output_path)
-            .map_err(|e| VoiceError::Io(e))
+            .map_err(VoiceError::Io)
             .map(BufWriter::new)?;
         let wav_writer = WavWriter::new(writer, spec)
             .map_err(|e| VoiceError::Audio(format!("Failed to create WAV writer: {}", e)))?;

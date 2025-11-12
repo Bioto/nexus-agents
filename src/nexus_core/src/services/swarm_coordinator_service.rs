@@ -53,7 +53,7 @@ impl SwarmCoordinatorService {
                 .messages
                 .iter()
                 .filter(|m| matches!(m.role, MessageRole::User))
-                .last()
+                .next_back()
                 .and_then(|m| m.content.as_ref())
                 .map(|c| c.extract_text())
                 .unwrap_or_default();
