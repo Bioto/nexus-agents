@@ -97,9 +97,7 @@ pub async fn run_chat(args: ChatArgs) -> Result<()> {
         match agent_name.as_str() {
             "calculator" => (Some(AgentFactory::calculator()), false),
             "swarm" => (None, true), // Swarm mode - no agent, will create coordinator service
-            _ => {
-                (Some(AgentFactory::generic_agent()), false)
-            }
+            _ => (Some(AgentFactory::generic_agent()), false),
         }
     } else {
         (Some(AgentFactory::generic_agent()), false)

@@ -110,7 +110,8 @@ impl SwarmCoordinatorService {
             let result = self.chat(request, status_tx).await;
             match result {
                 Ok(message) => {
-                    let content = message.content
+                    let content = message
+                        .content
                         .as_ref()
                         .map(|c| c.extract_text())
                         .unwrap_or_default();

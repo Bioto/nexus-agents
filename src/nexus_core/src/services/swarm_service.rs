@@ -87,7 +87,10 @@ impl SwarmService {
         let decomposition = self.decompose_request(&request).await?;
 
         // Step 2: Add tasks to manager (with name-to-id mapping for dependencies)
-        send_status(&format!("📋 Registering {} tasks...", decomposition.tasks.len()));
+        send_status(&format!(
+            "📋 Registering {} tasks...",
+            decomposition.tasks.len()
+        ));
         let _name_to_id = self.register_tasks(decomposition)?;
 
         // Step 4: Execute tasks in dependency-aware batches
@@ -413,7 +416,8 @@ impl SwarmService {
                                     .push_str(&format!("🔧 {} → ", tool_call.function.name));
                             }
                         }
-                        let content_text = response.content
+                        let content_text = response
+                            .content
                             .as_ref()
                             .map(|c| c.extract_text())
                             .unwrap_or_default();

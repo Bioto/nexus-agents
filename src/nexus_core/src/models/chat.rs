@@ -52,17 +52,11 @@ pub struct FunctionCallDelta {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     /// Text content
-    Text {
-        text: String,
-    },
+    Text { text: String },
     /// Image URL (base64 encoded or URL)
-    ImageUrl {
-        image_url: ImageUrl,
-    },
+    ImageUrl { image_url: ImageUrl },
     /// File path reference
-    FilePath {
-        file_path: FilePath,
-    },
+    FilePath { file_path: FilePath },
 }
 
 /// Image URL for content parts
@@ -177,9 +171,7 @@ impl MessageContent {
     /// Create a content array with text and image
     pub fn with_image(text: impl Into<String>, image_base64: impl Into<String>) -> Self {
         let mut parts = Vec::new();
-        parts.push(ContentPart::Text {
-            text: text.into(),
-        });
+        parts.push(ContentPart::Text { text: text.into() });
         parts.push(ContentPart::ImageUrl {
             image_url: ImageUrl {
                 url: format!("data:image/png;base64,{}", image_base64.into()),
@@ -191,9 +183,7 @@ impl MessageContent {
     /// Create a content array with text and file reference
     pub fn with_file(text: impl Into<String>, file_id: impl Into<String>) -> Self {
         let mut parts = Vec::new();
-        parts.push(ContentPart::Text {
-            text: text.into(),
-        });
+        parts.push(ContentPart::Text { text: text.into() });
         parts.push(ContentPart::FilePath {
             file_path: FilePath {
                 file_id: file_id.into(),
@@ -592,7 +582,9 @@ mod tests {
         assert_eq!(response.choices.len(), 1);
         assert_eq!(
             response.choices[0].message.content,
-            Some(MessageContent::String("Hello! How can I help you?".to_string()))
+            Some(MessageContent::String(
+                "Hello! How can I help you?".to_string()
+            ))
         );
     }
 
@@ -607,7 +599,9 @@ mod tests {
         assert_eq!(history.messages[0].role, MessageRole::System);
         assert_eq!(
             history.messages[0].content,
-            Some(MessageContent::String("You are a helpful assistant.".to_string()))
+            Some(MessageContent::String(
+                "You are a helpful assistant.".to_string()
+            ))
         );
         assert_eq!(history.messages[1].role, MessageRole::User);
         assert_eq!(

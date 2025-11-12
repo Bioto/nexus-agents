@@ -266,7 +266,6 @@ pub async fn run(
                     });
                 }
 
-
                 match key.code {
                     KeyCode::Char('q') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                         return Ok(());
@@ -282,30 +281,36 @@ pub async fn run(
                             state.input.clear();
 
                             // Create message with file content if available
-                            let message = if let Some(file_content) = state.pending_file_content.take() {
-                                if user_input.is_empty() {
-                                    crate::models::Message::user_with_content(file_content)
-                                } else {
-                                    // Combine text with file content
-                                    let combined_content = match file_content {
-                                        MessageContent::String(text) => {
-                                            MessageContent::String(format!("{} {}", user_input, text))
-                                        }
-                                        MessageContent::Array(mut parts) => {
-                                            // Prepend text to the first text part or add as new part
-                                            if let Some(ContentPart::Text { text: ref mut t }) = parts.first_mut() {
-                                                *t = format!("{} {}", user_input, t);
-                                            } else {
-                                                parts.insert(0, ContentPart::Text { text: user_input });
+                            let message =
+                                if let Some(file_content) = state.pending_file_content.take() {
+                                    if user_input.is_empty() {
+                                        crate::models::Message::user_with_content(file_content)
+                                    } else {
+                                        // Combine text with file content
+                                        let combined_content = match file_content {
+                                            MessageContent::String(text) => MessageContent::String(
+                                                format!("{} {}", user_input, text),
+                                            ),
+                                            MessageContent::Array(mut parts) => {
+                                                // Prepend text to the first text part or add as new part
+                                                if let Some(ContentPart::Text { text: ref mut t }) =
+                                                    parts.first_mut()
+                                                {
+                                                    *t = format!("{} {}", user_input, t);
+                                                } else {
+                                                    parts.insert(
+                                                        0,
+                                                        ContentPart::Text { text: user_input },
+                                                    );
+                                                }
+                                                MessageContent::Array(parts)
                                             }
-                                            MessageContent::Array(parts)
-                                        }
-                                    };
-                                    crate::models::Message::user_with_content(combined_content)
-                                }
-                            } else {
-                                crate::models::Message::user(user_input.clone())
-                            };
+                                        };
+                                        crate::models::Message::user_with_content(combined_content)
+                                    }
+                                } else {
+                                    crate::models::Message::user(user_input.clone())
+                                };
 
                             state.messages.add_message(message);
                             state.scroll_offset = usize::MAX;
@@ -514,12 +519,12 @@ pub async fn run(
                     KeyCode::Char('f') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                         // Open file picker
                         if state.file_explorer.is_none() {
-                            match FileExplorer::with_theme(
-                                Theme::default().add_default_title(),
-                            ) {
+                            match FileExplorer::with_theme(Theme::default().add_default_title()) {
                                 Ok(explorer) => {
                                     state.file_explorer = Some(explorer);
-                                    state.status = String::from("File picker opened (Enter to select, Esc to cancel)");
+                                    state.status = String::from(
+                                        "File picker opened (Enter to select, Esc to cancel)",
+                                    );
                                 }
                                 Err(e) => {
                                     state.status = format!("Failed to open file picker: {}", e);
@@ -568,8 +573,8 @@ fn ui(f: &mut Frame, state: &mut ChatState) {
         let vertical_chunks = Layout::default()
             .constraints([
                 Constraint::Length(status_height as u16), // Status (dynamic)
-                Constraint::Min(1),    // Messages + Sidebar
-                Constraint::Length(3), // Input
+                Constraint::Min(1),                       // Messages + Sidebar
+                Constraint::Length(3),                    // Input
             ])
             .split(main_chunks[1]);
 
@@ -1144,11 +1149,13 @@ pub async fn run_swarm(
                                     let stream_tx_clone = stream_tx.clone();
                                     let swarm_coordinator = swarm_coordinator.clone();
                                     // Create a status sender that wraps messages in StreamUpdate::StatusUpdate
-                                    let (status_tx_inner, mut status_rx) = mpsc::unbounded_channel::<String>();
+                                    let (status_tx_inner, mut status_rx) =
+                                        mpsc::unbounded_channel::<String>();
                                     let stream_tx_for_status = stream_tx_clone.clone();
                                     tokio::spawn(async move {
                                         while let Some(status) = status_rx.recv().await {
-                                            let _ = stream_tx_for_status.send(StreamUpdate::StatusUpdate(status));
+                                            let _ = stream_tx_for_status
+                                                .send(StreamUpdate::StatusUpdate(status));
                                         }
                                     });
 
@@ -1208,16 +1215,21 @@ pub async fn run_swarm(
                                     let stream_tx_clone = stream_tx.clone();
                                     let swarm_coordinator = swarm_coordinator.clone();
                                     // Create a status sender that wraps messages in StreamUpdate::StatusUpdate
-                                    let (status_tx_inner, mut status_rx) = mpsc::unbounded_channel::<String>();
+                                    let (status_tx_inner, mut status_rx) =
+                                        mpsc::unbounded_channel::<String>();
                                     let stream_tx_for_status = stream_tx_clone.clone();
                                     tokio::spawn(async move {
                                         while let Some(status) = status_rx.recv().await {
-                                            let _ = stream_tx_for_status.send(StreamUpdate::StatusUpdate(status));
+                                            let _ = stream_tx_for_status
+                                                .send(StreamUpdate::StatusUpdate(status));
                                         }
                                     });
 
                                     tokio::spawn(async move {
-                                        match swarm_coordinator.chat(request, Some(status_tx_inner)).await {
+                                        match swarm_coordinator
+                                            .chat(request, Some(status_tx_inner))
+                                            .await
+                                        {
                                             Ok(message) => {
                                                 if let Some(content) = &message.content {
                                                     let text = content.extract_text();

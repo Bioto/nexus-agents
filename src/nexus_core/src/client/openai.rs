@@ -37,7 +37,7 @@ impl Client {
     /// `OPENAI_BASE_URL` for the base URL (defaults to OpenAI's URL)
     pub fn from_env() -> Result<Self> {
         load_env();
-        
+
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
             Error::Configuration("OPENAI_API_KEY environment variable not set".to_string())
         })?;
@@ -84,7 +84,7 @@ impl Client {
                         param: None,
                         code: None,
                     });
-                    
+
                     // Enhance error message with diagnostic info
                     let model_info = format!(" (model: {})", request.model);
                     let url_info = format!(" (URL: {})", url);
@@ -93,7 +93,7 @@ impl Client {
                         "{}{}{}{}",
                         api_error.message, status_info, model_info, url_info
                     );
-                    
+
                     return Err(Error::Api(api_error));
                 }
             }
@@ -154,7 +154,7 @@ impl Client {
                         param: None,
                         code: None,
                     });
-                    
+
                     // Enhance error message with diagnostic info
                     let model_info = format!(" (model: {})", request_with_stream.model);
                     let url_info = format!(" (URL: {})", url);
@@ -163,7 +163,7 @@ impl Client {
                         "{}{}{}{}",
                         api_error.message, status_info, model_info, url_info
                     );
-                    
+
                     return Err(Error::Api(api_error));
                 }
             }
@@ -284,12 +284,20 @@ impl Client {
             })?;
 
         let mut file = fs::File::open(file_path).map_err(|e| {
-            Error::Other(format!("Failed to open file {}: {}", file_path.display(), e))
+            Error::Other(format!(
+                "Failed to open file {}: {}",
+                file_path.display(),
+                e
+            ))
         })?;
 
         let mut file_data = Vec::new();
         file.read_to_end(&mut file_data).map_err(|e| {
-            Error::Other(format!("Failed to read file {}: {}", file_path.display(), e))
+            Error::Other(format!(
+                "Failed to read file {}: {}",
+                file_path.display(),
+                e
+            ))
         })?;
 
         let url = format!("{}/files", self.base_url);
@@ -311,9 +319,7 @@ impl Client {
                 reqwest::multipart::Part::bytes(file_data)
                     .file_name(file_name.to_string())
                     .mime_str(&mime_type)
-                    .map_err(|_| {
-                        Error::Other(format!("Failed to set MIME type: {}", mime_type))
-                    })?,
+                    .map_err(|_| Error::Other(format!("Failed to set MIME type: {}", mime_type)))?,
             );
 
         let response = self
@@ -344,9 +350,7 @@ impl Client {
         let file_id = file_response
             .get("id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                Error::Other("File upload response missing 'id' field".to_string())
-            })?;
+            .ok_or_else(|| Error::Other("File upload response missing 'id' field".to_string()))?;
 
         Ok(file_id.to_string())
     }
@@ -419,8 +423,8 @@ mod tests {
     fn test_client_request_builder() {
         let model = default_test_model();
         let model_clone = model.clone();
-        let request =
-            ChatCompletionRequest::new(model_clone, vec![Message::user("Hello")]).with_temperature(0.7);
+        let request = ChatCompletionRequest::new(model_clone, vec![Message::user("Hello")])
+            .with_temperature(0.7);
 
         assert_eq!(request.model, model);
         assert_eq!(request.temperature, Some(0.7));
