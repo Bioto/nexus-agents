@@ -76,6 +76,8 @@ impl SwarmService {
         // Step 1: Decompose request into tasks
         let decomposition = self.decompose_request(&request).await?;
 
+        println!("Decomposition: {:?}", decomposition);
+
         // Step 2: Add tasks to manager (with name-to-id mapping for dependencies)
         let _name_to_id = self.register_tasks(decomposition)?;
 
