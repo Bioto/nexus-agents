@@ -2949,7 +2949,7 @@ dependencies = [
  "http",
  "libc",
  "log",
- "ratatui 0.28.1",
+ "ratatui",
  "reqwest",
  "rmp-serde",
  "rodio",
@@ -2973,10 +2973,11 @@ dependencies = [
  "crossterm",
  "dotenvy",
  "futures",
+ "mime",
  "mockito",
  "quick-xml 0.33.0",
  "quick-xml-to-json",
- "ratatui 0.28.1",
+ "ratatui",
  "ratatui-explorer",
  "reqwest",
  "serde",
@@ -3008,7 +3009,7 @@ dependencies = [
  "ffmpeg-next",
  "image",
  "log",
- "ratatui 0.28.1",
+ "ratatui",
  "reqwest",
  "serde",
  "serde_json",
@@ -3819,27 +3820,6 @@ checksum = "f93e7e49bb0bf967717f7bd674458b3d6b0c5f48ec7e3038166026a69fc22223"
 
 [[package]]
 name = "ratatui"
-version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdef7f9be5c0122f890d58bdf4d964349ba6a6161f705907526d891efabba57d"
-dependencies = [
- "bitflags 2.10.0",
- "cassowary",
- "compact_str",
- "crossterm",
- "instability",
- "itertools 0.13.0",
- "lru",
- "paste",
- "strum",
- "strum_macros",
- "unicode-segmentation",
- "unicode-truncate",
- "unicode-width 0.1.14",
-]
-
-[[package]]
-name = "ratatui"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eabd94c2f37801c20583fc49dd5cd6b0ba68c716787c2dd6ed18571e1e63117b"
@@ -3866,7 +3846,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5135951c1bf2ef7ce25b46c53eacf45f1a3e6b283669229008d6744a9ca1332"
 dependencies = [
  "educe",
- "ratatui 0.29.0",
+ "ratatui",
 ]
 
 [[package]]

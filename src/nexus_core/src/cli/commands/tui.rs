@@ -118,8 +118,23 @@ pub async fn run(
     loop {
         // Process all pending file content first
         while let Ok(content) = file_rx.try_recv() {
+            // Check if it's an error message
+            if let MessageContent::String(ref text) = content {
+                if text.starts_with("Error:") {
+                    state.status = text.clone();
+                    state.pending_file_content = None;
+                    // Clear pending_file to prevent retry
+                    state.pending_file = None;
+                    continue;
+                }
+            }
             state.pending_file_content = Some(content);
             state.status = String::from("File ready - type your message and press Enter");
+        }
+        
+        // If we're processing a file but haven't received a response, show a more informative status
+        if state.pending_file.is_some() && state.pending_file_content.is_none() {
+            // Keep showing processing status - it will update when file_rx receives the result
         }
 
         // Process all pending stream updates first
@@ -202,9 +217,29 @@ pub async fn run(
                         state.status = String::from("Ready");
                         continue;
                     }
+                    
+                    // Check for Enter key to select a file
+                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
+                        // Get the currently selected file/directory
+                        let current = explorer.current();
+                        // Check if it's a file (not a directory)
+                        if current.is_file() {
+                            // Build the full path by combining current directory with file name
+                            let cwd = explorer.cwd();
+                            let selected_path = cwd.join(current.name());
+                            if selected_path.exists() && selected_path.is_file() {
+                                let file_name = current.name().to_string();
+                                state.pending_file = Some(selected_path);
+                                state.file_explorer = None;
+                                state.status = format!("Processing {}...", file_name);
+                                continue;
+                            }
+                        }
+                        // If it's a directory, let the explorer handle navigation by continuing
+                    }
                 }
 
-                // Pass event to file explorer
+                // Pass event to file explorer (this will handle directory navigation)
                 if let Err(e) = explorer.handle(&evt) {
                     state.status = format!("File explorer error: {}", e);
                     state.file_explorer = None;
@@ -215,55 +250,106 @@ pub async fn run(
                 continue;
             }
 
+            // Process pending file if any (do this before key handling)
+            if let Some(file_path) = state.pending_file.take() {
+                let file_name = file_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let file_name_for_status = file_name.clone();
+                let client_clone = client.clone();
+                let file_path_clone = file_path.clone();
+                let input_text = state.input.clone();
+                let file_tx_clone = file_tx.clone();
+                let file_path_display = file_path_clone.display().to_string();
+
+                tokio::spawn(async move {
+                    let is_image = is_image_file(&file_path_clone);
+                    let is_pdf = is_pdf_file(&file_path_clone);
+                    
+                    if is_image {
+                        // Base64 encode image
+                        match std::fs::read(&file_path_clone) {
+                            Ok(file_data) => {
+                                use base64::Engine;
+                                let base64_data = base64::engine::general_purpose::STANDARD
+                                    .encode(&file_data);
+                                let content = if input_text.trim().is_empty() {
+                                    MessageContent::with_image("", base64_data)
+                                } else {
+                                    MessageContent::with_image(input_text, base64_data)
+                                };
+                                if file_tx_clone.send(content).is_err() {
+                                    eprintln!("Failed to send image content");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to read image file {}: {}", file_path_display, e);
+                                // Send error through channel as a text message
+                                let error_content = MessageContent::String(format!(
+                                    "Error: Failed to read image file: {}",
+                                    e
+                                ));
+                                let _ = file_tx_clone.send(error_content);
+                            }
+                        }
+                    } else if is_pdf {
+                        // Upload PDF file
+                        match client_clone.upload_file(&file_path_clone).await {
+                            Ok(uploaded_file) => {
+                                eprintln!("PDF uploaded successfully - File ID: {}, MIME Type: {}", uploaded_file.file_id, uploaded_file.mime_type);
+                                let content = if input_text.trim().is_empty() {
+                                    MessageContent::with_file("", uploaded_file.file_id)
+                                } else {
+                                    MessageContent::with_file(input_text, uploaded_file.file_id)
+                                };
+                                if file_tx_clone.send(content).is_err() {
+                                    eprintln!("Failed to send file content");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to upload file {}: {}", file_path_display, e);
+                                // Send error through channel as a text message
+                                let error_content = MessageContent::String(format!(
+                                    "Error: Failed to upload file: {}",
+                                    e
+                                ));
+                                let _ = file_tx_clone.send(error_content);
+                            }
+                        }
+                    } else {
+                        // Read file contents as text
+                        match std::fs::read_to_string(&file_path_clone) {
+                            Ok(file_contents) => {
+                                let wrapped_contents = format!("<attached_file filename=\"{}\">{}</attached_file>", file_name, file_contents);
+                                let content = if input_text.trim().is_empty() {
+                                    MessageContent::String(wrapped_contents)
+                                } else {
+                                    MessageContent::String(format!("{}\n\n{}", input_text, wrapped_contents))
+                                };
+                                if file_tx_clone.send(content).is_err() {
+                                    eprintln!("Failed to send file content");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to read file {}: {}", file_path_display, e);
+                                // Send error through channel as a text message
+                                let error_content = MessageContent::String(format!(
+                                    "Error: Failed to read file: {}",
+                                    e
+                                ));
+                                let _ = file_tx_clone.send(error_content);
+                            }
+                        }
+                    }
+                });
+                // Update status to show which file is being processed
+                state.status = format!("Processing {}...", &file_name_for_status);
+            }
+
             if let Event::Key(key) = evt {
                 if key.kind != KeyEventKind::Press {
                     continue;
-                }
-
-                // Process pending file if any
-                if let Some(file_path) = state.pending_file.take() {
-                    let client_clone = client.clone();
-                    let file_path_clone = file_path.clone();
-                    let input_text = state.input.clone();
-                    let file_tx_clone = file_tx.clone();
-
-                    tokio::spawn(async move {
-                        let is_image = is_image_file(&file_path_clone);
-                        if is_image {
-                            // Base64 encode image
-                            match std::fs::read(&file_path_clone) {
-                                Ok(file_data) => {
-                                    use base64::Engine;
-                                    let base64_data = base64::engine::general_purpose::STANDARD
-                                        .encode(&file_data);
-                                    let content = if input_text.trim().is_empty() {
-                                        MessageContent::with_image("", base64_data)
-                                    } else {
-                                        MessageContent::with_image(input_text, base64_data)
-                                    };
-                                    let _ = file_tx_clone.send(content);
-                                }
-                                Err(_e) => {
-                                    // Error will be handled in main loop
-                                }
-                            }
-                        } else {
-                            // Upload file and get file ID
-                            match client_clone.upload_file(&file_path_clone).await {
-                                Ok(file_id) => {
-                                    let content = if input_text.trim().is_empty() {
-                                        MessageContent::with_file("", file_id)
-                                    } else {
-                                        MessageContent::with_file(input_text, file_id)
-                                    };
-                                    let _ = file_tx_clone.send(content);
-                                }
-                                Err(_e) => {
-                                    // Error will be handled in main loop
-                                }
-                            }
-                        }
-                    });
                 }
 
                 match key.code {
@@ -274,6 +360,12 @@ pub async fn run(
                         return Ok(());
                     }
                     KeyCode::Enter => {
+                        // Don't allow sending if a file is still being processed
+                        if state.pending_file.is_some() {
+                            state.status = String::from("Please wait for file upload to complete...");
+                            continue;
+                        }
+                        
                         if (!state.input.trim().is_empty() || state.pending_file_content.is_some())
                             && !state.is_loading
                         {
@@ -413,7 +505,7 @@ pub async fn run(
                                                 if let Some(content) = &message.content {
                                                     let text = content.extract_text();
                                                     if !text.is_empty() {
-                                                        let _ = stream_tx_clone
+                                                    let _ = stream_tx_clone
                                                             .send(StreamUpdate::Chunk(text));
                                                     }
                                                 }
@@ -472,7 +564,7 @@ pub async fn run(
                                                 if let Some(content) = &choice.message.content {
                                                     let text = content.extract_text();
                                                     if !text.is_empty() {
-                                                        let _ = stream_tx_clone
+                                                    let _ = stream_tx_clone
                                                             .send(StreamUpdate::Chunk(text));
                                                     }
                                                 }
@@ -516,7 +608,7 @@ pub async fn run(
                         // Toggle help popup
                         state.show_help = !state.show_help;
                     }
-                    KeyCode::Char('f') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                    KeyCode::Char('o') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                         // Open file picker
                         if state.file_explorer.is_none() {
                             match FileExplorer::with_theme(Theme::default().add_default_title()) {
@@ -614,24 +706,15 @@ fn ui(f: &mut Frame, state: &mut ChatState) {
 }
 
 fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) {
-    // Create a centered popup for the file explorer
-    let popup_width = (area.width * 3 / 4).min(80);
-    let popup_height = (area.height * 3 / 4).min(30);
-    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+    // Use full screen for the file explorer
+    // Clear the entire area first
+    f.render_widget(Clear, area);
 
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
-
-    // Clear the popup area first
-    f.render_widget(Clear, popup_area);
-
-    // Render the file explorer widget
-    // Note: There's a version mismatch between ratatui 0.28 (used here) and 0.29 (used by ratatui-explorer)
-    // This will need to be resolved by either upgrading ratatui or using a compatible version of ratatui-explorer
-    // The widget() method returns a type that implements WidgetRef, but we need Widget
-    // TODO: Resolve ratatui version compatibility (0.28 vs 0.29) to enable file explorer rendering
-    let _widget = explorer.widget();
-    // f.render_widget(_widget, popup_area);
+    // Render the file explorer widget full screen
+    // In ratatui 0.29, WidgetRef types need to be rendered differently
+    let widget = explorer.widget();
+    use ratatui::widgets::WidgetRef;
+    widget.render_ref(area, &mut f.buffer_mut());
 }
 
 /// Check if a file is an image based on its extension
@@ -646,6 +729,51 @@ fn is_image_file(path: &std::path::Path) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+/// Check if a file is a PDF based on its extension
+fn is_pdf_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase() == "pdf")
+        .unwrap_or(false)
+}
+
+/// Replace <attached_file filename="...">...</attached_file> with just the filename
+fn replace_attached_file_with_name(text: &str) -> String {
+    let mut result = String::new();
+    let mut remaining = text;
+    
+    while let Some(start_idx) = remaining.find("<attached_file filename=\"") {
+        // Add text before the tag
+        result.push_str(&remaining[..start_idx]);
+        
+        // Find the end of the filename attribute
+        let filename_start = start_idx + "<attached_file filename=\"".len();
+        if let Some(filename_end) = remaining[filename_start..].find('"') {
+            let filename = &remaining[filename_start..filename_start + filename_end];
+            
+            // Find the closing tag
+            if let Some(close_idx) = remaining[filename_start + filename_end..].find("</attached_file>") {
+                let tag_end = filename_start + filename_end + close_idx + "</attached_file>".len();
+                // Replace the entire tag with just the filename
+                result.push_str(&format!("[Attached file: {}]", filename));
+                remaining = &remaining[tag_end..];
+            } else {
+                // Malformed tag, keep as is
+                result.push_str(&remaining[start_idx..]);
+                break;
+            }
+        } else {
+            // Malformed tag, keep as is
+            result.push_str(&remaining[start_idx..]);
+            break;
+        }
+    }
+    
+    // Add remaining text
+    result.push_str(remaining);
+    result
 }
 
 fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
@@ -669,7 +797,8 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
             .as_ref()
             .map(|c| c.extract_text())
             .unwrap_or_default();
-        let wrapped_lines = textwrap::wrap(&content_text, (area.width as usize).saturating_sub(2));
+        let display_text = replace_attached_file_with_name(&content_text);
+        let wrapped_lines = textwrap::wrap(&display_text, (area.width as usize).saturating_sub(2));
         for line in wrapped_lines {
             lines.push(Line::from(line.to_string()));
         }
@@ -683,8 +812,9 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )]));
 
+        let display_streaming = replace_attached_file_with_name(&state.streaming_content);
         let content = textwrap::wrap(
-            &state.streaming_content,
+            &display_streaming,
             (area.width as usize).saturating_sub(2),
         );
         for line in content {
@@ -860,6 +990,19 @@ fn render_help_popup(f: &mut Frame, area: Rect) {
         ),
         Span::styled(
             " - Toggle sidebar",
+            Style::default().bg(Color::Black).fg(Color::White),
+        ),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            "Ctrl+O",
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " - Open file picker",
             Style::default().bg(Color::Black).fg(Color::White),
         ),
     ]));

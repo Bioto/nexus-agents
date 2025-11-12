@@ -48,15 +48,20 @@ pub struct FunctionCallDelta {
 }
 
 /// Content part for multimodal messages
+/// Uses standard OpenAI API type names: text, image_url, file
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum ContentPart {
     /// Text content
+    #[serde(rename = "text")]
     Text { text: String },
     /// Image URL (base64 encoded or URL)
+    #[serde(rename = "image_url")]
     ImageUrl { image_url: ImageUrl },
-    /// File path reference
-    FilePath { file_path: FilePath },
+    /// File reference (for uploaded files using file_id)
+    /// Responses API uses "input_file" and expects file_id directly
+    #[serde(rename = "input_file")]
+    File { file_id: String },
 }
 
 /// Image URL for content parts
@@ -65,9 +70,10 @@ pub struct ImageUrl {
     pub url: String,
 }
 
-/// File path for content parts
+/// File reference for content parts
+/// Note: Only file_id is sent to the API. MIME type is set during upload, not during reference.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FilePath {
+pub struct FileReference {
     pub file_id: String,
 }
 
@@ -181,13 +187,17 @@ impl MessageContent {
     }
 
     /// Create a content array with text and file reference
+    /// Uses the file ID from upload. MIME type was set during upload and should not be included here.
     pub fn with_file(text: impl Into<String>, file_id: impl Into<String>) -> Self {
         let mut parts = Vec::new();
-        parts.push(ContentPart::Text { text: text.into() });
-        parts.push(ContentPart::FilePath {
-            file_path: FilePath {
-                file_id: file_id.into(),
-            },
+        let text_str = text.into();
+        if !text_str.is_empty() {
+            parts.push(ContentPart::Text { text: text_str });
+        }
+        // For uploaded files, use type: "input_file" with file_id directly
+        // (Responses API uses "input_file" and expects file_id directly, not nested)
+        parts.push(ContentPart::File {
+            file_id: file_id.into(),
         });
         MessageContent::Array(parts)
     }
@@ -577,7 +587,7 @@ mod tests {
             model
         );
 
-        let response: ChatCompletionResponse = serde_json::from_str(json).unwrap();
+        let response: ChatCompletionResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(response.id, "chatcmpl-123");
         assert_eq!(response.choices.len(), 1);
         assert_eq!(
@@ -714,6 +724,61 @@ mod tests {
                 assert_eq!(w1.name, w2.name);
             }
             _ => panic!("Expected JsonSchema variants"),
+        }
+    }
+
+    #[test]
+    fn test_message_content_with_file() {
+        let content = MessageContent::with_file("What's in this file?", "file-123");
+        
+        // Verify structure
+        match &content {
+            MessageContent::Array(parts) => {
+                assert_eq!(parts.len(), 2);
+                
+                // Check text part
+                if let ContentPart::Text { text } = &parts[0] {
+                    assert_eq!(text, "What's in this file?");
+                } else {
+                    panic!("Expected first part to be Text");
+                }
+                
+                // Check file part
+                if let ContentPart::File { file_id } = &parts[1] {
+                    assert_eq!(file_id, "file-123");
+                } else {
+                    panic!("Expected second part to be File");
+                }
+            }
+            _ => panic!("Expected Array content"),
+        }
+        
+        // Verify JSON serialization - should NOT contain mime_type
+        let json = serde_json::to_string(&content).unwrap();
+        assert!(json.contains("\"type\":\"text\""));
+        assert!(json.contains("What's in this file?"));
+        assert!(json.contains("\"type\":\"input_file\""));
+        assert!(json.contains("\"file_id\":\"file-123\""));
+        assert!(!json.contains("mime_type"), "MIME type should not be in file reference");
+    }
+
+    #[test]
+    fn test_message_content_with_file_empty_text() {
+        let content = MessageContent::with_file("", "file-456");
+        
+        // When text is empty, it should only have the file part
+        match &content {
+            MessageContent::Array(parts) => {
+                assert_eq!(parts.len(), 1);
+                
+                // Check file part
+                if let ContentPart::File { file_id } = &parts[0] {
+                    assert_eq!(file_id, "file-456");
+                } else {
+                    panic!("Expected first part to be File");
+                }
+            }
+            _ => panic!("Expected Array content"),
         }
     }
 }
