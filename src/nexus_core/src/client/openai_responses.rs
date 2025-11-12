@@ -55,20 +55,14 @@ impl ResponsesClient {
         Ok(Self::new(api_key, base_url))
     }
 
-    /// Send a non-streaming chat completion request using Responses API
-    pub async fn responses_completion(
-        &self,
-        request: ChatCompletionRequest,
-    ) -> Result<ChatCompletionResponse> {
-        let url = format!("{}/responses", self.base_url);
-
-        // Transform messages for Responses API format
-        // Responses API uses different field names: input_text, input_image, input_file
-        // Note: When files are present, text cannot be mixed with files in the same content array
+    /// Transform messages from ChatCompletionRequest format to Responses API format
+    fn transform_messages_for_responses_api(
+        messages: &[crate::models::Message],
+    ) -> Vec<serde_json::Value> {
         use crate::models::{ContentPart, MessageContent};
         let mut transformed_messages: Vec<serde_json::Value> = Vec::new();
-        
-        for msg in &request.messages {
+
+        for msg in messages {
             let mut message_json = serde_json::json!({
                 "role": msg.role,
             });
@@ -83,7 +77,7 @@ impl ResponsesClient {
                     MessageContent::Array(parts) => {
                         // Check if there's a file in the parts
                         let has_file = parts.iter().any(|p| matches!(p, ContentPart::File { .. }));
-                        
+
                         if has_file {
                             // When file is present, extract text separately
                             let text_parts: Vec<String> = parts
@@ -96,7 +90,7 @@ impl ResponsesClient {
                                     }
                                 })
                                 .collect();
-                            
+
                             // If there's text with the file, send it as a separate user message first
                             if !text_parts.is_empty() {
                                 let combined_text = text_parts.join(" ");
@@ -105,7 +99,7 @@ impl ResponsesClient {
                                     "content": combined_text
                                 }));
                             }
-                            
+
                             // Now add the file(s) and images in a separate message
                             let file_parts: Vec<serde_json::Value> = parts
                                 .iter()
@@ -125,7 +119,7 @@ impl ResponsesClient {
                                     ContentPart::Text { .. } => None, // Already handled above
                                 })
                                 .collect();
-                            
+
                             if !file_parts.is_empty() {
                                 message_json["content"] = serde_json::Value::Array(file_parts);
                                 transformed_messages.push(message_json);
@@ -143,7 +137,7 @@ impl ResponsesClient {
                                     }
                                 })
                                 .collect();
-                            
+
                             if !has_images && text_parts.len() == parts.len() {
                                 // Only text parts, use plain string
                                 let combined_text = text_parts.join(" ");
@@ -186,28 +180,51 @@ impl ResponsesClient {
             }
         }
 
-        // Build JSON request body for Responses API
-        // In Responses API, 'messages' parameter is renamed to 'input'
+        transformed_messages
+    }
+
+    /// Build request body for Responses API from ChatCompletionRequest
+    fn build_request_body(
+        request: &ChatCompletionRequest,
+        transformed_messages: Vec<serde_json::Value>,
+        stream: bool,
+    ) -> Result<serde_json::Value> {
         let mut request_body = serde_json::json!({
             "model": request.model,
             "input": transformed_messages,
         });
 
+        if stream {
+            request_body["stream"] = serde_json::Value::Bool(true);
+        }
+
         // Add optional parameters
         if let Some(temp) = request.temperature {
-            request_body["temperature"] = serde_json::Value::Number(serde_json::Number::from_f64(temp as f64).unwrap());
+            request_body["temperature"] = serde_json::Value::Number(
+                serde_json::Number::from_f64(temp as f64)
+                    .ok_or_else(|| Error::Other("Invalid temperature value".to_string()))?,
+            );
         }
         if let Some(max) = request.max_tokens {
             request_body["max_tokens"] = serde_json::Value::Number(serde_json::Number::from(max));
         }
         if let Some(top_p) = request.top_p {
-            request_body["top_p"] = serde_json::Value::Number(serde_json::Number::from_f64(top_p as f64).unwrap());
+            request_body["top_p"] = serde_json::Value::Number(
+                serde_json::Number::from_f64(top_p as f64)
+                    .ok_or_else(|| Error::Other("Invalid top_p value".to_string()))?,
+            );
         }
         if let Some(freq) = request.frequency_penalty {
-            request_body["frequency_penalty"] = serde_json::Value::Number(serde_json::Number::from_f64(freq as f64).unwrap());
+            request_body["frequency_penalty"] = serde_json::Value::Number(
+                serde_json::Number::from_f64(freq as f64)
+                    .ok_or_else(|| Error::Other("Invalid frequency_penalty value".to_string()))?,
+            );
         }
         if let Some(pres) = request.presence_penalty {
-            request_body["presence_penalty"] = serde_json::Value::Number(serde_json::Number::from_f64(pres as f64).unwrap());
+            request_body["presence_penalty"] = serde_json::Value::Number(
+                serde_json::Number::from_f64(pres as f64)
+                    .ok_or_else(|| Error::Other("Invalid presence_penalty value".to_string()))?,
+            );
         }
         if request.stream == Some(true) {
             request_body["stream"] = serde_json::Value::Bool(true);
@@ -219,6 +236,78 @@ impl ResponsesClient {
             request_body["response_format"] = serde_json::to_value(response_format)
                 .map_err(|e| Error::Other(format!("Failed to serialize response_format: {}", e)))?;
         }
+
+        Ok(request_body)
+    }
+
+    /// Handle HTTP error response and return appropriate Error
+    fn handle_http_error(
+        status: reqwest::StatusCode,
+        error_text: String,
+        model: &str,
+        url: &str,
+    ) -> Error {
+        // Try to parse as API error
+        if let Ok(api_error) = serde_json::from_str::<serde_json::Value>(&error_text) {
+            if let Some(error_obj) = api_error.get("error").and_then(|e| e.as_object()) {
+                let mut api_error = serde_json::from_value::<crate::models::ApiError>(
+                    serde_json::Value::Object(error_obj.clone()),
+                )
+                .unwrap_or_else(|_| crate::models::ApiError {
+                    message: error_text.clone(),
+                    error_type: None,
+                    param: None,
+                    code: None,
+                });
+
+                // Enhance error message with diagnostic info
+                let model_info = format!(" (model: {})", model);
+                let url_info = format!(" (URL: {})", url);
+                let status_info = format!(" [HTTP {}]", status);
+                api_error.message = format!(
+                    "{}{}{}{}",
+                    api_error.message, status_info, model_info, url_info
+                );
+
+                return Error::Api(api_error);
+            }
+        }
+
+        // Fallback error with diagnostic info
+        let model_info = format!(" (model: {})", model);
+        let url_info = format!(" (URL: {})", url);
+        Error::Api(crate::models::ApiError {
+            message: format!("HTTP {}: {}{}{}", status, error_text, model_info, url_info),
+            error_type: Some("http_error".to_string()),
+            param: None,
+            code: Some(status.as_str().to_string()),
+        })
+    }
+
+    /// Create a Message from text content
+    fn create_message_from_text(text: String) -> crate::models::Message {
+        use crate::models::{MessageContent, MessageRole};
+        crate::models::Message {
+            role: MessageRole::Assistant,
+            content: Some(MessageContent::String(text)),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    /// Send a non-streaming chat completion request using Responses API
+    pub async fn responses_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse> {
+        let url = format!("{}/responses", self.base_url);
+
+        // Transform messages for Responses API format
+        let transformed_messages = Self::transform_messages_for_responses_api(&request.messages);
+
+        // Build JSON request body for Responses API
+        let request_body = Self::build_request_body(&request, transformed_messages, false)?;
 
         let response = self
             .http_client
@@ -237,41 +326,7 @@ impl ResponsesClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            // Try to parse as API error
-            if let Ok(api_error) = serde_json::from_str::<serde_json::Value>(&error_text) {
-                if let Some(error_obj) = api_error.get("error").and_then(|e| e.as_object()) {
-                    let mut api_error = serde_json::from_value::<crate::models::ApiError>(
-                        serde_json::Value::Object(error_obj.clone()),
-                    )
-                    .unwrap_or_else(|_| crate::models::ApiError {
-                        message: error_text.clone(),
-                        error_type: None,
-                        param: None,
-                        code: None,
-                    });
-
-                    // Enhance error message with diagnostic info
-                    let model_info = format!(" (model: {})", request.model);
-                    let url_info = format!(" (URL: {})", url);
-                    let status_info = format!(" [HTTP {}]", status);
-                    api_error.message = format!(
-                        "{}{}{}{}",
-                        api_error.message, status_info, model_info, url_info
-                    );
-
-                    return Err(Error::Api(api_error));
-                }
-            }
-
-            // Fallback error with diagnostic info
-            let model_info = format!(" (model: {})", request.model);
-            let url_info = format!(" (URL: {})", url);
-            return Err(Error::Api(crate::models::ApiError {
-                message: format!("HTTP {}: {}{}{}", status, error_text, model_info, url_info),
-                error_type: Some("http_error".to_string()),
-                param: None,
-                code: Some(status.as_str().to_string()),
-            }));
+            return Err(Self::handle_http_error(status, error_text, &request.model, &url));
         }
 
         // Parse Responses API response and transform to ChatCompletionResponse format
@@ -292,7 +347,7 @@ impl ResponsesClient {
             .to_string();
         
         // Extract choices from the response
-        use crate::models::{Choice, Message, MessageRole};
+        use crate::models::Choice;
         let mut choices = Vec::new();
         
         // Try to extract from "output" array (Responses API format)
@@ -318,13 +373,7 @@ impl ResponsesClient {
                                     
                                     if !text_parts.is_empty() {
                                         let combined_text = text_parts.join("");
-                                        let message = Message {
-                                            role: MessageRole::Assistant,
-                                            content: Some(MessageContent::String(combined_text)),
-                                            tool_calls: None,
-                                            tool_call_id: None,
-                                            name: None,
-                                        };
+                                        let message = Self::create_message_from_text(combined_text);
                                         
                                         choices.push(Choice {
                                             index: index as u32,
@@ -342,13 +391,7 @@ impl ResponsesClient {
                                     .unwrap_or("")
                                     .to_string();
                                 
-                                let message = Message {
-                                    role: MessageRole::Assistant,
-                                    content: Some(MessageContent::String(text)),
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    name: None,
-                                };
+                                let message = Self::create_message_from_text(text);
                                 
                                 choices.push(Choice {
                                     index: index as u32,
@@ -364,13 +407,7 @@ impl ResponsesClient {
                                     .unwrap_or("")
                                     .to_string();
                                 
-                                let message = Message {
-                                    role: MessageRole::Assistant,
-                                    content: Some(MessageContent::String(text)),
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    name: None,
-                                };
+                                let message = Self::create_message_from_text(text);
                                 
                                 choices.push(Choice {
                                     index: index as u32,
@@ -398,13 +435,7 @@ impl ResponsesClient {
         if choices.is_empty() {
             // Some APIs might return text directly
             if let Some(text) = response_json.get("text").and_then(|v| v.as_str()) {
-                let message = Message {
-                    role: MessageRole::Assistant,
-                    content: Some(MessageContent::String(text.to_string())),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                };
+                let message = Self::create_message_from_text(text.to_string());
                 
                 choices.push(Choice {
                     index: 0,
@@ -443,172 +474,10 @@ impl ResponsesClient {
         let url = format!("{}/responses", self.base_url);
         
         // Transform messages for Responses API format
-        // Responses API uses different field names: input_text, input_image, input_file
-        // Note: When files are present, text cannot be mixed with files in the same content array
-        use crate::models::{ContentPart, MessageContent};
-        let mut transformed_messages: Vec<serde_json::Value> = Vec::new();
-        
-        for msg in &request.messages {
-            let mut message_json = serde_json::json!({
-                "role": msg.role,
-            });
-
-            if let Some(content) = &msg.content {
-                match content {
-                    MessageContent::String(text) => {
-                        // For simple text messages, use plain string content
-                        message_json["content"] = serde_json::Value::String(text.clone());
-                        transformed_messages.push(message_json);
-                    }
-                    MessageContent::Array(parts) => {
-                        // Check if there's a file in the parts
-                        let has_file = parts.iter().any(|p| matches!(p, ContentPart::File { .. }));
-                        
-                        if has_file {
-                            // When file is present, extract text separately
-                            let text_parts: Vec<String> = parts
-                                .iter()
-                                .filter_map(|p| {
-                                    if let ContentPart::Text { text } = p {
-                                        Some(text.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            
-                            // If there's text with the file, send it as a separate user message first
-                            if !text_parts.is_empty() {
-                                let combined_text = text_parts.join(" ");
-                                transformed_messages.push(serde_json::json!({
-                                    "role": "user",
-                                    "content": combined_text
-                                }));
-                            }
-                            
-                            // Now add the file(s) and images in a separate message
-                            let file_parts: Vec<serde_json::Value> = parts
-                                .iter()
-                                .filter_map(|part| match part {
-                                    ContentPart::File { file_id } => {
-                                        Some(serde_json::json!({
-                                            "type": "input_file",
-                                            "file_id": file_id
-                                        }))
-                                    }
-                                    ContentPart::ImageUrl { image_url } => {
-                                        Some(serde_json::json!({
-                                            "type": "input_image",
-                                            "image_url": image_url.url
-                                        }))
-                                    }
-                                    ContentPart::Text { .. } => None, // Already handled above
-                                })
-                                .collect();
-                            
-                            if !file_parts.is_empty() {
-                                message_json["content"] = serde_json::Value::Array(file_parts);
-                                transformed_messages.push(message_json);
-                            }
-                        } else {
-                            // No file, check if we have only text (can use string) or mixed content (need array)
-                            let has_images = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
-                            let text_parts: Vec<String> = parts
-                                .iter()
-                                .filter_map(|p| {
-                                    if let ContentPart::Text { text } = p {
-                                        Some(text.clone())
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            
-                            if !has_images && text_parts.len() == parts.len() {
-                                // Only text parts, use plain string
-                                let combined_text = text_parts.join(" ");
-                                message_json["content"] = serde_json::Value::String(combined_text);
-                                transformed_messages.push(message_json);
-                            } else {
-                                // Mixed content (text + images), need array format
-                                let transformed_parts: Vec<serde_json::Value> = parts
-                                    .iter()
-                                    .map(|part| match part {
-                                        ContentPart::Text { text } => {
-                                            serde_json::json!({
-                                                "type": "input_text",
-                                                "text": text
-                                            })
-                                        }
-                                        ContentPart::ImageUrl { image_url } => {
-                                            serde_json::json!({
-                                                "type": "input_image",
-                                                "image_url": image_url.url
-                                            })
-                                        }
-                                        ContentPart::File { file_id } => {
-                                            serde_json::json!({
-                                                "type": "input_file",
-                                                "file_id": file_id
-                                            })
-                                        }
-                                    })
-                                    .collect();
-                                message_json["content"] = serde_json::Value::Array(transformed_parts);
-                                transformed_messages.push(message_json);
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Message with no content, add as-is
-                transformed_messages.push(message_json);
-            }
-        }
+        let transformed_messages = Self::transform_messages_for_responses_api(&request.messages);
         
         // Build JSON request body for Responses API
-        // In Responses API, 'messages' parameter is renamed to 'input'
-        let mut request_body = serde_json::json!({
-            "model": request.model,
-            "input": transformed_messages,
-            "stream": true,
-        });
-
-        // Add optional parameters
-        if let Some(temp) = request.temperature {
-            request_body["temperature"] = serde_json::Value::Number(
-                serde_json::Number::from_f64(temp as f64)
-                    .ok_or_else(|| Error::Other("Invalid temperature value".to_string()))?
-            );
-        }
-        if let Some(max) = request.max_tokens {
-            request_body["max_tokens"] = serde_json::Value::Number(serde_json::Number::from(max));
-        }
-        if let Some(top_p) = request.top_p {
-            request_body["top_p"] = serde_json::Value::Number(
-                serde_json::Number::from_f64(top_p as f64)
-                    .ok_or_else(|| Error::Other("Invalid top_p value".to_string()))?
-            );
-        }
-        if let Some(freq) = request.frequency_penalty {
-            request_body["frequency_penalty"] = serde_json::Value::Number(
-                serde_json::Number::from_f64(freq as f64)
-                    .ok_or_else(|| Error::Other("Invalid frequency_penalty value".to_string()))?
-            );
-        }
-        if let Some(pres) = request.presence_penalty {
-            request_body["presence_penalty"] = serde_json::Value::Number(
-                serde_json::Number::from_f64(pres as f64)
-                    .ok_or_else(|| Error::Other("Invalid presence_penalty value".to_string()))?
-            );
-        }
-        if let Some(ref tools) = request.tools {
-            request_body["tools"] = serde_json::Value::Array(tools.clone());
-        }
-        if let Some(ref response_format) = request.response_format {
-            request_body["response_format"] = serde_json::to_value(response_format)
-                .map_err(|e| Error::Other(format!("Failed to serialize response_format: {}", e)))?;
-        }
+        let request_body = Self::build_request_body(&request, transformed_messages, true)?;
 
         let response = self
             .http_client
@@ -620,7 +489,6 @@ impl ResponsesClient {
             .await?;
 
         let status = response.status();
-        eprintln!("ResponsesClient: HTTP response status for stream: {}", status);
 
         if !status.is_success() {
             let error_text = response
@@ -628,41 +496,7 @@ impl ResponsesClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            // Try to parse as API error
-            if let Ok(api_error) = serde_json::from_str::<serde_json::Value>(&error_text) {
-                if let Some(error_obj) = api_error.get("error").and_then(|e| e.as_object()) {
-                    let mut api_error = serde_json::from_value::<crate::models::ApiError>(
-                        serde_json::Value::Object(error_obj.clone()),
-                    )
-                    .unwrap_or_else(|_| crate::models::ApiError {
-                        message: error_text.clone(),
-                        error_type: None,
-                        param: None,
-                        code: None,
-                    });
-
-                    // Enhance error message with diagnostic info
-                    let model_info = format!(" (model: {})", request.model);
-                    let url_info = format!(" (URL: {})", url);
-                    let status_info = format!(" [HTTP {}]", status);
-                    api_error.message = format!(
-                        "{}{}{}{}",
-                        api_error.message, status_info, model_info, url_info
-                    );
-
-                    return Err(Error::Api(api_error));
-                }
-            }
-
-            // Fallback error with diagnostic info
-            let model_info = format!(" (model: {})", request.model);
-            let url_info = format!(" (URL: {})", url);
-            return Err(Error::Api(crate::models::ApiError {
-                message: format!("HTTP {}: {}{}{}", status, error_text, model_info, url_info),
-                error_type: Some("http_error".to_string()),
-                param: None,
-                code: Some(status.as_str().to_string()),
-            }));
+            return Err(Self::handle_http_error(status, error_text, &request.model, &url));
         }
 
         use tokio::sync::mpsc;
@@ -671,14 +505,10 @@ impl ResponsesClient {
         let mut buffer = Vec::new();
 
         tokio::spawn(async move {
-            eprintln!("ResponsesClient: Starting to read bytes stream");
             let mut bytes_stream = response.bytes_stream();
-            let mut total_bytes = 0;
             while let Some(chunk_result) = bytes_stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
-                        total_bytes += chunk.len();
-                        eprintln!("ResponsesClient: Received {} bytes (total: {})", chunk.len(), total_bytes);
                         buffer.extend_from_slice(chunk.as_ref());
 
                         // Parse complete lines
@@ -696,14 +526,10 @@ impl ResponsesClient {
                                         break;
                                     }
 
-                                    println!("ResponsesClient: Line: {}", line_str);
-
                                     if line_str.starts_with("data: ") {
                                         let json_str = &line_str[6..];
-                                        eprintln!("ResponsesClient: Parsing line: {}", if json_str.len() > 200 { format!("{}...", &json_str[..200]) } else { json_str.to_string() });
                                         // Try to parse as Responses API format first
                                         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                            eprintln!("ResponsesClient: Successfully parsed JSON");
                                             
                                             // Check if this is a response.output_text.delta event
                                             let mut handled_delta = false;
@@ -744,7 +570,6 @@ impl ResponsesClient {
                                                             choices: vec![choice],
                                                         };
                                                         
-                                                        eprintln!("ResponsesClient: Sending delta chunk with content: '{}'", delta_text);
                                                         let _ = tx.send(Ok(chunk));
                                                         tokio::task::yield_now().await;
                                                         handled_delta = true;
@@ -837,27 +662,14 @@ impl ResponsesClient {
                                                         choices: choices.clone(),
                                                     };
                                                     
-                                                    eprintln!("ResponsesClient: Sending chunk with {} choices", chunk.choices.len());
-                                                    if let Some(choice) = chunk.choices.first() {
-                                                        if let Some(content) = &choice.delta.content {
-                                                            eprintln!("ResponsesClient: Chunk content: {} chars", content.len());
-                                                        }
-                                                    }
                                                     let _ = tx.send(Ok(chunk));
                                                     tokio::task::yield_now().await;
-                                                } else {
-                                                    // Debug: log when we receive a chunk but can't parse choices
-                                                    eprintln!("ResponsesClient: Received chunk with output but no choices parsed. JSON: {}", serde_json::to_string(&response_json).unwrap_or_else(|_| "failed to serialize".to_string()));
                                                 }
                                             } else if !handled_delta {
                                                 // Try standard format (skip if we already handled a delta)
-                                                eprintln!("ResponsesClient: Trying to parse as standard ChatCompletionChunk format");
                                                 if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(json_str) {
-                                                    eprintln!("ResponsesClient: Successfully parsed standard format chunk with {} choices", chunk.choices.len());
                                                     let _ = tx.send(Ok(chunk));
                                                     tokio::task::yield_now().await;
-                                                } else {
-                                                    eprintln!("ResponsesClient: Failed to parse as standard format");
                                                 }
                                             }
                                         }
@@ -868,7 +680,6 @@ impl ResponsesClient {
                         }
 
                         if found_done {
-                            eprintln!("ResponsesClient: Received [DONE] marker, ending stream");
                             break;
                         }
 
@@ -876,13 +687,11 @@ impl ResponsesClient {
                         buffer.drain(..line_start);
                     }
                     Err(e) => {
-                        eprintln!("ResponsesClient: Error reading bytes stream: {}", e);
                         let _ = tx.send(Err(Error::Network(e)));
                         break;
                     }
                 }
             }
-            eprintln!("ResponsesClient: Bytes stream ended. Total bytes received: {}", total_bytes);
         });
 
         let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);

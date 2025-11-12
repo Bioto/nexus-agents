@@ -261,7 +261,6 @@ pub async fn run(
                 let file_path_clone = file_path.clone();
                 let input_text = state.input.clone();
                 let file_tx_clone = file_tx.clone();
-                let file_path_display = file_path_clone.display().to_string();
 
                 tokio::spawn(async move {
                     let is_image = is_image_file(&file_path_clone);
@@ -279,12 +278,9 @@ pub async fn run(
                                 } else {
                                     MessageContent::with_image(input_text, base64_data)
                                 };
-                                if file_tx_clone.send(content).is_err() {
-                                    eprintln!("Failed to send image content");
-                                }
+                                let _ = file_tx_clone.send(content);
                             }
                             Err(e) => {
-                                eprintln!("Failed to read image file {}: {}", file_path_display, e);
                                 // Send error through channel as a text message
                                 let error_content = MessageContent::String(format!(
                                     "Error: Failed to read image file: {}",
@@ -302,12 +298,9 @@ pub async fn run(
                                 } else {
                                     MessageContent::with_file(input_text, uploaded_file.file_id)
                                 };
-                                if file_tx_clone.send(content).is_err() {
-                                    eprintln!("Failed to send file content");
-                                }
+                                let _ = file_tx_clone.send(content);
                             }
                             Err(e) => {
-                                eprintln!("Failed to upload file {}: {}", file_path_display, e);
                                 // Send error through channel as a text message
                                 let error_content = MessageContent::String(format!(
                                     "Error: Failed to upload file: {}",
@@ -326,12 +319,9 @@ pub async fn run(
                                 } else {
                                     MessageContent::String(format!("{}\n\n{}", input_text, wrapped_contents))
                                 };
-                                if file_tx_clone.send(content).is_err() {
-                                    eprintln!("Failed to send file content");
-                                }
+                                let _ = file_tx_clone.send(content);
                             }
                             Err(e) => {
-                                eprintln!("Failed to read file {}: {}", file_path_display, e);
                                 // Send error through channel as a text message
                                 let error_content = MessageContent::String(format!(
                                     "Error: Failed to read file: {}",
@@ -434,10 +424,8 @@ pub async fn run(
                                     let stream_tx_clone = stream_tx.clone();
 
                                     tokio::spawn(async move {
-                                        eprintln!("TUI: Starting agent stream request");
                                         match service.chat_stream(request).await {
                                             Ok(mut event_stream) => {
-                                                eprintln!("TUI: Agent stream started successfully");
                                                 while let Some(event_result) =
                                                     event_stream.next().await
                                                 {
@@ -447,25 +435,20 @@ pub async fn run(
                                                             AgentStreamEvent::ContentDelta(
                                                                 content,
                                                             ) => {
-                                                                eprintln!("TUI: ContentDelta: {} chars, content: {:?}", content.len(), if content.len() > 100 { format!("{}...", &content[..100]) } else { content.clone() });
                                                                 if !content.is_empty() {
                                                                     let _ = stream_tx_clone.send(
                                                                         StreamUpdate::Chunk(content),
                                                                     );
-                                                                } else {
-                                                                    eprintln!("TUI: WARNING: ContentDelta received but content is empty!");
                                                                 }
                                                             }
                                                             AgentStreamEvent::ToolCallsStarted(
                                                                 _,
                                                             ) => {
-                                                                eprintln!("TUI: ToolCallsStarted");
                                                                 // Silent - don't show in output
                                                             }
                                                             AgentStreamEvent::ToolExecuting(
                                                                 tool_name,
                                                             ) => {
-                                                                eprintln!("TUI: ToolExecuting: {}", tool_name);
                                                                 let _ = stream_tx_clone.send(
                                                                     StreamUpdate::ToolExecuting(
                                                                         tool_name,
@@ -476,7 +459,6 @@ pub async fn run(
                                                                 tool_name: _,
                                                                 result,
                                                             } => {
-                                                                eprintln!("TUI: ToolResult: {} chars", result.len());
                                                                 let _ = stream_tx_clone.send(
                                                                     StreamUpdate::ToolResult(
                                                                         result,
@@ -484,14 +466,12 @@ pub async fn run(
                                                                 );
                                                             }
                                                             AgentStreamEvent::Done => {
-                                                                eprintln!("TUI: Agent stream Done");
                                                                 let _ = stream_tx_clone
                                                                     .send(StreamUpdate::Done);
                                                             }
                                                         }
                                                         },
                                                         Err(e) => {
-                                                            eprintln!("TUI: Agent stream error: {}", e);
                                                             let _ = stream_tx_clone.send(
                                                                 StreamUpdate::Error(e.to_string()),
                                                             );
@@ -499,10 +479,8 @@ pub async fn run(
                                                         }
                                                     }
                                                 }
-                                                eprintln!("TUI: Agent stream loop ended");
                                             }
                                             Err(e) => {
-                                                eprintln!("TUI: Failed to start agent stream: {}", e);
                                                 let _ = stream_tx_clone
                                                     .send(StreamUpdate::Error(e.to_string()));
                                             }
@@ -540,10 +518,8 @@ pub async fn run(
                                 let stream_tx_clone = stream_tx.clone();
 
                                 tokio::spawn(async move {
-                                    eprintln!("TUI: Starting non-agent stream request");
                                     match client_clone.responses_completion_stream(request).await {
                                         Ok(mut chunk_stream) => {
-                                            eprintln!("TUI: Non-agent stream started successfully");
                                             while let Some(chunk_result) =
                                                 tokio_stream::StreamExt::next(&mut chunk_stream).await
                                             {
@@ -551,14 +527,12 @@ pub async fn run(
                                                     Ok(chunk) => {
                                                         if let Some(choice) = chunk.choices.first() {
                                                             if let Some(content) = &choice.delta.content {
-                                                                eprintln!("TUI: Stream chunk: {} chars", content.len());
                                                                 let _ = stream_tx_clone
                                                                     .send(StreamUpdate::Chunk(content.clone()));
                                                             }
                                                         }
                                                     }
                                                     Err(e) => {
-                                                        eprintln!("TUI: Stream error: {}", e);
                                                         let _ = stream_tx_clone.send(
                                                             StreamUpdate::Error(e.to_string()),
                                                         );
@@ -566,11 +540,9 @@ pub async fn run(
                                                     }
                                                 }
                                             }
-                                            eprintln!("TUI: Non-agent stream Done");
                                             let _ = stream_tx_clone.send(StreamUpdate::Done);
                                         }
                                         Err(e) => {
-                                            eprintln!("TUI: Failed to start non-agent stream: {}", e);
                                             let _ = stream_tx_clone
                                                 .send(StreamUpdate::Error(e.to_string()));
                                         }
@@ -585,24 +557,16 @@ pub async fn run(
                                 tokio::spawn(async move {
                                     match client_clone.responses_completion(request).await {
                                         Ok(resp) => {
-                                            eprintln!("TUI: Received response with {} choices", resp.choices.len());
                                             if let Some(choice) = resp.choices.first() {
-                                                eprintln!("TUI: First choice has content: {:?}", choice.message.content.is_some());
                                                 if let Some(content) = &choice.message.content {
                                                     let text = content.extract_text();
-                                                    eprintln!("TUI: Extracted text length: {}", text.len());
                                                     if !text.is_empty() {
                                                         let _ = stream_tx_clone
                                                             .send(StreamUpdate::Chunk(text));
-                                                    } else {
-                                                        eprintln!("TUI: WARNING: Text is empty after extraction!");
                                                     }
-                                                } else {
-                                                    eprintln!("TUI: WARNING: Choice has no content!");
                                                 }
                                                 let _ = stream_tx_clone.send(StreamUpdate::Done);
                                             } else {
-                                                eprintln!("TUI: ERROR: No choices in response!");
                                                 let _ = stream_tx_clone.send(StreamUpdate::Error(
                                                     "No response from assistant".to_string(),
                                                 ));
