@@ -836,9 +836,7 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
     let max_lines = lines.len();
     let max_scroll = max_lines.saturating_sub(visible_height);
 
-    if state.scroll_offset == usize::MAX {
-        state.scroll_offset = max_scroll;
-    } else if state.auto_scroll {
+    if state.scroll_offset == usize::MAX || state.auto_scroll {
         state.scroll_offset = max_scroll;
     } else {
         // Clamp scroll offset to valid range first
@@ -955,131 +953,121 @@ fn render_help_popup(f: &mut Frame, area: Rect) {
     f.render_widget(background_paragraph, popup_area);
 
     // Build content lines
-    #[allow(clippy::vec_init_then_push)]
-    let mut lines = Vec::new();
-    lines.push(Line::from(vec![Span::styled(
-        "Keybindings",
-        Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::Black)
-            .add_modifier(Modifier::BOLD),
-    )]));
-    lines.push(Line::from(vec![Span::styled(
-        "",
-        Style::default().bg(Color::Black),
-    )]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Ctrl+Q / Esc",
+    let lines = vec![
+        Line::from(vec![Span::styled(
+            "Keybindings",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::Yellow)
                 .bg(Color::Black)
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Quit",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Ctrl+T",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Toggle sidebar",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Ctrl+O",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Open file picker",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Ctrl+H",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Show/hide this help",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Send message",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "↑/↓",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Scroll messages",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled(
-            "End",
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            " - Jump to bottom (swarm mode)",
-            Style::default().bg(Color::Black).fg(Color::White),
-        ),
-    ]));
-    lines.push(Line::from(vec![Span::styled(
-        "",
-        Style::default().bg(Color::Black),
-    )]));
-    lines.push(Line::from(vec![Span::styled(
-        "Press Ctrl+H to close",
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::ITALIC)
-            .bg(Color::Black),
-    )]));
-
-    // Fill remaining space with empty black lines
-    let content_height = lines.len();
-    let remaining_height = inner_height.saturating_sub(content_height as u16);
-    for _ in 0..remaining_height {
-        lines.push(Line::from(vec![Span::styled(
-            empty_spaces.clone(),
+        )]),
+        Line::from(vec![Span::styled(
+            "",
             Style::default().bg(Color::Black),
-        )]));
-    }
+        )]),
+        Line::from(vec![
+            Span::styled(
+                "Ctrl+Q / Esc",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Quit",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Ctrl+T",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Toggle sidebar",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Ctrl+O",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Open file picker",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Ctrl+H",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Show/hide this help",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Send message",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "↑/↓",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Scroll messages",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "End",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " - Jump to bottom (swarm mode)",
+                Style::default().bg(Color::Black).fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![Span::styled(
+            "",
+            Style::default().bg(Color::Black),
+        )]),
+        Line::from(vec![Span::styled(
+            "Press Ctrl+H to close",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC)
+                .bg(Color::Black),
+        )]),
+    ];
 
     let help_paragraph = Paragraph::new(lines)
         .block(

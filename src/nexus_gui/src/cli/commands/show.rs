@@ -111,7 +111,7 @@ impl Application for App {
             }
             _ => {
                 // Default to microphone if component not found
-                MicrophoneIcon::new()
+                MicrophoneIcon::create()
             }
         }
     }
