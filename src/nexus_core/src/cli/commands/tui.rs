@@ -410,11 +410,22 @@ fn ui(f: &mut Frame, state: &mut ChatState) {
 
     render_help_bar(f, main_chunks[0]);
 
+    // Calculate status height based on content
+    // Account for borders (2 lines) and wrap text to available width
+    let status_width = main_chunks[1].width.saturating_sub(2); // Account for borders
+    let status_lines = if status_width > 0 {
+        textwrap::wrap(&state.status, status_width as usize).len()
+    } else {
+        1
+    };
+    // Minimum 3 lines (1 for borders + 1 for content), maximum 10 lines to prevent taking too much space
+    let status_height = (status_lines + 2).clamp(3, 10);
+
     if state.sidebar_visible {
         // With sidebar - status at top spanning full width, then messages/sidebar side by side
         let vertical_chunks = Layout::default()
             .constraints([
-                Constraint::Length(3), // Status
+                Constraint::Length(status_height as u16), // Status (dynamic)
                 Constraint::Min(1),    // Messages + Sidebar
                 Constraint::Length(3), // Input
             ])
@@ -433,7 +444,7 @@ fn ui(f: &mut Frame, state: &mut ChatState) {
         // No sidebar - use original 3-panel layout
         let chunks = Layout::default()
             .constraints([
-                Constraint::Length(3),
+                Constraint::Length(status_height as u16), // Status (dynamic)
                 Constraint::Min(1),
                 Constraint::Length(3),
             ])
@@ -575,7 +586,18 @@ fn render_help_bar(f: &mut Frame, area: Rect) {
 }
 
 fn render_status(f: &mut Frame, area: Rect, state: &ChatState) {
-    let status = Paragraph::new(state.status.as_str())
+    // Wrap the status text to fit within the available width (accounting for borders)
+    let available_width = area.width.saturating_sub(2);
+    let wrapped_lines: Vec<Line> = if available_width > 0 {
+        textwrap::wrap(&state.status, available_width as usize)
+            .iter()
+            .map(|line| Line::from(line.to_string()))
+            .collect()
+    } else {
+        vec![Line::from(state.status.as_str())]
+    };
+
+    let status = Paragraph::new(wrapped_lines)
         .block(Block::default().borders(Borders::ALL).title("Status"))
         .style(Style::default().fg(Color::Blue));
 
@@ -821,6 +843,7 @@ pub async fn run_swarm(
         Chunk(String),
         ToolExecuting(String),
         ToolResult(String),
+        StatusUpdate(String),
         Done,
         Error(String),
     }
@@ -848,6 +871,9 @@ pub async fn run_swarm(
                     if state.auto_scroll {
                         state.scroll_offset = usize::MAX;
                     }
+                }
+                StreamUpdate::StatusUpdate(status) => {
+                    state.status = status;
                 }
                 StreamUpdate::Done => {
                     state.is_loading = false;
@@ -931,9 +957,20 @@ pub async fn run_swarm(
                                 if stream {
                                     let stream_tx_clone = stream_tx.clone();
                                     let swarm_coordinator = swarm_coordinator.clone();
+                                    // Create a status sender that wraps messages in StreamUpdate::StatusUpdate
+                                    let (status_tx_inner, mut status_rx) = mpsc::unbounded_channel::<String>();
+                                    let stream_tx_for_status = stream_tx_clone.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(status) = status_rx.recv().await {
+                                            let _ = stream_tx_for_status.send(StreamUpdate::StatusUpdate(status));
+                                        }
+                                    });
 
                                     tokio::spawn(async move {
-                                        match swarm_coordinator.chat_stream(request).await {
+                                        match swarm_coordinator
+                                            .chat_stream(request, Some(status_tx_inner))
+                                            .await
+                                        {
                                             Ok(mut event_stream) => {
                                                 while let Some(event) = event_stream.next().await {
                                                     match event {
@@ -984,9 +1021,17 @@ pub async fn run_swarm(
                                 } else {
                                     let stream_tx_clone = stream_tx.clone();
                                     let swarm_coordinator = swarm_coordinator.clone();
+                                    // Create a status sender that wraps messages in StreamUpdate::StatusUpdate
+                                    let (status_tx_inner, mut status_rx) = mpsc::unbounded_channel::<String>();
+                                    let stream_tx_for_status = stream_tx_clone.clone();
+                                    tokio::spawn(async move {
+                                        while let Some(status) = status_rx.recv().await {
+                                            let _ = stream_tx_for_status.send(StreamUpdate::StatusUpdate(status));
+                                        }
+                                    });
 
                                     tokio::spawn(async move {
-                                        match swarm_coordinator.chat(request).await {
+                                        match swarm_coordinator.chat(request, Some(status_tx_inner)).await {
                                             Ok(message) => {
                                                 let _ = stream_tx_clone.send(StreamUpdate::Chunk(
                                                     message.content.unwrap_or_default(),

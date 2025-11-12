@@ -7,7 +7,7 @@ use crate::models::{
 };
 use crate::services::{AgentService, SwarmService};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 /// Service that coordinates swarm execution and handles follow-up questions
 #[derive(Clone)]
@@ -37,7 +37,11 @@ impl SwarmCoordinatorService {
     }
 
     /// Handle a chat request - detects if it's a new request or follow-up
-    pub async fn chat(&self, request: ChatCompletionRequest) -> Result<Message> {
+    pub async fn chat(
+        &self,
+        request: ChatCompletionRequest,
+        status_tx: Option<mpsc::UnboundedSender<String>>,
+    ) -> Result<Message> {
         let has_assistant_message = request
             .messages
             .iter()
@@ -56,7 +60,7 @@ impl SwarmCoordinatorService {
 
             // Execute swarm
             let mut swarm = self.swarm_service.lock().await;
-            match swarm.execute(&user_request, &request.clone()).await {
+            match swarm.execute(&user_request, &request.clone(), status_tx).await {
                 Ok(result) => {
                     // Format the swarm results for display
                     let mut response = String::new();
@@ -84,6 +88,7 @@ impl SwarmCoordinatorService {
     pub async fn chat_stream(
         &self,
         request: ChatCompletionRequest,
+        status_tx: Option<mpsc::UnboundedSender<String>>,
     ) -> Result<
         std::pin::Pin<
             Box<
@@ -102,7 +107,7 @@ impl SwarmCoordinatorService {
 
         if !has_assistant_message {
             // Run swarm execution in non-streaming mode and convert to stream
-            let result = self.chat(request).await;
+            let result = self.chat(request, status_tx).await;
             match result {
                 Ok(message) => {
                     let content = message.content.unwrap_or_default();

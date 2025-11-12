@@ -8,6 +8,7 @@ use crate::models::{
 };
 use crate::services::AgentService;
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// Service for orchestrating multi-agent swarm task execution
@@ -68,27 +69,36 @@ impl SwarmService {
         &mut self,
         user_request: impl Into<String>,
         completion_request: &ChatCompletionRequest,
+        status_tx: Option<mpsc::UnboundedSender<String>>,
     ) -> Result<SwarmResult, SwarmError> {
         self.completion_request = completion_request.clone();
 
         let request = user_request.into();
 
+        // Helper to send status updates
+        let send_status = |msg: &str| {
+            if let Some(ref tx) = status_tx {
+                let _ = tx.send(msg.to_string());
+            }
+        };
+
         // Step 1: Decompose request into tasks
+        send_status("🔍 Decomposing request into tasks...");
         let decomposition = self.decompose_request(&request).await?;
 
-        println!("Decomposition: {:?}", decomposition);
-
         // Step 2: Add tasks to manager (with name-to-id mapping for dependencies)
+        send_status(&format!("📋 Registering {} tasks...", decomposition.tasks.len()));
         let _name_to_id = self.register_tasks(decomposition)?;
 
-        // Step 3: Assign tasks to agents
-        self.assign_tasks().await?;
-
         // Step 4: Execute tasks in dependency-aware batches
-        let task_results = self.execute_tasks().await?;
+        send_status("⚙️ Executing tasks...");
+        let task_results = self.execute_tasks(status_tx.clone()).await?;
 
         // Step 5: Generate summary
+        send_status("📊 Generating summary...");
         let summary = self.generate_summary(&task_results).await?;
+
+        send_status("✅ Swarm execution complete!");
 
         Ok(SwarmResult {
             task_results,
@@ -292,12 +302,23 @@ impl SwarmService {
     }
 
     /// Execute tasks in dependency-aware batches
-    async fn execute_tasks(&mut self) -> Result<Vec<TaskResult>, SwarmError> {
+    async fn execute_tasks(
+        &mut self,
+        status_tx: Option<mpsc::UnboundedSender<String>>,
+    ) -> Result<Vec<TaskResult>, SwarmError> {
         let mut all_results = Vec::new();
         let mut completed_results: HashMap<TaskId, TaskResult> = HashMap::new();
 
+        // Helper to send status updates
+        let send_status = |msg: &str| {
+            if let Some(ref tx) = status_tx {
+                let _ = tx.send(msg.to_string());
+            }
+        };
+
         // Get prioritized batches
         let batches = self.task_manager.prioritized_batches()?;
+        send_status(&format!("📦 Processing {} batches...", batches.len()));
 
         let available_agents: Vec<Uuid> = self.agent_store.iter().map(|(id, _)| *id).collect();
         if available_agents.is_empty() {
@@ -309,13 +330,26 @@ impl SwarmService {
 
         for (batch_idx, batch) in batches.iter().enumerate() {
             let mut batch_results = Vec::new();
+            send_status(&format!(
+                "🔄 Executing batch {}/{} ({} tasks)...",
+                batch_idx + 1,
+                batches.len(),
+                batch.len()
+            ));
 
-            for task_id in batch {
+            for (task_idx, task_id) in batch.iter().enumerate() {
                 let task = self
                     .task_manager
                     .get(task_id)
                     .ok_or_else(|| SwarmError::Task(TaskError::UnknownTask(*task_id)))?
                     .clone();
+
+                send_status(&format!(
+                    "  ⚡ Task {}/{}: {}",
+                    task_idx + 1,
+                    batch.len(),
+                    task.name
+                ));
 
                 let agent_id = if let Some(agent_id) = task.assigned_to {
                     agent_id
@@ -396,8 +430,15 @@ impl SwarmService {
             }
 
             all_results.extend(batch_results);
+            send_status(&format!(
+                "✅ Batch {}/{} completed ({} tasks done)",
+                batch_idx + 1,
+                batches.len(),
+                all_results.len()
+            ));
 
             if batch_idx + 1 < batches.len() {
+                send_status("👥 Assigning next batch...");
                 self.assign_tasks().await?;
             }
         }
