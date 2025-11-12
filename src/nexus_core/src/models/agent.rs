@@ -84,23 +84,6 @@ impl Agent {
         self.response_format.as_ref()
     }
 
-    /// Check if a model supports json_schema response format
-    ///
-    /// According to OpenAI's documentation, json_schema is only supported by:
-    /// - gpt-4o
-    /// - gpt-4-turbo
-    /// - o1-preview
-    /// - o1-mini
-    /// Note: gpt-4o-mini and the default model (from DEFAULT_MODEL env var) only support json_object, not json_schema
-    fn model_supports_json_schema(model: &str) -> bool {
-        let model_lower = model.to_lowercase();
-        model_lower == "gpt-4o"
-            || model_lower == "gpt-4-turbo"
-            || model_lower.starts_with("o1-")
-            || model_lower.starts_with("gpt-4o-2024")
-            || model_lower.starts_with("gpt-4-turbo-2024")
-    }
-
     /// Apply this agent's configuration to a chat completion request
     ///
     /// This includes:
@@ -118,19 +101,7 @@ impl Agent {
 
         // Add response format if configured and supported by the model
         if let Some(ref format) = self.response_format {
-            match format {
-                ResponseFormat::JsonObject => {
-                    // json_object is supported by all models that support structured outputs
-                    request = request.with_response_format(format.clone());
-                }
-                ResponseFormat::JsonSchema { .. } => {
-                    // Only apply json_schema if the model supports it
-                    if Self::model_supports_json_schema(&request.model) {
-                        request = request.with_response_format(format.clone());
-                    }
-                    // Otherwise, silently omit it to avoid API errors
-                }
-            }
+            request = request.with_response_format(format.clone());
         }
         request
     }

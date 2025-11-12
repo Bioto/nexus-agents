@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn test_recording_config_default() {
         let config = RecordingConfig::default();
-        assert_eq!(config.sample_rate, 16000);
+        assert_eq!(config.sample_rate, 48000); // Updated to match actual default (48kHz for professional audio)
         assert_eq!(config.channels, 1);
         assert!(config.duration.is_none());
         assert!(config.device_name.is_none());

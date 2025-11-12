@@ -1,3 +1,4 @@
+use nexus_core::client::LLMClient;
 use nexus_core::{ChatCompletionRequest, Message, MessageContent, NexusApiService};
 use std::path::PathBuf;
 

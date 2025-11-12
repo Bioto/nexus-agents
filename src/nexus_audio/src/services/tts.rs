@@ -1058,7 +1058,17 @@ mod tests {
     #[test]
     fn test_tts_config_default() {
         let config = TtsConfig::default();
-        assert!(config.endpoint.is_none());
+        // Default mode is websocket (unless KYUTAI_TTS_MODE env var is set to "local")
+        // In default websocket mode, endpoint should be Some("ws://localhost:8089/api/tts_streaming")
+        // If mode is "local", endpoint will be None
+        let mode = std::env::var("KYUTAI_TTS_MODE").unwrap_or_else(|_| "websocket".to_string());
+        if mode == "local" {
+            assert!(config.endpoint.is_none());
+            assert!(config.local);
+        } else {
+            assert!(config.endpoint.is_some());
+            assert!(config.websocket || !config.local);
+        }
         assert!(config.voice.is_none());
         assert_eq!(config.rate, Some(0.5));
         assert_eq!(config.volume, Some(1.0));

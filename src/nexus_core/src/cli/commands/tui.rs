@@ -1,5 +1,5 @@
 use crate::agent_service::{AgentService, AgentStreamEvent};
-use crate::client::ResponsesClient;
+use crate::client::{LLMClient, ResponsesClient};
 use crate::models::{Agent, ChatHistory, ContentPart, MessageContent, MessageRole, Result};
 use crate::services::SwarmCoordinatorService;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -518,7 +518,7 @@ pub async fn run(
                                 let stream_tx_clone = stream_tx.clone();
 
                                 tokio::spawn(async move {
-                                    match client_clone.responses_completion_stream(request).await {
+                                    match client_clone.chat_stream(request).await {
                                         Ok(mut chunk_stream) => {
                                             while let Some(chunk_result) =
                                                 tokio_stream::StreamExt::next(&mut chunk_stream).await
@@ -555,7 +555,7 @@ pub async fn run(
                                 let stream_tx_clone = stream_tx.clone();
 
                                 tokio::spawn(async move {
-                                    match client_clone.responses_completion(request).await {
+                                    match client_clone.chat(request).await {
                                         Ok(resp) => {
                                             if let Some(choice) = resp.choices.first() {
                                                 if let Some(content) = &choice.message.content {
