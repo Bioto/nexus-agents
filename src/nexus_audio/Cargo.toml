@@ -15,11 +15,11 @@ tokio = { workspace = true, features = ["full"] }
 anyhow = "1.0"
 clap = { workspace = true }
 thiserror = "2.0"
-chrono = "0.4"
+chrono = "0.4.38"
 hound = "3.5"
 ctrlc = "3.4"
-log = "0.4"
-simplelog = "0.12"
+log = "0.4.22"
+simplelog = "0.12.2"
 whisper-rs = "0.15"
 reqwest = { workspace = true }
 rodio = "0.18"
