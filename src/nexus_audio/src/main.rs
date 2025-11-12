@@ -1,10 +1,23 @@
 use clap::Parser;
 use nexus_audio::{cli, Cli, Commands, Result};
-use simplelog::{CombinedLogger, Config, LevelFilter, WriteLogger};
+use simplelog::{CombinedLogger, Config, LevelFilter, WriteLogger, TermLogger, TerminalMode, ColorChoice};
 use std::fs::File;
 use std::sync::OnceLock;
+use std::env;
+use chrono;
 
 static LOG_INIT: OnceLock<String> = OnceLock::new();
+
+fn get_log_level() -> LevelFilter {
+    match env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()).as_str() {
+        "trace" => LevelFilter::Trace,
+        "debug" => LevelFilter::Debug,
+        "info" => LevelFilter::Info,
+        "warn" => LevelFilter::Warn,
+        "error" => LevelFilter::Error,
+        _ => LevelFilter::Info,
+    }
+}
 
 fn init_logging() -> String {
     LOG_INIT
@@ -20,30 +33,27 @@ fn init_logging() -> String {
             let log_file = log_dir.join(format!("nexus-audio_{}.log", timestamp));
             let log_path = log_file.to_string_lossy().to_string();
 
-            // Open log file for writing (for both logger and stderr)
+            // Open log file for writing
             let file = File::create(&log_file).expect("Failed to create log file");
-            let stderr_file = File::create(&log_file).expect("Failed to create stderr log file");
 
-            // Configure logger to write to file
-            CombinedLogger::init(vec![WriteLogger::new(
-                LevelFilter::Info,
-                Config::default(),
-                file,
-            )])
+            let console_level = get_log_level();
+            let file_level = LevelFilter::Info;
+
+            // Configure logger to write to console and file
+            CombinedLogger::init(vec![
+                TermLogger::new(
+                    console_level,
+                    Config::default(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ),
+                WriteLogger::new(
+                    file_level,
+                    Config::default(),
+                    file,
+                ),
+            ])
             .expect("Failed to initialize logger");
-
-            // Redirect stderr to log file to capture ALSA messages
-            #[cfg(target_os = "linux")]
-            {
-                use std::os::unix::io::AsRawFd;
-                let stderr_fd = stderr_file.as_raw_fd();
-                unsafe {
-                    // Duplicate the file descriptor to stderr (fd 2)
-                    libc::dup2(stderr_fd, libc::STDERR_FILENO);
-                }
-                // Prevent the file from being closed when stderr_file goes out of scope
-                std::mem::forget(stderr_file);
-            }
 
             // Print log location to stdout (not stderr) so it shows in terminal
             println!("📝 Logging to: {}", log_path);

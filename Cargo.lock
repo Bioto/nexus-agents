@@ -2936,11 +2936,14 @@ name = "nexus"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "log",
  "nexus-audio",
  "nexus-core",
  "nexus-gui",
  "nexus-screen",
+ "simplelog",
  "tokio",
 ]
 
@@ -2981,10 +2984,12 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "clap",
  "crossterm",
  "dotenvy",
  "futures",
+ "log",
  "mime",
  "mockito",
  "quick-xml 0.33.0",
@@ -2994,6 +2999,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "simplelog",
  "textwrap",
  "thiserror 1.0.69",
  "tokio",
@@ -3005,8 +3011,11 @@ dependencies = [
 name = "nexus-gui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "iced",
+ "log",
+ "simplelog",
 ]
 
 [[package]]

@@ -6,3 +6,6 @@ edition = "2021"
 [dependencies]
 iced = { version = "0.12", features = ["svg"] }
 clap = { workspace = true }
+log = "0.4.22"
+simplelog = "0.12.2"
+chrono = "0.4.38"

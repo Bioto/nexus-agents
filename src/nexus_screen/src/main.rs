@@ -1,10 +1,23 @@
 use clap::Parser;
 use nexus_screen::{Cli, Commands, Result};
-use simplelog::{CombinedLogger, Config, LevelFilter, WriteLogger};
+use simplelog::{CombinedLogger, Config, LevelFilter, WriteLogger, TermLogger, TerminalMode, ColorChoice};
 use std::fs::File;
 use std::sync::OnceLock;
+use std::env;
+use chrono;
 
 static LOG_INIT: OnceLock<String> = OnceLock::new();
+
+fn get_log_level() -> LevelFilter {
+    match env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()).as_str() {
+        "trace" => LevelFilter::Trace,
+        "debug" => LevelFilter::Debug,
+        "info" => LevelFilter::Info,
+        "warn" => LevelFilter::Warn,
+        "error" => LevelFilter::Error,
+        _ => LevelFilter::Info,
+    }
+}
 
 fn init_logging() -> String {
     LOG_INIT
@@ -23,12 +36,23 @@ fn init_logging() -> String {
             // Open log file for writing
             let file = File::create(&log_file).expect("Failed to create log file");
 
-            // Configure logger to write to file
-            CombinedLogger::init(vec![WriteLogger::new(
-                LevelFilter::Info,
-                Config::default(),
-                file,
-            )])
+            let console_level = get_log_level();
+            let file_level = LevelFilter::Info;
+
+            // Configure logger to write to console and file
+            CombinedLogger::init(vec![
+                TermLogger::new(
+                    console_level,
+                    Config::default(),
+                    TerminalMode::Mixed,
+                    ColorChoice::Auto,
+                ),
+                WriteLogger::new(
+                    file_level,
+                    Config::default(),
+                    file,
+                ),
+            ])
             .expect("Failed to initialize logger");
 
             // Print log location to stdout so it shows in terminal
