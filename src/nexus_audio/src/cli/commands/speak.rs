@@ -38,21 +38,13 @@ pub struct SpeakArgs {
     #[arg(long)]
     pub list_voices: bool,
 
-    /// Use local Python execution instead of HTTP server
-    #[arg(long)]
-    pub local: bool,
-
     /// Use WebSocket RPC mode (faster, streaming) instead of HTTP REST
     #[arg(long)]
     pub websocket: bool,
 
-    /// Kyutai TTS server endpoint URL (overrides local mode)
+    /// Kyutai TTS server endpoint URL
     #[arg(long)]
     pub endpoint: Option<String>,
-
-    /// Python command to use for local execution
-    #[arg(long)]
-    pub python: Option<String>,
 }
 
 pub async fn run_speak(args: SpeakArgs) -> Result<()> {
@@ -67,9 +59,7 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
 
         let config = TtsConfig {
             endpoint,
-            local: args.local,
             websocket: websocket_mode,
-            python_cmd: args.python,
             voice: None,
             rate: None,
             volume: None,
@@ -117,9 +107,7 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
     // Build TTS configuration (clone values since we'll use them again)
     // Determine mode: if endpoint starts with ws:// or wss://, use WebSocket mode
     let endpoint = args.endpoint.clone().or_else(|| {
-        if args.local {
-            None // Local mode - no endpoint
-        } else if args.websocket {
+        if args.websocket {
             Some("ws://localhost:8089/api/tts_streaming".to_string())
         } else {
             // Default to Moshi server (HTTP)
@@ -135,9 +123,7 @@ pub async fn run_speak(args: SpeakArgs) -> Result<()> {
 
     let config = TtsConfig {
         endpoint,
-        local: args.local && args.endpoint.is_none(), // Only local if explicitly set and no endpoint
         websocket: websocket_mode,
-        python_cmd: args.python.clone(),
         voice: args.voice.clone(),
         rate: Some(args.rate),
         volume: Some(args.volume),

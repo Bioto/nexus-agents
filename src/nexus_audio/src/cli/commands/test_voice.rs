@@ -69,10 +69,6 @@ pub struct TestVoiceArgs {
     #[arg(short = 'v', long, default_value = "1.0")]
     pub volume: f32,
 
-    /// Use local Python execution for TTS instead of HTTP server
-    #[arg(long)]
-    pub local: bool,
-
     /// Use WebSocket RPC mode (faster, streaming) instead of HTTP REST
     #[arg(long)]
     pub websocket: bool,
@@ -119,32 +115,22 @@ pub async fn run_test_voice(args: TestVoiceArgs) -> Result<()> {
     .map_err(|e| crate::error::VoiceError::Other(format!("Failed to set Ctrl+C handler: {}", e)))?;
 
     // Build TTS configuration
-    // Default to WebSocket mode for better performance (can be overridden with --endpoint or --local)
+    // Default to WebSocket mode for better performance (can be overridden with --endpoint)
     let endpoint = args.endpoint.clone().or_else(|| {
-        if args.local {
-            None
-        } else {
-            // Default to WebSocket for better performance
-            Some("ws://localhost:8089/api/tts_streaming".to_string())
-        }
+        // Default to WebSocket for better performance
+        Some("ws://localhost:8089/api/tts_streaming".to_string())
     });
 
     // Determine WebSocket mode: explicit flag, or auto-detect from endpoint URL
-    let websocket_mode = if args.local {
-        false
-    } else {
-        args.websocket
-            || endpoint
-                .as_ref()
-                .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
-                .unwrap_or(true) // Default to true (WebSocket) if no endpoint specified
-    };
+    let websocket_mode = args.websocket
+        || endpoint
+            .as_ref()
+            .map(|e| e.starts_with("ws://") || e.starts_with("wss://"))
+            .unwrap_or(true); // Default to true (WebSocket) if no endpoint specified
 
     let tts_config = TtsConfig {
         endpoint,
-        local: args.local && args.endpoint.is_none(),
         websocket: websocket_mode,
-        python_cmd: None,
         voice: args.voice.clone(),
         rate: Some(args.rate),
         volume: Some(args.volume),

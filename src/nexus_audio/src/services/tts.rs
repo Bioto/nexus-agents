@@ -6,7 +6,6 @@ use rmp_serde::{Deserializer, Serializer};
 use rodio::{Decoder, OutputStream, Sink};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_tungstenite::{
@@ -21,17 +20,12 @@ use url::Url;
 //
 // This service supports three modes:
 //
-// 1. Local Python execution:
-//    - Install Kyutai TTS: `pip install kyutai-tts` or follow Kyutai setup instructions
-//    - Set KYUTAI_TTS_MODE=local (or use --local flag)
-//    - The service will call Python directly
-//
-// 2. HTTP REST API mode:
+// 1. HTTP REST API mode:
 //    - Start a Kyutai TTS server (e.g., using Unmute framework)
 //    - Set KYUTAI_TTS_URL environment variable or use --endpoint
 //    - Default endpoint: http://localhost:8089/api/tts_streaming
 //
-// 3. WebSocket RPC mode (recommended for better performance):
+// 2. WebSocket RPC mode (recommended for better performance):
 //    - Start moshi-server: `moshi-server worker --config configs/config-tts.toml`
 //    - Set KYUTAI_TTS_MODE=websocket or use --websocket flag
 //    - Default WebSocket URL: ws://localhost:8089/api/tts_streaming
@@ -40,15 +34,11 @@ use url::Url;
 /// Configuration for text-to-speech synthesis
 #[derive(Debug, Clone)]
 pub struct TtsConfig {
-    /// Kyutai TTS server endpoint URL (None = use local Python execution)
-    /// For WebSocket mode, use ws:// or wss:// protocol
+    /// Kyutai TTS server endpoint URL
+    /// For WebSocket mode, use ws:// or wss:// protocol; for HTTP mode, use http:// or https://
     pub endpoint: Option<String>,
-    /// Use local Python execution instead of HTTP/WebSocket server
-    pub local: bool,
     /// Use WebSocket RPC mode instead of HTTP REST (faster, streaming)
     pub websocket: bool,
-    /// Python command/path (default: "python3")
-    pub python_cmd: Option<String>,
     /// Voice to use (None = default voice)
     pub voice: Option<String>,
     /// Speech rate/speed (0.0 to 1.0, where 0.5 is normal speed)
@@ -61,33 +51,18 @@ pub struct TtsConfig {
 
 impl Default for TtsConfig {
     fn default() -> Self {
-        // Check mode via environment variable
-        let mode = std::env::var("KYUTAI_TTS_MODE").unwrap_or_else(|_| "websocket".to_string()); // Default to WebSocket for better performance
-
-        let local = mode == "local";
+        let mode = std::env::var("KYUTAI_TTS_MODE").unwrap_or_else(|_| "websocket".to_string());
         let websocket = mode == "websocket" || mode == "ws";
-
-        // Default endpoint based on mode
-        let endpoint = if local {
-            None
-        } else if websocket {
-            Some(
-                std::env::var("KYUTAI_TTS_URL")
-                    .unwrap_or_else(|_| "ws://localhost:8089/api/tts_streaming".to_string()),
-            )
+        let endpoint_str = if websocket {
+            std::env::var("KYUTAI_TTS_URL")
+                .unwrap_or_else(|_| "ws://localhost:8089/api/tts_streaming".to_string())
         } else {
-            // HTTP mode
-            Some(
-                std::env::var("KYUTAI_TTS_URL")
-                    .unwrap_or_else(|_| "http://localhost:8089/api/tts_streaming".to_string()),
-            )
+            std::env::var("KYUTAI_TTS_URL")
+                .unwrap_or_else(|_| "http://localhost:8089/api/tts_streaming".to_string())
         };
-
         Self {
-            endpoint,
-            local,
+            endpoint: Some(endpoint_str),
             websocket,
-            python_cmd: None,
             voice: None,
             rate: Some(0.5),
             volume: Some(1.0),
@@ -112,10 +87,8 @@ enum TtsMessage {
 
 /// Text-to-speech service using Kyutai TTS
 pub struct TextToSpeech {
-    http_client: Option<reqwest::Client>,
-    endpoint: Option<String>,
-    python_cmd: String,
-    local_mode: bool,
+    http_client: reqwest::Client,
+    endpoint: String,
     websocket_mode: bool,
     current_sink: Arc<Mutex<Option<Sink>>>,
 }
@@ -128,39 +101,24 @@ impl TextToSpeech {
 
     /// Create a new TTS instance with configuration
     pub fn with_config(config: TtsConfig) -> Result<Self> {
-        let local_mode = config.local;
-        let websocket_mode = config.websocket && !local_mode;
-
-        let (http_client, endpoint) = if local_mode {
-            (None, None)
-        } else if websocket_mode {
-            // WebSocket mode - no HTTP client needed
-            (None, config.endpoint)
-        } else {
-            // HTTP mode
-            let endpoint = config
-                .endpoint
-                .or_else(|| std::env::var("KYUTAI_TTS_URL").ok())
-                .unwrap_or_else(|| "http://localhost:8089/api/tts_streaming".to_string());
-
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| VoiceError::Api(format!("Failed to create HTTP client: {}", e)))?;
-
-            (Some(client), Some(endpoint))
-        };
-
-        let python_cmd = config
-            .python_cmd
-            .or_else(|| std::env::var("PYTHON").ok())
-            .unwrap_or_else(|| "python3".to_string());
-
+        let websocket_mode = config.websocket;
+        let endpoint_str = config
+            .endpoint
+            .or_else(|| std::env::var("KYUTAI_TTS_URL").ok())
+            .unwrap_or_else(|| {
+                if websocket_mode {
+                    "ws://localhost:8089/api/tts_streaming".to_string()
+                } else {
+                    "http://localhost:8089/api/tts_streaming".to_string()
+                }
+            });
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| VoiceError::Api(format!("Failed to create HTTP client: {}", e)))?;
         Ok(Self {
-            http_client,
-            endpoint,
-            python_cmd,
-            local_mode,
+            http_client: client,
+            endpoint: endpoint_str,
             websocket_mode,
             current_sink: Arc::new(Mutex::new(None)),
         })
@@ -168,127 +126,17 @@ impl TextToSpeech {
 
     /// Generate speech from text using Kyutai TTS
     async fn synthesize(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
-        if self.local_mode {
-            self.synthesize_local(text, config).await
-        } else if self.websocket_mode {
+        if self.websocket_mode {
             self.synthesize_websocket(text, config).await
         } else {
             self.synthesize_http(text, config).await
         }
     }
 
-    /// Generate speech using local Python subprocess
-    async fn synthesize_local(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
-        // Create a Python script to call Kyutai TTS
-        let script = r#"
-import sys
-import json
-import base64
-from pathlib import Path
-
-try:
-    # Try to import Kyutai TTS - adjust import based on actual package
-    # This is a template - you may need to adjust based on actual Kyutai API
-    try:
-        from kyutai import TTS
-        tts = TTS()
-    except ImportError:
-        # Fallback: try other common import paths
-        try:
-            from unmute.tts import TTS
-            tts = TTS()
-        except ImportError:
-            print(json.dumps({"error": "Kyutai TTS not installed. Install with: pip install kyutai-tts"}), file=sys.stderr)
-            sys.exit(1)
-    
-    # Generate speech
-    text = sys.argv[1]
-    voice = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "None" else None
-    speed = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != "None" else 0.5
-    language = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != "None" else None
-    
-    # Generate audio (adjust API call based on actual Kyutai TTS API)
-    audio = tts.synthesize(text, voice=voice, speed=speed, language=language)
-    
-    # Output as base64 encoded WAV
-    import io
-    import wave
-    buffer = io.BytesIO()
-    with wave.open(buffer, 'wb') as wav_file:
-        wav_file.setnchannels(1)  # Mono
-        wav_file.setsampwidth(2)   # 16-bit
-        wav_file.setframerate(24000)  # 24kHz (adjust as needed)
-        wav_file.writeframes(audio.tobytes())
-    
-    print(base64.b64encode(buffer.getvalue()).decode())
-    
-except Exception as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
-    sys.exit(1)
-"#.to_string();
-
-        // Write script to temp file
-        let temp_dir = std::env::temp_dir();
-        let script_path = temp_dir.join(format!("kyutai_tts_{}.py", std::process::id()));
-        std::fs::write(&script_path, script).map_err(VoiceError::Io)?;
-
-        // Build command
-        let mut cmd = Command::new(&self.python_cmd);
-        cmd.arg(&script_path);
-        cmd.arg(text);
-        cmd.arg(config.voice.as_deref().unwrap_or("None"));
-        cmd.arg(
-            config
-                .rate
-                .map(|r| r.to_string())
-                .unwrap_or_else(|| "0.5".to_string()),
-        );
-        cmd.arg(
-            config
-                .language.as_deref()
-                .unwrap_or("None"),
-        );
-
-        // Execute and capture output
-        let output = tokio::process::Command::from(cmd)
-            .output()
-            .await
-            .map_err(|e| VoiceError::Api(format!("Failed to execute Python: {}", e)))?;
-
-        // Clean up temp script
-        let _ = std::fs::remove_file(&script_path);
-
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            return Err(VoiceError::Api(format!(
-                "Kyutai TTS Python error: {}. Make sure Kyutai TTS is installed: pip install kyutai-tts",
-                error
-            )));
-        }
-
-        // Decode base64 audio
-        let audio_b64 = String::from_utf8(output.stdout)
-            .map_err(|e| VoiceError::Api(format!("Invalid output from Python: {}", e)))?;
-
-        use base64::Engine;
-        let audio_data = base64::engine::general_purpose::STANDARD
-            .decode(audio_b64.trim())
-            .map_err(|e| VoiceError::Api(format!("Failed to decode audio: {}", e)))?;
-
-        Ok(audio_data)
-    }
-
     /// Generate speech using HTTP API
     async fn synthesize_http(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .ok_or_else(|| VoiceError::Configuration("HTTP endpoint not configured".to_string()))?;
-
-        let http_client = self
-            .http_client
-            .as_ref()
-            .ok_or_else(|| VoiceError::Configuration("HTTP client not initialized".to_string()))?;
+        let endpoint = &self.endpoint;
+        let http_client = &self.http_client;
 
         log::info!("Calling TTS endpoint: {}", endpoint);
         log::info!("Text to synthesize: {}", text);
@@ -378,10 +226,7 @@ except Exception as e:
 
     /// Generate speech using WebSocket RPC (faster, streaming)
     async fn synthesize_websocket(&self, text: &str, config: &TtsConfig) -> Result<Vec<u8>> {
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
-            VoiceError::Configuration("WebSocket endpoint not configured".to_string())
-        })?;
-
+        let endpoint = &self.endpoint;
         log::info!("Connecting to TTS WebSocket: {}", endpoint);
         log::info!("Text to synthesize: {}", text);
 
@@ -977,50 +822,39 @@ except Exception as e:
 
     /// Get list of available voices
     pub async fn list_voices(&self) -> Result<Vec<VoiceInfo>> {
-        if self.local_mode {
-            // For local mode, return empty list (voices would need to be queried from Python)
-            Ok(vec![])
+        let http_endpoint = if self.websocket_mode {
+            self.endpoint
+                .replace("ws://", "http://")
+                .replace("wss://", "https://")
         } else {
-            // HTTP mode: try to get voices from server
-            let endpoint = self.endpoint.as_ref().ok_or_else(|| {
-                VoiceError::Configuration("HTTP endpoint not configured".to_string())
+            self.endpoint.clone()
+        };
+        let voices_endpoint = http_endpoint.replace("tts_streaming", "voices");
+        let response = self.http_client
+            .get(&voices_endpoint)
+            .send()
+            .await
+            .map_err(|e| {
+                VoiceError::Api(format!(
+                    "Failed to get voices from Kyutai TTS server: {}. The server may not support the /voices endpoint.",
+                    e
+                ))
             })?;
-
-            let http_client = self.http_client.as_ref().ok_or_else(|| {
-                VoiceError::Configuration("HTTP client not initialized".to_string())
-            })?;
-
-            let voices_endpoint = endpoint.replace("/tts", "/voices");
-
-            let response = http_client
-                .get(&voices_endpoint)
-                .send()
-                .await
-                .map_err(|e| {
-                    VoiceError::Api(format!(
-                        "Failed to get voices from Kyutai TTS server: {}. The server may not support the /voices endpoint.",
-                        e
-                    ))
-                })?;
-
-            if !response.status().is_success() {
-                return Ok(vec![]);
-            }
-
-            let voices: Vec<serde_json::Value> = response
-                .json()
-                .await
-                .map_err(|e| VoiceError::Api(format!("Failed to parse voices response: {}", e)))?;
-
-            Ok(voices
-                .into_iter()
-                .map(|v| VoiceInfo {
-                    name: v["name"].as_str().unwrap_or("unknown").to_string(),
-                    language: v["language"].as_str().unwrap_or("en").to_string(),
-                    gender: v["gender"].as_str().map(|s| s.to_string()),
-                })
-                .collect())
+        if !response.status().is_success() {
+            return Ok(vec![]);
         }
+        let voices: Vec<serde_json::Value> = response
+            .json()
+            .await
+            .map_err(|e| VoiceError::Api(format!("Failed to parse voices response: {}", e)))?;
+        Ok(voices
+            .into_iter()
+            .map(|v| VoiceInfo {
+                name: v["name"].as_str().unwrap_or("unknown").to_string(),
+                language: v["language"].as_str().unwrap_or("en").to_string(),
+                gender: v["gender"].as_str().map(|s| s.to_string()),
+            })
+            .collect())
     }
 
     /// Get the current voice (not applicable for Kyutai - returns None)
@@ -1054,17 +888,10 @@ mod tests {
     #[test]
     fn test_tts_config_default() {
         let config = TtsConfig::default();
-        // Default mode is websocket (unless KYUTAI_TTS_MODE env var is set to "local")
-        // In default websocket mode, endpoint should be Some("ws://localhost:8089/api/tts_streaming")
-        // If mode is "local", endpoint will be None
+        assert!(config.endpoint.is_some());
         let mode = std::env::var("KYUTAI_TTS_MODE").unwrap_or_else(|_| "websocket".to_string());
-        if mode == "local" {
-            assert!(config.endpoint.is_none());
-            assert!(config.local);
-        } else {
-            assert!(config.endpoint.is_some());
-            assert!(config.websocket || !config.local);
-        }
+        let expected_websocket = mode == "websocket" || mode == "ws";
+        assert_eq!(config.websocket, expected_websocket);
         assert!(config.voice.is_none());
         assert_eq!(config.rate, Some(0.5));
         assert_eq!(config.volume, Some(1.0));
