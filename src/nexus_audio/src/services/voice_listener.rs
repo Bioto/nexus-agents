@@ -392,8 +392,8 @@ impl VoiceListener {
                         silence_duration += 100; // We check every 100ms
 
                         // Continue recording during short pauses
-                        if silence_duration &lt;= self.config.silence_duration_ms / 2 {
-                            speech_buffer.extend_from_slice(&amp;chunk);
+                        if silence_duration <= self.config.silence_duration_ms / 2 {
+                            speech_buffer.extend_from_slice(&chunk);
                         }
 
                         if silence_duration >= self.config.silence_duration_ms {

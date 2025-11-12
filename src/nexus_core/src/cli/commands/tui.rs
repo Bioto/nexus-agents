@@ -836,8 +836,18 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
     let max_lines = lines.len();
     let max_scroll = max_lines.saturating_sub(visible_height);
 
-    if state.scroll_offset == usize::MAX || state.auto_scroll {
+    if state.scroll_offset == usize::MAX {
         state.scroll_offset = max_scroll;
+    } else if state.auto_scroll {
+        state.scroll_offset = max_scroll;
+    } else {
+        // Clamp scroll offset to valid range first
+        state.scroll_offset = state.scroll_offset.min(max_scroll);
+
+        // Re-enable auto-scroll only if user scrolled exactly to bottom
+        if state.scroll_offset == max_scroll {
+            state.auto_scroll = true;
+        }
     }
 
     let title = if let Some(agent_name) = &state.agent_name {
@@ -1162,19 +1172,7 @@ pub async fn run_swarm(
     presence_penalty: Option<f32>,
 ) -> Result<()> {
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_swarm(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    state: &mut ChatState,
-    swarm_coordinator: &SwarmCoordinatorService,
-    stream: bool,
-    model: &str,
-    temperature: Option<f32>,
-    max_tokens: Option<u32>,
-    top_p: Option<f32>,
-    frequency_penalty: Option<f32>,
-    presence_penalty: Option<f32>,
-) -> Result<()> {
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<StreamUpdate>();
 
     #[derive(Debug)]
     enum StreamUpdate {

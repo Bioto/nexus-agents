@@ -20,13 +20,6 @@ impl MicrophoneIcon {
     /// Creates a new microphone icon element in the not recording state.
     ///
     /// The icon will fill the available space and is centered within its container.
-    pub fn new<Message: 'static>() -> Element<'static, Message> {
-        Self::with_state(RecordingState::NotRecording)
-    }
-
-    /// Creates a new microphone icon element in the not recording state.
-    ///
-    /// The icon will fill the available space and is centered within its container.
     pub fn create<Message: 'static>() -> Element<'static, Message> {
         Self::with_state(RecordingState::NotRecording)
     }

@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 use super::window_info::{WindowInfo, WindowInfoService};
 
+type InputParams = (String, String, Vec<(String, String)>);
+
 #[derive(Clone, Debug)]
 pub struct RecordingConfig {
     pub framerate: u32,
@@ -449,8 +451,6 @@ impl ScreenRecorder {
 
         Ok(monitors)
     }
-
-    type InputParams = (String, String, Vec<(String, String)>);
 
     fn get_input_format_and_url(
         monitor_index: Option<usize>,
