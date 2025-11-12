@@ -443,7 +443,6 @@ pub async fn run(
                                                 {
                                                     match event_result {
                                                         Ok(event) => {
-                                                            eprintln!("TUI: Received agent stream event: {:?}", std::mem::discriminant(&event));
                                                             match event {
                                                             AgentStreamEvent::ContentDelta(
                                                                 content,

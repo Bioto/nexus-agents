@@ -76,11 +76,8 @@ impl ResponsesClient {
             if let Some(content) = &msg.content {
                 match content {
                     MessageContent::String(text) => {
-                        // For simple text messages, use input_text
-                        message_json["content"] = serde_json::json!([{
-                            "type": "input_text",
-                            "text": text
-                        }]);
+                        // For simple text messages, use plain string content
+                        message_json["content"] = serde_json::Value::String(text.clone());
                         transformed_messages.push(message_json);
                     }
                     MessageContent::Array(parts) => {
@@ -105,10 +102,7 @@ impl ResponsesClient {
                                 let combined_text = text_parts.join(" ");
                                 transformed_messages.push(serde_json::json!({
                                     "role": "user",
-                                    "content": [{
-                                        "type": "input_text",
-                                        "text": combined_text
-                                    }]
+                                    "content": combined_text
                                 }));
                             }
                             
@@ -125,7 +119,7 @@ impl ResponsesClient {
                                     ContentPart::ImageUrl { image_url } => {
                                         Some(serde_json::json!({
                                             "type": "input_image",
-                                            "image_url": image_url
+                                            "image_url": image_url.url
                                         }))
                                     }
                                     ContentPart::Text { .. } => None, // Already handled above
@@ -137,32 +131,52 @@ impl ResponsesClient {
                                 transformed_messages.push(message_json);
                             }
                         } else {
-                            // No file, can include text normally
-                            let transformed_parts: Vec<serde_json::Value> = parts
+                            // No file, check if we have only text (can use string) or mixed content (need array)
+                            let has_images = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+                            let text_parts: Vec<String> = parts
                                 .iter()
-                                .map(|part| match part {
-                                    ContentPart::Text { text } => {
-                                        serde_json::json!({
-                                            "type": "input_text",
-                                            "text": text
-                                        })
-                                    }
-                                    ContentPart::ImageUrl { image_url } => {
-                                        serde_json::json!({
-                                            "type": "input_image",
-                                            "image_url": image_url
-                                        })
-                                    }
-                                    ContentPart::File { file_id } => {
-                                        serde_json::json!({
-                                            "type": "input_file",
-                                            "file_id": file_id
-                                        })
+                                .filter_map(|p| {
+                                    if let ContentPart::Text { text } = p {
+                                        Some(text.clone())
+                                    } else {
+                                        None
                                     }
                                 })
                                 .collect();
-                            message_json["content"] = serde_json::Value::Array(transformed_parts);
-                            transformed_messages.push(message_json);
+                            
+                            if !has_images && text_parts.len() == parts.len() {
+                                // Only text parts, use plain string
+                                let combined_text = text_parts.join(" ");
+                                message_json["content"] = serde_json::Value::String(combined_text);
+                                transformed_messages.push(message_json);
+                            } else {
+                                // Mixed content (text + images), need array format
+                                let transformed_parts: Vec<serde_json::Value> = parts
+                                    .iter()
+                                    .map(|part| match part {
+                                        ContentPart::Text { text } => {
+                                            serde_json::json!({
+                                                "type": "input_text",
+                                                "text": text
+                                            })
+                                        }
+                                        ContentPart::ImageUrl { image_url } => {
+                                            serde_json::json!({
+                                                "type": "input_image",
+                                                "image_url": image_url.url
+                                            })
+                                        }
+                                        ContentPart::File { file_id } => {
+                                            serde_json::json!({
+                                                "type": "input_file",
+                                                "file_id": file_id
+                                            })
+                                        }
+                                    })
+                                    .collect();
+                                message_json["content"] = serde_json::Value::Array(transformed_parts);
+                                transformed_messages.push(message_json);
+                            }
                         }
                     }
                 }
@@ -442,11 +456,8 @@ impl ResponsesClient {
             if let Some(content) = &msg.content {
                 match content {
                     MessageContent::String(text) => {
-                        // For simple text messages, use input_text
-                        message_json["content"] = serde_json::json!([{
-                            "type": "input_text",
-                            "text": text
-                        }]);
+                        // For simple text messages, use plain string content
+                        message_json["content"] = serde_json::Value::String(text.clone());
                         transformed_messages.push(message_json);
                     }
                     MessageContent::Array(parts) => {
@@ -471,10 +482,7 @@ impl ResponsesClient {
                                 let combined_text = text_parts.join(" ");
                                 transformed_messages.push(serde_json::json!({
                                     "role": "user",
-                                    "content": [{
-                                        "type": "input_text",
-                                        "text": combined_text
-                                    }]
+                                    "content": combined_text
                                 }));
                             }
                             
@@ -491,7 +499,7 @@ impl ResponsesClient {
                                     ContentPart::ImageUrl { image_url } => {
                                         Some(serde_json::json!({
                                             "type": "input_image",
-                                            "image_url": image_url
+                                            "image_url": image_url.url
                                         }))
                                     }
                                     ContentPart::Text { .. } => None, // Already handled above
@@ -503,32 +511,52 @@ impl ResponsesClient {
                                 transformed_messages.push(message_json);
                             }
                         } else {
-                            // No file, can include text normally
-                            let transformed_parts: Vec<serde_json::Value> = parts
+                            // No file, check if we have only text (can use string) or mixed content (need array)
+                            let has_images = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+                            let text_parts: Vec<String> = parts
                                 .iter()
-                                .map(|part| match part {
-                                    ContentPart::Text { text } => {
-                                        serde_json::json!({
-                                            "type": "input_text",
-                                            "text": text
-                                        })
-                                    }
-                                    ContentPart::ImageUrl { image_url } => {
-                                        serde_json::json!({
-                                            "type": "input_image",
-                                            "image_url": image_url
-                                        })
-                                    }
-                                    ContentPart::File { file_id } => {
-                                        serde_json::json!({
-                                            "type": "input_file",
-                                            "file_id": file_id
-                                        })
+                                .filter_map(|p| {
+                                    if let ContentPart::Text { text } = p {
+                                        Some(text.clone())
+                                    } else {
+                                        None
                                     }
                                 })
                                 .collect();
-                            message_json["content"] = serde_json::Value::Array(transformed_parts);
-                            transformed_messages.push(message_json);
+                            
+                            if !has_images && text_parts.len() == parts.len() {
+                                // Only text parts, use plain string
+                                let combined_text = text_parts.join(" ");
+                                message_json["content"] = serde_json::Value::String(combined_text);
+                                transformed_messages.push(message_json);
+                            } else {
+                                // Mixed content (text + images), need array format
+                                let transformed_parts: Vec<serde_json::Value> = parts
+                                    .iter()
+                                    .map(|part| match part {
+                                        ContentPart::Text { text } => {
+                                            serde_json::json!({
+                                                "type": "input_text",
+                                                "text": text
+                                            })
+                                        }
+                                        ContentPart::ImageUrl { image_url } => {
+                                            serde_json::json!({
+                                                "type": "input_image",
+                                                "image_url": image_url.url
+                                            })
+                                        }
+                                        ContentPart::File { file_id } => {
+                                            serde_json::json!({
+                                                "type": "input_file",
+                                                "file_id": file_id
+                                            })
+                                        }
+                                    })
+                                    .collect();
+                                message_json["content"] = serde_json::Value::Array(transformed_parts);
+                                transformed_messages.push(message_json);
+                            }
                         }
                     }
                 }
@@ -592,6 +620,7 @@ impl ResponsesClient {
             .await?;
 
         let status = response.status();
+        eprintln!("ResponsesClient: HTTP response status for stream: {}", status);
 
         if !status.is_success() {
             let error_text = response
@@ -642,10 +671,14 @@ impl ResponsesClient {
         let mut buffer = Vec::new();
 
         tokio::spawn(async move {
+            eprintln!("ResponsesClient: Starting to read bytes stream");
             let mut bytes_stream = response.bytes_stream();
+            let mut total_bytes = 0;
             while let Some(chunk_result) = bytes_stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
+                        total_bytes += chunk.len();
+                        eprintln!("ResponsesClient: Received {} bytes (total: {})", chunk.len(), total_bytes);
                         buffer.extend_from_slice(chunk.as_ref());
 
                         // Parse complete lines
@@ -663,12 +696,64 @@ impl ResponsesClient {
                                         break;
                                     }
 
+                                    println!("ResponsesClient: Line: {}", line_str);
+
                                     if line_str.starts_with("data: ") {
                                         let json_str = &line_str[6..];
+                                        eprintln!("ResponsesClient: Parsing line: {}", if json_str.len() > 200 { format!("{}...", &json_str[..200]) } else { json_str.to_string() });
                                         // Try to parse as Responses API format first
                                         if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                            // Check if this is a Responses API chunk
-                                            if response_json.get("output").is_some() {
+                                            eprintln!("ResponsesClient: Successfully parsed JSON");
+                                            
+                                            // Check if this is a response.output_text.delta event
+                                            let mut handled_delta = false;
+                                            if let Some(event_type) = response_json.get("type").and_then(|v| v.as_str()) {
+                                                if event_type == "response.output_text.delta" {
+                                                    // Handle streaming delta events
+                                                    if let Some(delta_text) = response_json.get("delta").and_then(|v| v.as_str()) {
+                                                        use crate::models::{ChatCompletionChunk, ChoiceDelta, MessageDelta, MessageRole};
+                                                        
+                                                        let delta = MessageDelta {
+                                                            role: Some(MessageRole::Assistant),
+                                                            content: Some(delta_text.to_string()),
+                                                            tool_calls: None,
+                                                        };
+                                                        
+                                                        let choice = ChoiceDelta {
+                                                            index: 0,
+                                                            delta,
+                                                            finish_reason: None,
+                                                        };
+                                                        
+                                                        // Get response ID from the event if available, or use a placeholder
+                                                        let id = response_json
+                                                            .get("item_id")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("stream")
+                                                            .to_string();
+                                                        
+                                                        // Try to get model from a previous chunk or use placeholder
+                                                        // For delta events, we might not have model info, so we'll use a placeholder
+                                                        let model = "gpt-5-nano-2025-08-07".to_string();
+                                                        
+                                                        let chunk = ChatCompletionChunk {
+                                                            id,
+                                                            object: "chat.completion.chunk".to_string(),
+                                                            created: 0,
+                                                            model,
+                                                            choices: vec![choice],
+                                                        };
+                                                        
+                                                        eprintln!("ResponsesClient: Sending delta chunk with content: '{}'", delta_text);
+                                                        let _ = tx.send(Ok(chunk));
+                                                        tokio::task::yield_now().await;
+                                                        handled_delta = true;
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Check if this is a Responses API chunk (skip if we already handled a delta)
+                                            if !handled_delta && response_json.get("output").is_some() {
                                                 // Transform Responses API chunk to ChatCompletionChunk format
                                                 use crate::models::{ChatCompletionChunk, ChoiceDelta, MessageDelta, MessageRole};
                                                 
@@ -678,27 +763,48 @@ impl ResponsesClient {
                                                 if let Some(output) = response_json.get("output").and_then(|v| v.as_array()) {
                                                     for (index, item) in output.iter().enumerate() {
                                                         if let Some(content_type) = item.get("type").and_then(|v| v.as_str()) {
-                                                            if content_type == "message" {
-                                                                if let Some(content_array) = item.get("content").and_then(|v| v.as_array()) {
-                                                                    for content_item in content_array {
-                                                                        if let Some(item_type) = content_item.get("type").and_then(|v| v.as_str()) {
-                                                                            if item_type == "output_text" {
-                                                                                if let Some(text) = content_item.get("text").and_then(|v| v.as_str()) {
-                                                                                    let delta = MessageDelta {
-                                                                                        role: Some(MessageRole::Assistant),
-                                                                                        content: Some(text.to_string()),
-                                                                                        tool_calls: None,
-                                                                                    };
-                                                                                    
-                                                                                    choices.push(ChoiceDelta {
-                                                                                        index: index as u32,
-                                                                                        delta,
-                                                                                        finish_reason: None,
-                                                                                    });
+                                                            match content_type {
+                                                                "message" => {
+                                                                    if let Some(content_array) = item.get("content").and_then(|v| v.as_array()) {
+                                                                        for content_item in content_array {
+                                                                            if let Some(item_type) = content_item.get("type").and_then(|v| v.as_str()) {
+                                                                                if item_type == "output_text" {
+                                                                                    if let Some(text) = content_item.get("text").and_then(|v| v.as_str()) {
+                                                                                        let delta = MessageDelta {
+                                                                                            role: Some(MessageRole::Assistant),
+                                                                                            content: Some(text.to_string()),
+                                                                                            tool_calls: None,
+                                                                                        };
+                                                                                        
+                                                                                        choices.push(ChoiceDelta {
+                                                                                            index: index as u32,
+                                                                                            delta,
+                                                                                            finish_reason: None,
+                                                                                        });
+                                                                                    }
                                                                                 }
                                                                             }
                                                                         }
                                                                     }
+                                                                }
+                                                                "output_text" => {
+                                                                    // Handle direct output_text items (not nested in message)
+                                                                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                                                        let delta = MessageDelta {
+                                                                            role: Some(MessageRole::Assistant),
+                                                                            content: Some(text.to_string()),
+                                                                            tool_calls: None,
+                                                                        };
+                                                                        
+                                                                        choices.push(ChoiceDelta {
+                                                                            index: index as u32,
+                                                                            delta,
+                                                                            finish_reason: None,
+                                                                        });
+                                                                    }
+                                                                }
+                                                                _ => {
+                                                                    // Unknown type, skip
                                                                 }
                                                             }
                                                         }
@@ -728,17 +834,30 @@ impl ResponsesClient {
                                                         object: "chat.completion.chunk".to_string(),
                                                         created,
                                                         model,
-                                                        choices,
+                                                        choices: choices.clone(),
                                                     };
                                                     
+                                                    eprintln!("ResponsesClient: Sending chunk with {} choices", chunk.choices.len());
+                                                    if let Some(choice) = chunk.choices.first() {
+                                                        if let Some(content) = &choice.delta.content {
+                                                            eprintln!("ResponsesClient: Chunk content: {} chars", content.len());
+                                                        }
+                                                    }
                                                     let _ = tx.send(Ok(chunk));
                                                     tokio::task::yield_now().await;
+                                                } else {
+                                                    // Debug: log when we receive a chunk but can't parse choices
+                                                    eprintln!("ResponsesClient: Received chunk with output but no choices parsed. JSON: {}", serde_json::to_string(&response_json).unwrap_or_else(|_| "failed to serialize".to_string()));
                                                 }
-                                            } else {
-                                                // Try standard format
+                                            } else if !handled_delta {
+                                                // Try standard format (skip if we already handled a delta)
+                                                eprintln!("ResponsesClient: Trying to parse as standard ChatCompletionChunk format");
                                                 if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(json_str) {
+                                                    eprintln!("ResponsesClient: Successfully parsed standard format chunk with {} choices", chunk.choices.len());
                                                     let _ = tx.send(Ok(chunk));
                                                     tokio::task::yield_now().await;
+                                                } else {
+                                                    eprintln!("ResponsesClient: Failed to parse as standard format");
                                                 }
                                             }
                                         }
@@ -749,6 +868,7 @@ impl ResponsesClient {
                         }
 
                         if found_done {
+                            eprintln!("ResponsesClient: Received [DONE] marker, ending stream");
                             break;
                         }
 
@@ -756,11 +876,13 @@ impl ResponsesClient {
                         buffer.drain(..line_start);
                     }
                     Err(e) => {
+                        eprintln!("ResponsesClient: Error reading bytes stream: {}", e);
                         let _ = tx.send(Err(Error::Network(e)));
                         break;
                     }
                 }
             }
+            eprintln!("ResponsesClient: Bytes stream ended. Total bytes received: {}", total_bytes);
         });
 
         let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);

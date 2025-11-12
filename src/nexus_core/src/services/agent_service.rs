@@ -146,13 +146,19 @@ impl AgentService {
 
             loop {
                 // Make the streaming LLM call
+                eprintln!("AgentService: Starting streaming request");
                 match client.responses_completion_stream(current_request.clone()).await {
                     Ok(mut chunk_stream) => {
+                        eprintln!("AgentService: Stream created, waiting for chunks...");
                         let mut accumulated_tool_calls = Vec::new();
                         let mut has_tool_calls = false;
                         let mut message_content = String::new();
+                        let mut chunk_count = 0;
 
+                        let mut content_delta_sent = false;
                         while let Some(chunk_result) = chunk_stream.next().await {
+                            chunk_count += 1;
+                            eprintln!("AgentService: Received chunk #{}", chunk_count);
                             match chunk_result {
                                 Ok(chunk) => {
                                     if let Some(choice) = chunk.choices.first() {
@@ -199,18 +205,33 @@ impl AgentService {
                                         if let Some(content) = &choice.delta.content {
                                             if !content.is_empty() {
                                                 message_content.push_str(content);
+                                                content_delta_sent = true;
                                                 let _ = tx.send(Ok(
                                                     AgentStreamEvent::ContentDelta(content.clone()),
                                                 ));
                                             }
                                         }
+                                    } else {
+                                        eprintln!("AgentService: Chunk has no choices");
                                     }
                                 }
                                 Err(e) => {
+                                    eprintln!("AgentService: Stream chunk error: {}", e);
                                     let _ = tx.send(Err(e));
                                     return;
                                 }
                             }
+                        }
+                        
+                        eprintln!("AgentService: Stream ended. Chunks received: {}, content_delta_sent: {}, has_tool_calls: {}, message_content len: {}", 
+                            chunk_count, content_delta_sent, has_tool_calls, message_content.len());
+                        
+                        // If we accumulated content but never sent any deltas (shouldn't happen, but safety check)
+                        if !content_delta_sent && !message_content.is_empty() && !has_tool_calls {
+                            eprintln!("AgentService: Sending accumulated content that wasn't streamed: {} chars", message_content.len());
+                            let _ = tx.send(Ok(
+                                AgentStreamEvent::ContentDelta(message_content.clone()),
+                            ));
                         }
 
                         // After stream ends, check if we have tool calls
@@ -318,6 +339,7 @@ impl AgentService {
                         }
                     }
                     Err(e) => {
+                        eprintln!("AgentService: Failed to create stream: {}", e);
                         let _ = tx.send(Err(e));
                         break;
                     }
