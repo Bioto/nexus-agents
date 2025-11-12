@@ -450,11 +450,13 @@ impl ScreenRecorder {
         Ok(monitors)
     }
 
+    type InputParams = (String, String, Vec<(String, String)>);
+
     fn get_input_format_and_url(
         monitor_index: Option<usize>,
         window_info: Option<&WindowInfo>,
         fps: u32,
-    ) -> Result<(String, String, Vec<(String, String)>)> {
+    ) -> Result<InputParams> {
         #[cfg(target_os = "linux")]
         {
             // Linux: use x11grab
@@ -935,9 +937,9 @@ impl ScreenRecorder {
 
         // Calculate expected duration for debugging
         let calculate_expected_duration = |total_frames: i64| -> f64 {
-            let duration_in_encoder_tb = total_frames as f64 / fps as f64;
             
-            duration_in_encoder_tb
+            
+            total_frames as f64 / fps as f64
         };
 
         loop {
@@ -1134,26 +1136,21 @@ impl ScreenRecorder {
                 // Try to flush any buffered packets
                 let mut flush_packet = Packet::empty();
                 let mut flushed = 0;
-                loop {
-                    match video_encoder.receive_packet(&mut flush_packet) {
-                        Ok(()) => {
-                            flush_packet.set_stream(ostream_idx);
-                            // Ensure flush packets have monotonic timestamps in stream time_base
-                            let final_stream_dts = if let Some(last) = last_dts {
-                                last + dts_increment // Increment by one frame period
-                            } else {
-                                stream_frame_pts // Shouldn't happen, but use current frame PTS
-                            };
-                            // PTS must be >= DTS, use current frame PTS
-                            let final_stream_pts = stream_frame_pts.max(final_stream_dts);
-                            flush_packet.set_pts(Some(final_stream_pts));
-                            flush_packet.set_dts(Some(final_stream_dts));
-                            last_dts = Some(final_stream_dts);
-                            flush_packet.write_interleaved(&mut octx)?;
-                            flushed += 1;
-                        }
-                        Err(_) => break,
-                    }
+                while let Ok(()) = video_encoder.receive_packet(&mut flush_packet) {
+                    flush_packet.set_stream(ostream_idx);
+                    // Ensure flush packets have monotonic timestamps in stream time_base
+                    let final_stream_dts = if let Some(last) = last_dts {
+                        last + dts_increment // Increment by one frame period
+                    } else {
+                        stream_frame_pts // Shouldn't happen, but use current frame PTS
+                    };
+                    // PTS must be >= DTS, use current frame PTS
+                    let final_stream_pts = stream_frame_pts.max(final_stream_dts);
+                    flush_packet.set_pts(Some(final_stream_pts));
+                    flush_packet.set_dts(Some(final_stream_dts));
+                    last_dts = Some(final_stream_dts);
+                    flush_packet.write_interleaved(&mut octx)?;
+                    flushed += 1;
                 }
                 if flushed > 0 && frame_num < 10 {
                     println!("Flushed {} packets after frame {}", flushed, frame_num);

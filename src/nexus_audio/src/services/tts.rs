@@ -819,7 +819,7 @@ except Exception as e:
         log::debug!("Audio decoded successfully");
 
         // Apply volume
-        let source = source.amplify(volume.max(0.0).min(1.0));
+        let source = source.amplify(volume.clamp(0.0, 1.0));
 
         // Create sink and play
         let sink = Sink::try_new(&stream_handle).map_err(|e| {
