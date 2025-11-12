@@ -28,6 +28,8 @@ textwrap = "0.16"
 futures = "0.3"
 thiserror = "1"
 quick-xml-to-json = "0.1.0"
+ratatui-explorer = "0.2.1"
+base64 = "0.22"
 
 [dev-dependencies]
 mockito = "1.3"

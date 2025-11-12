@@ -1,3 +1,4 @@
+use crate::load_env;
 use crate::models::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Error, Result,
 };
@@ -35,6 +36,8 @@ impl Client {
     /// Reads `OPENAI_API_KEY` for the API key and optionally
     /// `OPENAI_BASE_URL` for the base URL (defaults to OpenAI's URL)
     pub fn from_env() -> Result<Self> {
+        load_env();
+        
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
             Error::Configuration("OPENAI_API_KEY environment variable not set".to_string())
         })?;
@@ -72,7 +75,7 @@ impl Client {
             // Try to parse as API error
             if let Ok(api_error) = serde_json::from_str::<serde_json::Value>(&error_text) {
                 if let Some(error_obj) = api_error.get("error").and_then(|e| e.as_object()) {
-                    let api_error = serde_json::from_value::<crate::models::ApiError>(
+                    let mut api_error = serde_json::from_value::<crate::models::ApiError>(
                         serde_json::Value::Object(error_obj.clone()),
                     )
                     .unwrap_or_else(|_| crate::models::ApiError {
@@ -81,12 +84,25 @@ impl Client {
                         param: None,
                         code: None,
                     });
+                    
+                    // Enhance error message with diagnostic info
+                    let model_info = format!(" (model: {})", request.model);
+                    let url_info = format!(" (URL: {})", url);
+                    let status_info = format!(" [HTTP {}]", status);
+                    api_error.message = format!(
+                        "{}{}{}{}",
+                        api_error.message, status_info, model_info, url_info
+                    );
+                    
                     return Err(Error::Api(api_error));
                 }
             }
 
+            // Fallback error with diagnostic info
+            let model_info = format!(" (model: {})", request.model);
+            let url_info = format!(" (URL: {})", url);
             return Err(Error::Api(crate::models::ApiError {
-                message: format!("HTTP {}: {}", status, error_text),
+                message: format!("HTTP {}: {}{}{}", status, error_text, model_info, url_info),
                 error_type: Some("http_error".to_string()),
                 param: None,
                 code: Some(status.as_str().to_string()),
@@ -129,7 +145,7 @@ impl Client {
             // Try to parse as API error
             if let Ok(api_error) = serde_json::from_str::<serde_json::Value>(&error_text) {
                 if let Some(error_obj) = api_error.get("error").and_then(|e| e.as_object()) {
-                    let api_error = serde_json::from_value::<crate::models::ApiError>(
+                    let mut api_error = serde_json::from_value::<crate::models::ApiError>(
                         serde_json::Value::Object(error_obj.clone()),
                     )
                     .unwrap_or_else(|_| crate::models::ApiError {
@@ -138,12 +154,25 @@ impl Client {
                         param: None,
                         code: None,
                     });
+                    
+                    // Enhance error message with diagnostic info
+                    let model_info = format!(" (model: {})", request_with_stream.model);
+                    let url_info = format!(" (URL: {})", url);
+                    let status_info = format!(" [HTTP {}]", status);
+                    api_error.message = format!(
+                        "{}{}{}{}",
+                        api_error.message, status_info, model_info, url_info
+                    );
+                    
                     return Err(Error::Api(api_error));
                 }
             }
 
+            // Fallback error with diagnostic info
+            let model_info = format!(" (model: {})", request_with_stream.model);
+            let url_info = format!(" (URL: {})", url);
             return Err(Error::Api(crate::models::ApiError {
-                message: format!("HTTP {}: {}", status, error_text),
+                message: format!("HTTP {}: {}{}{}", status, error_text, model_info, url_info),
                 error_type: Some("http_error".to_string()),
                 param: None,
                 code: Some(status.as_str().to_string()),
@@ -239,6 +268,127 @@ impl Client {
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
+
+    /// Upload a file to the API
+    ///
+    /// Returns the file ID that can be used in chat requests
+    pub async fn upload_file(&self, file_path: &std::path::Path) -> Result<String> {
+        use std::fs;
+        use std::io::Read;
+
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| {
+                Error::Configuration("Invalid file path: missing file name".to_string())
+            })?;
+
+        let mut file = fs::File::open(file_path).map_err(|e| {
+            Error::Other(format!("Failed to open file {}: {}", file_path.display(), e))
+        })?;
+
+        let mut file_data = Vec::new();
+        file.read_to_end(&mut file_data).map_err(|e| {
+            Error::Other(format!("Failed to read file {}: {}", file_path.display(), e))
+        })?;
+
+        let url = format!("{}/files", self.base_url);
+
+        // Determine purpose based on file extension
+        let purpose = if is_image_file(file_path) {
+            "vision"
+        } else {
+            "assistants"
+        };
+
+        // Determine MIME type from extension
+        let mime_type = get_mime_type(file_path);
+
+        let form = reqwest::multipart::Form::new()
+            .text("purpose", purpose.to_string())
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(file_data)
+                    .file_name(file_name.to_string())
+                    .mime_str(&mime_type)
+                    .map_err(|_| {
+                        Error::Other(format!("Failed to set MIME type: {}", mime_type))
+                    })?,
+            );
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+
+            return Err(Error::Api(crate::models::ApiError {
+                message: format!("HTTP {}: {}", status, error_text),
+                error_type: Some("http_error".to_string()),
+                param: None,
+                code: Some(status.as_str().to_string()),
+            }));
+        }
+
+        let file_response: serde_json::Value = response.json().await?;
+        let file_id = file_response
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                Error::Other("File upload response missing 'id' field".to_string())
+            })?;
+
+        Ok(file_id.to_string())
+    }
+}
+
+/// Check if a file is an image based on its extension
+fn is_image_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext_lower = ext.to_lowercase();
+            matches!(
+                ext_lower.as_str(),
+                "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Get MIME type based on file extension
+fn get_mime_type(path: &std::path::Path) -> String {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext_lower = ext.to_lowercase();
+            match ext_lower.as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "bmp" => "image/bmp",
+                "svg" => "image/svg+xml",
+                "pdf" => "application/pdf",
+                "txt" => "text/plain",
+                "json" => "application/json",
+                "xml" => "application/xml",
+                "csv" => "text/csv",
+                _ => "application/octet-stream",
+            }
+        })
+        .unwrap_or("application/octet-stream")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -268,8 +418,9 @@ mod tests {
     #[test]
     fn test_client_request_builder() {
         let model = default_test_model();
+        let model_clone = model.clone();
         let request =
-            ChatCompletionRequest::new(model, vec![Message::user("Hello")]).with_temperature(0.7);
+            ChatCompletionRequest::new(model_clone, vec![Message::user("Hello")]).with_temperature(0.7);
 
         assert_eq!(request.model, model);
         assert_eq!(request.temperature, Some(0.7));
@@ -339,7 +490,9 @@ mod tests {
         assert_eq!(response.choices.len(), 1);
         assert_eq!(
             response.choices[0].message.content,
-            Some("Hello! How can I help you?".to_string())
+            Some(crate::models::MessageContent::String(
+                "Hello! How can I help you?".to_string()
+            ))
         );
         assert_eq!(response.choices[0].message.role, MessageRole::Assistant);
 

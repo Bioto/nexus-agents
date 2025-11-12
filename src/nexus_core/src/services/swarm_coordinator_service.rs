@@ -55,7 +55,7 @@ impl SwarmCoordinatorService {
                 .filter(|m| matches!(m.role, MessageRole::User))
                 .last()
                 .and_then(|m| m.content.as_ref())
-                .cloned()
+                .map(|c| c.extract_text())
                 .unwrap_or_default();
 
             // Execute swarm
@@ -110,7 +110,10 @@ impl SwarmCoordinatorService {
             let result = self.chat(request, status_tx).await;
             match result {
                 Ok(message) => {
-                    let content = message.content.unwrap_or_default();
+                    let content = message.content
+                        .as_ref()
+                        .map(|c| c.extract_text())
+                        .unwrap_or_default();
                     let events = vec![
                         Ok(AgentStreamEvent::ContentDelta(content)),
                         Ok(AgentStreamEvent::Done),

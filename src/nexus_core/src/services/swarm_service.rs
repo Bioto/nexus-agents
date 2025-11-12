@@ -121,6 +121,8 @@ impl SwarmService {
         // Parse structured output
         let content = response
             .content
+            .as_ref()
+            .map(|c| c.extract_text())
             .ok_or_else(|| SwarmError::Decomposition("No content in response".to_string()))?;
 
         let decomposition: TaskDecomposition = serde_json::from_str(&content).map_err(|e| {
@@ -229,6 +231,8 @@ impl SwarmService {
         let response = service.chat(chat_request).await?;
         let content = response
             .content
+            .as_ref()
+            .map(|c| c.extract_text())
             .ok_or_else(|| SwarmError::Assignment("No content in response".to_string()))?;
 
         // Parse assignments - expecting JSON with task_assignments array
@@ -409,7 +413,11 @@ impl SwarmService {
                                     .push_str(&format!("🔧 {} → ", tool_call.function.name));
                             }
                         }
-                        result_content.push_str(&response.content.unwrap_or_default());
+                        let content_text = response.content
+                            .as_ref()
+                            .map(|c| c.extract_text())
+                            .unwrap_or_default();
+                        result_content.push_str(&content_text);
 
                         let result = TaskResult {
                             task_id: *task_id,

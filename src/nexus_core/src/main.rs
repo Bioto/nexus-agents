@@ -1,10 +1,11 @@
 use clap::Parser;
 use nexus_core::cli::{run_chat, Cli, Commands};
+use nexus_core::init;
 
 #[tokio::main]
 async fn main() {
     // Load environment variables from .env file (if it exists)
-    let _ = dotenvy::dotenv();
+    init();
 
     let cli = Cli::parse();
 

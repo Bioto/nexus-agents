@@ -47,12 +47,58 @@ pub struct FunctionCallDelta {
     pub arguments: Option<String>,
 }
 
+/// Content part for multimodal messages
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    /// Text content
+    Text {
+        text: String,
+    },
+    /// Image URL (base64 encoded or URL)
+    ImageUrl {
+        image_url: ImageUrl,
+    },
+    /// File path reference
+    FilePath {
+        file_path: FilePath,
+    },
+}
+
+/// Image URL for content parts
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageUrl {
+    pub url: String,
+}
+
+/// File path for content parts
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FilePath {
+    pub file_id: String,
+}
+
+/// Message content - can be either a string or an array of content parts
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// Simple string content
+    String(String),
+    /// Array of content parts (for multimodal)
+    Array(Vec<ContentPart>),
+}
+
+impl Default for MessageContent {
+    fn default() -> Self {
+        MessageContent::String(String::new())
+    }
+}
+
 /// A message in a chat completion
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Message {
     pub role: MessageRole,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<MessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,7 +111,7 @@ impl Message {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::System,
-            content: Some(content.into()),
+            content: Some(MessageContent::String(content.into())),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -75,7 +121,17 @@ impl Message {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::User,
-            content: Some(content.into()),
+            content: Some(MessageContent::String(content.into())),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+
+    pub fn user_with_content(content: MessageContent) -> Self {
+        Self {
+            role: MessageRole::User,
+            content: Some(content),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -85,7 +141,7 @@ impl Message {
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: MessageRole::Assistant,
-            content: Some(content.into()),
+            content: Some(MessageContent::String(content.into())),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -99,7 +155,7 @@ impl Message {
     ) -> Self {
         Self {
             role: MessageRole::Tool,
-            content: Some(content.into()),
+            content: Some(MessageContent::String(content.into())),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),
@@ -113,6 +169,63 @@ impl Message {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             name: None,
+        }
+    }
+}
+
+impl MessageContent {
+    /// Create a content array with text and image
+    pub fn with_image(text: impl Into<String>, image_base64: impl Into<String>) -> Self {
+        let mut parts = Vec::new();
+        parts.push(ContentPart::Text {
+            text: text.into(),
+        });
+        parts.push(ContentPart::ImageUrl {
+            image_url: ImageUrl {
+                url: format!("data:image/png;base64,{}", image_base64.into()),
+            },
+        });
+        MessageContent::Array(parts)
+    }
+
+    /// Create a content array with text and file reference
+    pub fn with_file(text: impl Into<String>, file_id: impl Into<String>) -> Self {
+        let mut parts = Vec::new();
+        parts.push(ContentPart::Text {
+            text: text.into(),
+        });
+        parts.push(ContentPart::FilePath {
+            file_path: FilePath {
+                file_id: file_id.into(),
+            },
+        });
+        MessageContent::Array(parts)
+    }
+
+    /// Get text content if it's a simple string
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            MessageContent::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Extract text content from either string or array (concatenates all text parts)
+    pub fn extract_text(&self) -> String {
+        match self {
+            MessageContent::String(s) => s.clone(),
+            MessageContent::Array(parts) => {
+                let mut text = String::new();
+                for part in parts {
+                    if let ContentPart::Text { text: t } = part {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(t);
+                    }
+                }
+                text
+            }
         }
     }
 }
@@ -429,7 +542,10 @@ mod tests {
     fn test_message_creation() {
         let msg = Message::user("Hello");
         assert_eq!(msg.role, MessageRole::User);
-        assert_eq!(msg.content, Some("Hello".to_string()));
+        assert_eq!(
+            msg.content,
+            Some(MessageContent::String("Hello".to_string()))
+        );
     }
 
     #[test]
@@ -476,7 +592,7 @@ mod tests {
         assert_eq!(response.choices.len(), 1);
         assert_eq!(
             response.choices[0].message.content,
-            Some("Hello! How can I help you?".to_string())
+            Some(MessageContent::String("Hello! How can I help you?".to_string()))
         );
     }
 
@@ -491,12 +607,18 @@ mod tests {
         assert_eq!(history.messages[0].role, MessageRole::System);
         assert_eq!(
             history.messages[0].content,
-            Some("You are a helpful assistant.".to_string())
+            Some(MessageContent::String("You are a helpful assistant.".to_string()))
         );
         assert_eq!(history.messages[1].role, MessageRole::User);
-        assert_eq!(history.messages[1].content, Some("Hello!".to_string()));
+        assert_eq!(
+            history.messages[1].content,
+            Some(MessageContent::String("Hello!".to_string()))
+        );
         assert_eq!(history.messages[2].role, MessageRole::Assistant);
-        assert_eq!(history.messages[2].content, Some("Hi there!".to_string()));
+        assert_eq!(
+            history.messages[2].content,
+            Some(MessageContent::String("Hi there!".to_string()))
+        );
 
         let model = default_test_model();
         let request = history.to_chat_request(&model);

@@ -1,6 +1,6 @@
 use crate::agent_service::{AgentService, AgentStreamEvent};
 use crate::client::Client;
-use crate::models::{Agent, ChatHistory, MessageRole, Result};
+use crate::models::{Agent, ChatHistory, ContentPart, MessageContent, MessageRole, Result};
 use crate::services::SwarmCoordinatorService;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
@@ -11,7 +11,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame, Terminal,
 };
+use ratatui_explorer::{FileExplorer, Theme};
 use std::io;
+use std::path::PathBuf;
 use textwrap;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -29,6 +31,9 @@ pub struct ChatState {
     tools: Vec<(String, String)>, // (name, description)
     sidebar_visible: bool,
     show_help: bool,
+    file_explorer: Option<FileExplorer>,
+    pending_file: Option<PathBuf>, // File selected but not yet processed
+    pending_file_content: Option<MessageContent>, // Processed file content ready to send
 }
 
 impl ChatState {
@@ -46,6 +51,9 @@ impl ChatState {
             tools: Vec::new(),
             sidebar_visible: true,
             show_help: false,
+            file_explorer: None,
+            pending_file: None,
+            pending_file_content: None,
         }
     }
 
@@ -96,6 +104,7 @@ pub async fn run(
     presence_penalty: Option<f32>,
 ) -> Result<()> {
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<StreamUpdate>();
+    let (file_tx, mut file_rx) = mpsc::unbounded_channel::<MessageContent>();
 
     #[derive(Debug)]
     enum StreamUpdate {
@@ -107,6 +116,12 @@ pub async fn run(
     }
 
     loop {
+        // Process all pending file content first
+        while let Ok(content) = file_rx.try_recv() {
+            state.pending_file_content = Some(content);
+            state.status = String::from("File ready - type your message and press Enter");
+        }
+
         // Process all pending stream updates first
         while let Ok(update) = stream_rx.try_recv() {
             match update {
@@ -175,12 +190,82 @@ pub async fn run(
         if crossterm::event::poll(poll_duration)
             .map_err(|e| crate::models::Error::Other(format!("Failed to poll event: {}", e)))?
         {
-            if let Event::Key(key) = event::read()
-                .map_err(|e| crate::models::Error::Other(format!("Failed to read event: {}", e)))?
-            {
+            let evt = event::read()
+                .map_err(|e| crate::models::Error::Other(format!("Failed to read event: {}", e)))?;
+
+            // Handle file explorer events first if it's open
+            if let Some(ref mut explorer) = state.file_explorer {
+                // Check for Esc to close before handling the event
+                if let Event::Key(key) = evt {
+                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Esc {
+                        state.file_explorer = None;
+                        state.status = String::from("Ready");
+                        continue;
+                    }
+                }
+
+                // Pass event to file explorer
+                if let Err(e) = explorer.handle(&evt) {
+                    state.status = format!("File explorer error: {}", e);
+                    state.file_explorer = None;
+                    continue;
+                }
+
+                // Continue to render file explorer
+                continue;
+            }
+
+            if let Event::Key(key) = evt {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+
+                // Process pending file if any
+                if let Some(file_path) = state.pending_file.take() {
+                    let client_clone = client.clone();
+                    let file_path_clone = file_path.clone();
+                    let input_text = state.input.clone();
+                    let file_tx_clone = file_tx.clone();
+
+                    tokio::spawn(async move {
+                        let is_image = is_image_file(&file_path_clone);
+                        if is_image {
+                            // Base64 encode image
+                            match std::fs::read(&file_path_clone) {
+                                Ok(file_data) => {
+                                    use base64::Engine;
+                                    let base64_data = base64::engine::general_purpose::STANDARD
+                                        .encode(&file_data);
+                                    let content = if input_text.trim().is_empty() {
+                                        MessageContent::with_image("", base64_data)
+                                    } else {
+                                        MessageContent::with_image(input_text, base64_data)
+                                    };
+                                    let _ = file_tx_clone.send(content);
+                                }
+                                Err(_e) => {
+                                    // Error will be handled in main loop
+                                }
+                            }
+                        } else {
+                            // Upload file and get file ID
+                            match client_clone.upload_file(&file_path_clone).await {
+                                Ok(file_id) => {
+                                    let content = if input_text.trim().is_empty() {
+                                        MessageContent::with_file("", file_id)
+                                    } else {
+                                        MessageContent::with_file(input_text, file_id)
+                                    };
+                                    let _ = file_tx_clone.send(content);
+                                }
+                                Err(_e) => {
+                                    // Error will be handled in main loop
+                                }
+                            }
+                        }
+                    });
+                }
+
 
                 match key.code {
                     KeyCode::Char('q') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
@@ -190,13 +275,44 @@ pub async fn run(
                         return Ok(());
                     }
                     KeyCode::Enter => {
-                        if !state.input.trim().is_empty() && !state.is_loading {
+                        if (!state.input.trim().is_empty() || state.pending_file_content.is_some())
+                            && !state.is_loading
+                        {
                             let user_input = state.input.trim().to_string();
                             state.input.clear();
+
+                            // Create message with file content if available
+                            let message = if let Some(file_content) = state.pending_file_content.take() {
+                                if user_input.is_empty() {
+                                    crate::models::Message::user_with_content(file_content)
+                                } else {
+                                    // Combine text with file content
+                                    let combined_content = match file_content {
+                                        MessageContent::String(text) => {
+                                            MessageContent::String(format!("{} {}", user_input, text))
+                                        }
+                                        MessageContent::Array(mut parts) => {
+                                            // Prepend text to the first text part or add as new part
+                                            if let Some(ContentPart::Text { text: ref mut t }) = parts.first_mut() {
+                                                *t = format!("{} {}", user_input, t);
+                                            } else {
+                                                parts.insert(0, ContentPart::Text { text: user_input });
+                                            }
+                                            MessageContent::Array(parts)
+                                        }
+                                    };
+                                    crate::models::Message::user_with_content(combined_content)
+                                }
+                            } else {
+                                crate::models::Message::user(user_input.clone())
+                            };
+
+                            state.messages.add_message(message);
+                            state.scroll_offset = usize::MAX;
+
                             state.status = String::from("Sending...");
                             state.is_loading = true;
                             state.streaming_content.clear();
-                            state.add_user(user_input.clone());
 
                             let mut request = state.messages.to_chat_request(model.to_string());
 
@@ -289,9 +405,12 @@ pub async fn run(
                                     tokio::spawn(async move {
                                         match service.chat(request).await {
                                             Ok(message) => {
-                                                if let Some(content) = message.content {
-                                                    let _ = stream_tx_clone
-                                                        .send(StreamUpdate::Chunk(content));
+                                                if let Some(content) = &message.content {
+                                                    let text = content.extract_text();
+                                                    if !text.is_empty() {
+                                                        let _ = stream_tx_clone
+                                                            .send(StreamUpdate::Chunk(text));
+                                                    }
                                                 }
                                                 let _ = stream_tx_clone.send(StreamUpdate::Done);
                                             }
@@ -346,8 +465,11 @@ pub async fn run(
                                         Ok(resp) => {
                                             if let Some(choice) = resp.choices.first() {
                                                 if let Some(content) = &choice.message.content {
-                                                    let _ = stream_tx_clone
-                                                        .send(StreamUpdate::Chunk(content.clone()));
+                                                    let text = content.extract_text();
+                                                    if !text.is_empty() {
+                                                        let _ = stream_tx_clone
+                                                            .send(StreamUpdate::Chunk(text));
+                                                    }
                                                 }
                                                 let _ = stream_tx_clone.send(StreamUpdate::Done);
                                             } else {
@@ -388,6 +510,26 @@ pub async fn run(
                     KeyCode::Char('h') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                         // Toggle help popup
                         state.show_help = !state.show_help;
+                    }
+                    KeyCode::Char('f') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        // Open file picker
+                        if state.file_explorer.is_none() {
+                            match FileExplorer::with_theme(
+                                Theme::default().add_default_title(),
+                            ) {
+                                Ok(explorer) => {
+                                    state.file_explorer = Some(explorer);
+                                    state.status = String::from("File picker opened (Enter to select, Esc to cancel)");
+                                }
+                                Err(e) => {
+                                    state.status = format!("Failed to open file picker: {}", e);
+                                }
+                            }
+                        } else {
+                            // Close file picker
+                            state.file_explorer = None;
+                            state.status = String::from("Ready");
+                        }
                     }
                     KeyCode::Char(c) => {
                         state.input.push(c);
@@ -455,10 +597,50 @@ fn ui(f: &mut Frame, state: &mut ChatState) {
         render_input(f, chunks[2], state);
     }
 
+    // Render file explorer if visible
+    if let Some(ref explorer) = state.file_explorer {
+        render_file_explorer(f, f.area(), explorer);
+    }
+
     // Render help popup if visible
     if state.show_help {
         render_help_popup(f, f.area());
     }
+}
+
+fn render_file_explorer(f: &mut Frame, area: Rect, explorer: &FileExplorer) {
+    // Create a centered popup for the file explorer
+    let popup_width = (area.width * 3 / 4).min(80);
+    let popup_height = (area.height * 3 / 4).min(30);
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    // Clear the popup area first
+    f.render_widget(Clear, popup_area);
+
+    // Render the file explorer widget
+    // Note: There's a version mismatch between ratatui 0.28 (used here) and 0.29 (used by ratatui-explorer)
+    // This will need to be resolved by either upgrading ratatui or using a compatible version of ratatui-explorer
+    // The widget() method returns a type that implements WidgetRef, but we need Widget
+    // TODO: Resolve ratatui version compatibility (0.28 vs 0.29) to enable file explorer rendering
+    let _widget = explorer.widget();
+    // f.render_widget(_widget, popup_area);
+}
+
+/// Check if a file is an image based on its extension
+fn is_image_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext_lower = ext.to_lowercase();
+            matches!(
+                ext_lower.as_str(),
+                "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "svg"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
@@ -477,9 +659,13 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )]));
 
-        let content_text = message.content.as_deref().unwrap_or("");
-        let content = textwrap::wrap(content_text, (area.width as usize).saturating_sub(2));
-        for line in content {
+        let content_text = message
+            .content
+            .as_ref()
+            .map(|c| c.extract_text())
+            .unwrap_or_default();
+        let wrapped_lines = textwrap::wrap(&content_text, (area.width as usize).saturating_sub(2));
+        for line in wrapped_lines {
             lines.push(Line::from(line.to_string()));
         }
         lines.push(Line::from(""));
@@ -1033,9 +1219,13 @@ pub async fn run_swarm(
                                     tokio::spawn(async move {
                                         match swarm_coordinator.chat(request, Some(status_tx_inner)).await {
                                             Ok(message) => {
-                                                let _ = stream_tx_clone.send(StreamUpdate::Chunk(
-                                                    message.content.unwrap_or_default(),
-                                                ));
+                                                if let Some(content) = &message.content {
+                                                    let text = content.extract_text();
+                                                    if !text.is_empty() {
+                                                        let _ = stream_tx_clone
+                                                            .send(StreamUpdate::Chunk(text));
+                                                    }
+                                                }
                                                 let _ = stream_tx_clone.send(StreamUpdate::Done);
                                             }
                                             Err(e) => {

@@ -1,6 +1,7 @@
 use crate::cli::commands::tui::{self, ChatState};
 use crate::client::Client;
 use crate::factories::AgentFactory;
+use crate::load_env;
 use crate::models::Result;
 use crate::services::SwarmCoordinatorService;
 use clap::Args;
@@ -61,6 +62,9 @@ pub struct ChatArgs {
 }
 
 pub async fn run_chat(args: ChatArgs) -> Result<()> {
+    // Load environment variables from .env file (if it exists)
+    load_env();
+
     // Get API key
     let api_key = args
         .api_key
@@ -94,14 +98,11 @@ pub async fn run_chat(args: ChatArgs) -> Result<()> {
             "calculator" => (Some(AgentFactory::calculator()), false),
             "swarm" => (None, true), // Swarm mode - no agent, will create coordinator service
             _ => {
-                return Err(crate::models::Error::Configuration(format!(
-                    "Unknown agent: {}. Available agents: calculator, swarm",
-                    agent_name
-                )));
+                (Some(AgentFactory::generic_agent()), false)
             }
         }
     } else {
-        (None, false)
+        (Some(AgentFactory::generic_agent()), false)
     };
 
     // Initialize message history
