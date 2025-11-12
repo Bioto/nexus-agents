@@ -1,3 +1,3 @@
-pub mod openai;
+pub mod openai_responses;
 
-pub use openai::{Client, UploadedFile};
+pub use openai_responses::{ResponsesClient, UploadedPdf};

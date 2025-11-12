@@ -1,4 +1,4 @@
-use crate::client::Client;
+use crate::client::ResponsesClient;
 use crate::models::{Agent, ChatCompletionRequest, FunctionCall, Message, Result, ToolCall};
 use futures::StreamExt;
 use std::pin::Pin;
@@ -6,14 +6,14 @@ use tokio_stream::Stream;
 
 /// Service for handling agent interactions with tool calling support
 pub struct AgentService {
-    client: Client,
+    client: ResponsesClient,
     tool_definitions: Vec<serde_json::Value>,
     tool_registry: crate::tools::ToolRegistry,
     response_format: Option<crate::models::chat::ResponseFormat>,
 }
 
 impl AgentService {
-    pub fn new(client: &Client, agent: &Agent) -> Self {
+    pub fn new(client: &ResponsesClient, agent: &Agent) -> Self {
         Self {
             client: client.clone(),
             tool_definitions: agent.get_tool_definitions(),
@@ -40,7 +40,7 @@ impl AgentService {
 
         loop {
             // Make the LLM call
-            let response = self.client.chat_completion(request.clone()).await?;
+            let response = self.client.responses_completion(request.clone()).await?;
 
             if let Some(choice) = response.choices.first() {
                 let message = &choice.message;
@@ -93,7 +93,7 @@ impl AgentService {
                     // If any tool call had an error, stop the loop after adding the error results
                     if has_error {
                         // Make one final LLM call with the error messages
-                        let response = self.client.chat_completion(request.clone()).await?;
+                        let response = self.client.responses_completion(request.clone()).await?;
                         if let Some(choice) = response.choices.first() {
                             return Ok(choice.message.clone());
                         } else {
@@ -146,7 +146,7 @@ impl AgentService {
 
             loop {
                 // Make the streaming LLM call
-                match client.chat_completion_stream(current_request.clone()).await {
+                match client.responses_completion_stream(current_request.clone()).await {
                     Ok(mut chunk_stream) => {
                         let mut accumulated_tool_calls = Vec::new();
                         let mut has_tool_calls = false;
@@ -275,7 +275,7 @@ impl AgentService {
 
                             // If any tool had an error, make one final LLM call with the errors and then stop
                             if has_error {
-                                match client.chat_completion_stream(current_request.clone()).await {
+                                match client.responses_completion_stream(current_request.clone()).await {
                                     Ok(mut final_stream) => {
                                         while let Some(chunk_result) = final_stream.next().await {
                                             match chunk_result {
@@ -352,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_service_creation() {
-        let client = Client::new("test-key", "https://api.example.com");
+        let client = ResponsesClient::new("test-key", "https://api.example.com");
         let agent = AgentFactory::calculator();
         let service = AgentService::new(&client, &agent);
 

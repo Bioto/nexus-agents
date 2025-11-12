@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nUploading PDF file: {}", file_path.display());
 
     // Upload the file using the client
-    let uploaded_file = service.client().upload_file(&file_path).await?;
+    let uploaded_file = service.client().upload_pdf(&file_path).await?;
     println!("PDF file uploaded successfully!");
     println!("  File ID: {}", uploaded_file.file_id);
     println!("  MIME Type: {}", uploaded_file.mime_type);
@@ -108,4 +108,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
 

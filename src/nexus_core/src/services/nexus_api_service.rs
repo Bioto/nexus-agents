@@ -1,6 +1,7 @@
-use crate::client::Client;
+use crate::client::ResponsesClient;
 use crate::models::{Agent, ChatCompletionRequest, Message, Result};
 use crate::services::AgentService;
+use futures::StreamExt;
 use std::pin::Pin;
 use tokio_stream::Stream;
 
@@ -108,12 +109,12 @@ impl Default for ChatConfig {
 /// # Example
 ///
 /// ```no_run
-/// use nexus_core::{Client, NexusApiService, ChatCompletionRequest, Message};
+/// use nexus_core::{ResponsesClient, NexusApiService, ChatCompletionRequest, Message};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     // Create client
-///     let client = Client::from_env()?;
+///     let client = ResponsesClient::from_env()?;
 ///
 ///     // Create service
 ///     let service = NexusApiService::new(client);
@@ -133,11 +134,11 @@ impl Default for ChatConfig {
 /// # Example with Agent
 ///
 /// ```no_run
-/// use nexus_core::{Client, NexusApiService, Agent, ChatCompletionRequest, Message};
+/// use nexus_core::{ResponsesClient, NexusApiService, Agent, ChatCompletionRequest, Message};
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let client = Client::from_env()?;
+///     let client = ResponsesClient::from_env()?;
 ///     let service = NexusApiService::new(client);
 ///
 ///     // Create an agent with tools
@@ -161,12 +162,12 @@ impl Default for ChatConfig {
 /// }
 /// ```
 pub struct NexusApiService {
-    client: Client,
+    client: ResponsesClient,
 }
 
 impl NexusApiService {
     /// Create a new NexusApiService with the given client
-    pub fn new(client: Client) -> Self {
+    pub fn new(client: ResponsesClient) -> Self {
         Self { client }
     }
 
@@ -174,7 +175,7 @@ impl NexusApiService {
     ///
     /// Reads `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` from environment
     pub fn from_env() -> Result<Self> {
-        let client = Client::from_env()?;
+        let client = ResponsesClient::from_env()?;
         Ok(Self::new(client))
     }
 
@@ -207,7 +208,7 @@ impl NexusApiService {
     /// # }
     /// ```
     pub async fn chat(&self, request: ChatCompletionRequest) -> Result<Message> {
-        let response = self.client.chat_completion(request).await?;
+        let response = self.client.responses_completion(request).await?;
 
         response
             .choices
@@ -257,7 +258,20 @@ impl NexusApiService {
         &self,
         request: ChatCompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String>> + Send>>> {
-        self.client.chat_completion_text_stream(request).await
+        let chunk_stream = self.client.responses_completion_stream(request).await?;
+
+        let text_stream = chunk_stream.filter_map(|chunk_result| async move {
+            match chunk_result {
+                Ok(chunk) => chunk
+                    .choices
+                    .first()
+                    .and_then(|choice| choice.delta.content.clone())
+                    .map(Ok),
+                Err(e) => Some(Err(e)),
+            }
+        });
+
+        Ok(Box::pin(text_stream))
     }
 
     /// Make a chat request with an agent (supports tool calling)
@@ -382,7 +396,7 @@ impl NexusApiService {
     /// Get a reference to the underlying client
     ///
     /// This allows direct access to the client for advanced use cases
-    pub fn client(&self) -> &Client {
+    pub fn client(&self) -> &ResponsesClient {
         &self.client
     }
 
@@ -611,7 +625,7 @@ mod tests {
         });
 
         server
-            .mock("POST", "/chat/completions")
+            .mock("POST", "/responses")
             .match_header("Authorization", "Bearer test-key")
             .match_header("Content-Type", "application/json")
             .with_status(200)
@@ -623,7 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_nexus_api_service_creation() {
-        let client = Client::new("test-key", "https://api.example.com");
+        let client = ResponsesClient::new("test-key", "https://api.example.com");
         let service = NexusApiService::new(client);
         assert_eq!(service.client().base_url(), "https://api.example.com");
     }
@@ -633,7 +647,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let mock = create_success_mock(&mut server).await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let model = default_test_model();
         let request = ChatCompletionRequest::new(model, vec![Message::user("Hello!")]);
@@ -662,14 +676,14 @@ mod tests {
         });
 
         let mock = server
-            .mock("POST", "/chat/completions")
+            .mock("POST", "/responses")
             .match_header("Authorization", "Bearer test-key")
             .with_status(200)
             .with_body(response_body.to_string())
             .create_async()
             .await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let request = ChatCompletionRequest::new(model, vec![Message::user("Hello!")]);
 
@@ -694,7 +708,7 @@ mod tests {
         );
 
         let mock = server
-            .mock("POST", "/chat/completions")
+            .mock("POST", "/responses")
             .match_header("Authorization", "Bearer test-key")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
@@ -702,7 +716,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let request = ChatCompletionRequest::new(model, vec![Message::user("Hello")]);
 
@@ -725,7 +739,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let mock = create_success_mock(&mut server).await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let agent = AgentFactory::calculator();
         let model = default_test_model();
@@ -749,7 +763,7 @@ mod tests {
         );
 
         let mock = server
-            .mock("POST", "/chat/completions")
+            .mock("POST", "/responses")
             .match_header("Authorization", "Bearer test-key")
             .with_status(200)
             .with_header("content-type", "text/event-stream")
@@ -757,7 +771,7 @@ mod tests {
             .create_async()
             .await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let agent = AgentFactory::calculator();
         let request = ChatCompletionRequest::new(model, vec![Message::user("What is 2 + 2?")]);
@@ -781,7 +795,7 @@ mod tests {
 
     #[test]
     fn test_service_has_client_access() {
-        let client = Client::new("test-key", "https://api.example.com");
+        let client = ResponsesClient::new("test-key", "https://api.example.com");
         let service = NexusApiService::new(client);
         assert_eq!(service.client().base_url(), "https://api.example.com");
     }
@@ -838,7 +852,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let mock = create_success_mock(&mut server).await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let model = default_test_model();
         let config = ChatConfig::new(model.clone())
@@ -861,7 +875,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let mock = create_success_mock(&mut server).await;
 
-        let client = Client::new("test-key", server.url());
+        let client = ResponsesClient::new("test-key", server.url());
         let service = NexusApiService::new(client);
         let agent = AgentFactory::calculator();
         let model = default_test_model();

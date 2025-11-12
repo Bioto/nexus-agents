@@ -1,5 +1,5 @@
 use crate::cli::commands::tui::{self, ChatState};
-use crate::client::Client;
+use crate::client::ResponsesClient;
 use crate::factories::AgentFactory;
 use crate::load_env;
 use crate::models::Result;
@@ -90,7 +90,7 @@ pub async fn run_chat(args: ChatArgs) -> Result<()> {
     };
 
     // Create client
-    let client = Client::new(api_key, base_url);
+    let client = ResponsesClient::new(api_key, base_url);
 
     // Load agent if specified
     let (agent, is_swarm) = if let Some(agent_name) = &args.agent {

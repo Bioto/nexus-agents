@@ -1,4 +1,4 @@
-use crate::client::Client;
+use crate::client::ResponsesClient;
 use crate::factories::AgentFactory;
 use crate::models::{
     agent::AgentStore,
@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, Mutex};
 /// Service that coordinates swarm execution and handles follow-up questions
 #[derive(Clone)]
 pub struct SwarmCoordinatorService {
-    client: Client,
+    client: ResponsesClient,
     _agent_store: Arc<AgentStore>,
     swarm_service: Arc<Mutex<SwarmService>>,
     coordinator_agent: crate::models::Agent,
@@ -20,7 +20,7 @@ pub struct SwarmCoordinatorService {
 
 impl SwarmCoordinatorService {
     /// Create a new swarm coordinator service
-    pub fn new(client: Client, agent_store: AgentStore) -> Self {
+    pub fn new(client: ResponsesClient, agent_store: AgentStore) -> Self {
         let swarm_service = Arc::new(Mutex::new(SwarmService::new(
             client.clone(),
             agent_store.clone(),

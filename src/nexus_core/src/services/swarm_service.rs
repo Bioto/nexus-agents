@@ -1,4 +1,4 @@
-use crate::client::Client;
+use crate::client::ResponsesClient;
 use crate::factories::AgentFactory;
 use crate::models::task_manager::TaskManager;
 use crate::models::{
@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 /// Service for orchestrating multi-agent swarm task execution
 pub struct SwarmService {
-    client: Client,
+    client: ResponsesClient,
     agent_store: AgentStore,
     task_manager: TaskManager,
     completion_request: ChatCompletionRequest,
@@ -55,7 +55,7 @@ fn default_model_for_swarm() -> String {
 
 impl SwarmService {
     /// Create a new swarm service
-    pub fn new(client: Client, agent_store: AgentStore) -> Self {
+    pub fn new(client: ResponsesClient, agent_store: AgentStore) -> Self {
         Self {
             client,
             agent_store,
