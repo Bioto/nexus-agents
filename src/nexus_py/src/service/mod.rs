@@ -1,9 +1,9 @@
 pub mod docker;
 
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::io::{BufRead, BufReader, Write};
-use std::fs;
 use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,10 @@ impl std::fmt::Display for PythonExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PythonExecutionError::UvNotFound => {
-                write!(f, "uv is not installed or not in PATH. Please install uv first.")
+                write!(
+                    f,
+                    "uv is not installed or not in PATH. Please install uv first."
+                )
             }
             PythonExecutionError::ScriptNotFound(path) => {
                 write!(f, "Script not found: {}", path)
@@ -51,7 +54,10 @@ impl PythonExecutionService {
 
     /// Execute a Python script using uv run
     /// The script can include inline dependencies like: # uv: dependencies = ["package1", "package2"]
-    pub fn execute_script(&self, script_path: &Path) -> Result<ExecutionResult, PythonExecutionError> {
+    pub fn execute_script(
+        &self,
+        script_path: &Path,
+    ) -> Result<ExecutionResult, PythonExecutionError> {
         // Check if script exists
         if !script_path.exists() {
             return Err(PythonExecutionError::ScriptNotFound(
@@ -60,11 +66,7 @@ impl PythonExecutionService {
         }
 
         // Check if uv is available
-        if Command::new("uv")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if Command::new("uv").arg("--version").output().is_err() {
             return Err(PythonExecutionError::UvNotFound);
         }
 
@@ -80,12 +82,14 @@ impl PythonExecutionService {
         })?;
 
         // Capture stdout and stderr
-        let stdout = child.stdout.take().ok_or_else(|| {
-            PythonExecutionError::IoError("Failed to capture stdout".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            PythonExecutionError::IoError("Failed to capture stderr".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| PythonExecutionError::IoError("Failed to capture stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| PythonExecutionError::IoError("Failed to capture stderr".to_string()))?;
 
         // Read stdout
         let stdout_reader = BufReader::new(stdout);
@@ -126,11 +130,7 @@ impl PythonExecutionService {
     /// A temporary file is created, executed, and automatically cleaned up
     pub fn execute_code(&self, code: &str) -> Result<ExecutionResult, PythonExecutionError> {
         // Check if uv is available
-        if Command::new("uv")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if Command::new("uv").arg("--version").output().is_err() {
             return Err(PythonExecutionError::UvNotFound);
         }
 
@@ -138,11 +138,11 @@ impl PythonExecutionService {
         let mut temp_file = NamedTempFile::with_suffix(".py").map_err(|e| {
             PythonExecutionError::IoError(format!("Failed to create temporary file: {}", e))
         })?;
-        
+
         temp_file.write_all(code.as_bytes()).map_err(|e| {
             PythonExecutionError::IoError(format!("Failed to write code to temporary file: {}", e))
         })?;
-        
+
         temp_file.flush().map_err(|e| {
             PythonExecutionError::IoError(format!("Failed to flush temporary file: {}", e))
         })?;
@@ -169,11 +169,7 @@ impl PythonExecutionService {
         on_output: impl FnMut(&str) -> Result<(), Box<dyn std::error::Error>>,
     ) -> Result<ExecutionResult, PythonExecutionError> {
         // Check if uv is available
-        if Command::new("uv")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if Command::new("uv").arg("--version").output().is_err() {
             return Err(PythonExecutionError::UvNotFound);
         }
 
@@ -181,11 +177,11 @@ impl PythonExecutionService {
         let mut temp_file = NamedTempFile::with_suffix(".py").map_err(|e| {
             PythonExecutionError::IoError(format!("Failed to create temporary file: {}", e))
         })?;
-        
+
         temp_file.write_all(code.as_bytes()).map_err(|e| {
             PythonExecutionError::IoError(format!("Failed to write code to temporary file: {}", e))
         })?;
-        
+
         temp_file.flush().map_err(|e| {
             PythonExecutionError::IoError(format!("Failed to flush temporary file: {}", e))
         })?;
@@ -193,7 +189,7 @@ impl PythonExecutionService {
         // Convert to TempPath to keep file alive during execution
         let temp_path = temp_file.into_temp_path();
         let script_path = temp_path.as_ref();
-        
+
         // Set execute permissions on the temporary file
         #[cfg(unix)]
         {
@@ -232,11 +228,7 @@ impl PythonExecutionService {
         }
 
         // Check if uv is available
-        if Command::new("uv")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if Command::new("uv").arg("--version").output().is_err() {
             return Err(PythonExecutionError::UvNotFound);
         }
 
@@ -252,12 +244,14 @@ impl PythonExecutionService {
         })?;
 
         // Capture stdout and stderr
-        let stdout = child.stdout.take().ok_or_else(|| {
-            PythonExecutionError::IoError("Failed to capture stdout".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            PythonExecutionError::IoError("Failed to capture stderr".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| PythonExecutionError::IoError("Failed to capture stdout".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| PythonExecutionError::IoError("Failed to capture stderr".to_string()))?;
 
         // Read and stream stdout
         let stdout_reader = BufReader::new(stdout);
@@ -267,9 +261,8 @@ impl PythonExecutionService {
             let line = line.map_err(|e| {
                 PythonExecutionError::IoError(format!("Failed to read stdout: {}", e))
             })?;
-            on_output(&line).map_err(|e| {
-                PythonExecutionError::IoError(format!("Callback error: {}", e))
-            })?;
+            on_output(&line)
+                .map_err(|e| PythonExecutionError::IoError(format!("Callback error: {}", e)))?;
             stdout_lines.push(line);
         }
 
@@ -299,4 +292,3 @@ impl PythonExecutionService {
         })
     }
 }
-

@@ -733,19 +733,19 @@ mod tests {
     #[test]
     fn test_message_content_with_file() {
         let content = MessageContent::with_file("What's in this file?", "file-123");
-        
+
         // Verify structure
         match &content {
             MessageContent::Array(parts) => {
                 assert_eq!(parts.len(), 2);
-                
+
                 // Check text part
                 if let ContentPart::Text { text } = &parts[0] {
                     assert_eq!(text, "What's in this file?");
                 } else {
                     panic!("Expected first part to be Text");
                 }
-                
+
                 // Check file part
                 if let ContentPart::File { file_id } = &parts[1] {
                     assert_eq!(file_id, "file-123");
@@ -755,25 +755,28 @@ mod tests {
             }
             _ => panic!("Expected Array content"),
         }
-        
+
         // Verify JSON serialization - should NOT contain mime_type
         let json = serde_json::to_string(&content).unwrap();
         assert!(json.contains("\"type\":\"text\""));
         assert!(json.contains("What's in this file?"));
         assert!(json.contains("\"type\":\"input_file\""));
         assert!(json.contains("\"file_id\":\"file-123\""));
-        assert!(!json.contains("mime_type"), "MIME type should not be in file reference");
+        assert!(
+            !json.contains("mime_type"),
+            "MIME type should not be in file reference"
+        );
     }
 
     #[test]
     fn test_message_content_with_file_empty_text() {
         let content = MessageContent::with_file("", "file-456");
-        
+
         // When text is empty, it should only have the file part
         match &content {
             MessageContent::Array(parts) => {
                 assert_eq!(parts.len(), 1);
-                
+
                 // Check file part
                 if let ContentPart::File { file_id } = &parts[0] {
                     assert_eq!(file_id, "file-456");

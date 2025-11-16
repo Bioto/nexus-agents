@@ -936,11 +936,8 @@ impl ScreenRecorder {
         );
 
         // Calculate expected duration for debugging
-        let calculate_expected_duration = |total_frames: i64| -> f64 {
-            
-            
-            total_frames as f64 / fps as f64
-        };
+        let calculate_expected_duration =
+            |total_frames: i64| -> f64 { total_frames as f64 / fps as f64 };
 
         loop {
             let loop_start = Instant::now();

@@ -68,17 +68,16 @@ impl ResponsesClient {
 #[async_trait]
 impl LLMClient for ResponsesClient {
     /// Send a non-streaming chat completion request using Responses API
-    async fn chat(
-        &self,
-        request: ChatCompletionRequest,
-    ) -> Result<ChatCompletionResponse> {
+    async fn chat(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
         let url = format!("{}/responses", self.base_url);
 
         // Transform messages for Responses API format
-        let transformed_messages = ResponsesClient::transform_messages_for_responses_api(&request.messages);
+        let transformed_messages =
+            ResponsesClient::transform_messages_for_responses_api(&request.messages);
 
         // Build JSON request body for Responses API
-        let request_body = ResponsesClient::build_request_body(&request, transformed_messages, false)?;
+        let request_body =
+            ResponsesClient::build_request_body(&request, transformed_messages, false)?;
 
         let response = self
             .http_client
@@ -97,15 +96,23 @@ impl LLMClient for ResponsesClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            return Err(ResponsesClient::handle_http_error(status, error_text, &request.model, &url));
+            return Err(ResponsesClient::handle_http_error(
+                status,
+                error_text,
+                &request.model,
+                &url,
+            ));
         }
 
         // Parse Responses API response and transform to ChatCompletionResponse format
         let response_json: serde_json::Value = response.json().await?;
-        
-        println!("[ResponsesClient] Raw API response: {}", serde_json::to_string_pretty(&response_json).unwrap_or_default());
+
+        println!(
+            "[ResponsesClient] Raw API response: {}",
+            serde_json::to_string_pretty(&response_json).unwrap_or_default()
+        );
         debug!("[ResponsesClient] Raw API response: {:?}", response_json);
-        
+
         // Transform Responses API response to ChatCompletionResponse format
         // Responses API uses different field names and structure
         let id = response_json
@@ -113,17 +120,17 @@ impl LLMClient for ResponsesClient {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        
+
         let model = response_json
             .get("model")
             .and_then(|v| v.as_str())
             .unwrap_or(&request.model)
             .to_string();
-        
+
         // Extract choices from the response
         use crate::models::Choice;
         let mut choices = Vec::new();
-        
+
         println!("[ResponsesClient] Looking for 'output' field in response...");
         // Try to extract from "output" array (Responses API format)
         if let Some(output) = response_json.get("output") {
@@ -131,25 +138,32 @@ impl LLMClient for ResponsesClient {
             if let Some(output_array) = output.as_array() {
                 let mut tool_calls = Vec::new();
                 let mut message_text = String::new();
-                
+
                 for (_index, item) in output_array.iter().enumerate() {
                     if let Some(content_type) = item.get("type").and_then(|v| v.as_str()) {
                         match content_type {
                             "message" => {
                                 // Message type has content array with output_text items
-                                if let Some(content_array) = item.get("content").and_then(|v| v.as_array()) {
+                                if let Some(content_array) =
+                                    item.get("content").and_then(|v| v.as_array())
+                                {
                                     let mut text_parts = Vec::new();
-                                    
+
                                     for content_item in content_array {
-                                        if let Some(item_type) = content_item.get("type").and_then(|v| v.as_str()) {
+                                        if let Some(item_type) =
+                                            content_item.get("type").and_then(|v| v.as_str())
+                                        {
                                             if item_type == "output_text" {
-                                                if let Some(text) = content_item.get("text").and_then(|v| v.as_str()) {
+                                                if let Some(text) = content_item
+                                                    .get("text")
+                                                    .and_then(|v| v.as_str())
+                                                {
                                                     text_parts.push(text);
                                                 }
                                             }
                                         }
                                     }
-                                    
+
                                     if !text_parts.is_empty() {
                                         message_text = text_parts.join("");
                                     }
@@ -171,10 +185,14 @@ impl LLMClient for ResponsesClient {
                                 // Handle function_call type - extract tool call information
                                 println!("[ResponsesClient] Found function_call in output");
                                 if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
-                                    if let Some(arguments) = item.get("arguments").and_then(|v| v.as_str()) {
-                                        if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
+                                    if let Some(arguments) =
+                                        item.get("arguments").and_then(|v| v.as_str())
+                                    {
+                                        if let Some(call_id) =
+                                            item.get("call_id").and_then(|v| v.as_str())
+                                        {
                                             println!("[ResponsesClient] Function call: name={}, call_id={}", name, call_id);
-                                            
+
                                             use crate::models::{FunctionCall, ToolCall};
                                             tool_calls.push(ToolCall {
                                                 id: call_id.to_string(),
@@ -198,26 +216,36 @@ impl LLMClient for ResponsesClient {
                         }
                     }
                 }
-                
+
                 // Create message with tool calls if we have any, otherwise use text
                 use crate::models::{Message, MessageContent, MessageRole};
                 if !tool_calls.is_empty() {
-                    println!("[ResponsesClient] Creating message with {} tool calls", tool_calls.len());
+                    println!(
+                        "[ResponsesClient] Creating message with {} tool calls",
+                        tool_calls.len()
+                    );
                     let message = Message {
                         role: MessageRole::Assistant,
-                        content: if message_text.is_empty() { None } else { Some(MessageContent::String(message_text)) },
+                        content: if message_text.is_empty() {
+                            None
+                        } else {
+                            Some(MessageContent::String(message_text))
+                        },
                         tool_calls: Some(tool_calls),
                         tool_call_id: None,
                         name: None,
                     };
-                    
+
                     choices.push(Choice {
                         index: 0,
                         message,
                         finish_reason: Some("tool_calls".to_string()),
                     });
                 } else if !message_text.is_empty() {
-                    println!("[ResponsesClient] Creating message with text: {}", message_text);
+                    println!(
+                        "[ResponsesClient] Creating message with text: {}",
+                        message_text
+                    );
                     let message = Message {
                         role: MessageRole::Assistant,
                         content: Some(MessageContent::String(message_text)),
@@ -225,7 +253,7 @@ impl LLMClient for ResponsesClient {
                         tool_call_id: None,
                         name: None,
                     };
-                    
+
                     choices.push(Choice {
                         index: 0,
                         message,
@@ -237,15 +265,23 @@ impl LLMClient for ResponsesClient {
                 }
             }
         }
-        
+
         // If no choices from output, try standard "choices" format
         if choices.is_empty() {
             println!("[ResponsesClient] No choices from 'output', trying 'choices' field...");
             if let Some(choices_array) = response_json.get("choices").and_then(|v| v.as_array()) {
-                println!("[ResponsesClient] Found 'choices' array with {} items", choices_array.len());
-                if let Ok(parsed_choices) = serde_json::from_value::<Vec<Choice>>(serde_json::Value::Array(choices_array.clone())) {
+                println!(
+                    "[ResponsesClient] Found 'choices' array with {} items",
+                    choices_array.len()
+                );
+                if let Ok(parsed_choices) = serde_json::from_value::<Vec<Choice>>(
+                    serde_json::Value::Array(choices_array.clone()),
+                ) {
                     choices = parsed_choices;
-                    println!("[ResponsesClient] Parsed {} choices from 'choices' array", choices.len());
+                    println!(
+                        "[ResponsesClient] Parsed {} choices from 'choices' array",
+                        choices.len()
+                    );
                 } else {
                     println!("[ResponsesClient] Failed to parse 'choices' array");
                 }
@@ -253,7 +289,7 @@ impl LLMClient for ResponsesClient {
                 println!("[ResponsesClient] No 'choices' field found");
             }
         }
-        
+
         // If still no choices, try to extract text from top-level fields
         if choices.is_empty() {
             println!("[ResponsesClient] Still no choices, trying top-level 'text' field...");
@@ -261,7 +297,7 @@ impl LLMClient for ResponsesClient {
             if let Some(text) = response_json.get("text").and_then(|v| v.as_str()) {
                 println!("[ResponsesClient] Found top-level 'text' field: {}", text);
                 let message = ResponsesClient::create_message_from_text(text.to_string());
-                
+
                 choices.push(Choice {
                     index: 0,
                     message,
@@ -271,14 +307,14 @@ impl LLMClient for ResponsesClient {
                 println!("[ResponsesClient] No top-level 'text' field found");
             }
         }
-        
+
         println!("[ResponsesClient] Final choices count: {}", choices.len());
-        
+
         // Extract usage if present
         let usage = response_json
             .get("usage")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
-        
+
         // Create ChatCompletionResponse with transformed data
         let completion_response = ChatCompletionResponse {
             id,
@@ -291,7 +327,7 @@ impl LLMClient for ResponsesClient {
             choices,
             usage,
         };
-        
+
         Ok(completion_response)
     }
 
@@ -301,12 +337,14 @@ impl LLMClient for ResponsesClient {
         request: ChatCompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk>> + Send>>> {
         let url = format!("{}/responses", self.base_url);
-        
+
         // Transform messages for Responses API format
-        let transformed_messages = ResponsesClient::transform_messages_for_responses_api(&request.messages);
-        
+        let transformed_messages =
+            ResponsesClient::transform_messages_for_responses_api(&request.messages);
+
         // Build JSON request body for Responses API
-        let request_body = ResponsesClient::build_request_body(&request, transformed_messages, true)?;
+        let request_body =
+            ResponsesClient::build_request_body(&request, transformed_messages, true)?;
 
         let response = self
             .http_client
@@ -325,7 +363,12 @@ impl LLMClient for ResponsesClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
 
-            return Err(ResponsesClient::handle_http_error(status, error_text, &request.model, &url));
+            return Err(ResponsesClient::handle_http_error(
+                status,
+                error_text,
+                &request.model,
+                &url,
+            ));
         }
 
         use tokio::sync::mpsc;
@@ -357,78 +400,114 @@ impl LLMClient for ResponsesClient {
 
                                     if let Some(json_str) = line_str.strip_prefix("data: ") {
                                         // Try to parse as Responses API format first
-                                        if let Ok(response_json) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                            
+                                        if let Ok(response_json) =
+                                            serde_json::from_str::<serde_json::Value>(json_str)
+                                        {
                                             // Check if this is a response.output_text.delta event
                                             let mut handled_delta = false;
-                                            if let Some(event_type) = response_json.get("type").and_then(|v| v.as_str()) {
+                                            if let Some(event_type) =
+                                                response_json.get("type").and_then(|v| v.as_str())
+                                            {
                                                 if event_type == "response.output_text.delta" {
                                                     // Handle streaming delta events
-                                                    if let Some(delta_text) = response_json.get("delta").and_then(|v| v.as_str()) {
-                                                        use crate::models::{ChatCompletionChunk, ChoiceDelta, MessageDelta, MessageRole};
-                                                        
+                                                    if let Some(delta_text) = response_json
+                                                        .get("delta")
+                                                        .and_then(|v| v.as_str())
+                                                    {
+                                                        use crate::models::{
+                                                            ChatCompletionChunk, ChoiceDelta,
+                                                            MessageDelta, MessageRole,
+                                                        };
+
                                                         let delta = MessageDelta {
                                                             role: Some(MessageRole::Assistant),
                                                             content: Some(delta_text.to_string()),
                                                             tool_calls: None,
                                                         };
-                                                        
+
                                                         let choice = ChoiceDelta {
                                                             index: 0,
                                                             delta,
                                                             finish_reason: None,
                                                         };
-                                                        
+
                                                         // Get response ID from the event if available, or use a placeholder
                                                         let id = response_json
                                                             .get("item_id")
                                                             .and_then(|v| v.as_str())
                                                             .unwrap_or("stream")
                                                             .to_string();
-                                                        
+
                                                         // Try to get model from a previous chunk or use placeholder
                                                         // For delta events, we might not have model info, so we'll use a placeholder
-                                                        let model = "gpt-5-nano-2025-08-07".to_string();
-                                                        
+                                                        let model =
+                                                            "gpt-5-nano-2025-08-07".to_string();
+
                                                         let chunk = ChatCompletionChunk {
                                                             id,
-                                                            object: "chat.completion.chunk".to_string(),
+                                                            object: "chat.completion.chunk"
+                                                                .to_string(),
                                                             created: 0,
                                                             model,
                                                             choices: vec![choice],
                                                         };
-                                                        
+
                                                         let _ = tx.send(Ok(chunk));
                                                         tokio::task::yield_now().await;
                                                         handled_delta = true;
                                                     }
                                                 }
                                             }
-                                            
+
                                             // Check if this is a Responses API chunk (skip if we already handled a delta)
-                                            if !handled_delta && response_json.get("output").is_some() {
+                                            if !handled_delta
+                                                && response_json.get("output").is_some()
+                                            {
                                                 // Transform Responses API chunk to ChatCompletionChunk format
-                                                use crate::models::{ChatCompletionChunk, ChoiceDelta, MessageDelta, MessageRole};
-                                                
+                                                use crate::models::{
+                                                    ChatCompletionChunk, ChoiceDelta, MessageDelta,
+                                                    MessageRole,
+                                                };
+
                                                 let mut choices = Vec::new();
-                                                
+
                                                 // Extract from output array
-                                                if let Some(output) = response_json.get("output").and_then(|v| v.as_array()) {
+                                                if let Some(output) = response_json
+                                                    .get("output")
+                                                    .and_then(|v| v.as_array())
+                                                {
                                                     for (index, item) in output.iter().enumerate() {
-                                                        if let Some(content_type) = item.get("type").and_then(|v| v.as_str()) {
+                                                        if let Some(content_type) = item
+                                                            .get("type")
+                                                            .and_then(|v| v.as_str())
+                                                        {
                                                             match content_type {
                                                                 "message" => {
-                                                                    if let Some(content_array) = item.get("content").and_then(|v| v.as_array()) {
-                                                                        for content_item in content_array {
-                                                                            if let Some(item_type) = content_item.get("type").and_then(|v| v.as_str()) {
-                                                                                if item_type == "output_text" {
+                                                                    if let Some(content_array) =
+                                                                        item.get("content")
+                                                                            .and_then(|v| {
+                                                                                v.as_array()
+                                                                            })
+                                                                    {
+                                                                        for content_item in
+                                                                            content_array
+                                                                        {
+                                                                            if let Some(item_type) =
+                                                                                content_item
+                                                                                    .get("type")
+                                                                                    .and_then(|v| {
+                                                                                        v.as_str()
+                                                                                    })
+                                                                            {
+                                                                                if item_type
+                                                                                    == "output_text"
+                                                                                {
                                                                                     if let Some(text) = content_item.get("text").and_then(|v| v.as_str()) {
                                                                                         let delta = MessageDelta {
                                                                                             role: Some(MessageRole::Assistant),
                                                                                             content: Some(text.to_string()),
                                                                                             tool_calls: None,
                                                                                         };
-                                                                                        
                                                                                         choices.push(ChoiceDelta {
                                                                                             index: index as u32,
                                                                                             delta,
@@ -442,13 +521,16 @@ impl LLMClient for ResponsesClient {
                                                                 }
                                                                 "output_text" => {
                                                                     // Handle direct output_text items (not nested in message)
-                                                                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                                                    if let Some(text) = item
+                                                                        .get("text")
+                                                                        .and_then(|v| v.as_str())
+                                                                    {
                                                                         let delta = MessageDelta {
                                                                             role: Some(MessageRole::Assistant),
                                                                             content: Some(text.to_string()),
                                                                             tool_calls: None,
                                                                         };
-                                                                        
+
                                                                         choices.push(ChoiceDelta {
                                                                             index: index as u32,
                                                                             delta,
@@ -463,25 +545,25 @@ impl LLMClient for ResponsesClient {
                                                         }
                                                     }
                                                 }
-                                                
+
                                                 if !choices.is_empty() {
                                                     let id = response_json
                                                         .get("id")
                                                         .and_then(|v| v.as_str())
                                                         .unwrap_or("")
                                                         .to_string();
-                                                    
+
                                                     let model = response_json
                                                         .get("model")
                                                         .and_then(|v| v.as_str())
                                                         .unwrap_or("")
                                                         .to_string();
-                                                    
+
                                                     let created = response_json
                                                         .get("created_at")
                                                         .and_then(|v| v.as_u64())
                                                         .unwrap_or(0);
-                                                    
+
                                                     let chunk = ChatCompletionChunk {
                                                         id,
                                                         object: "chat.completion.chunk".to_string(),
@@ -489,13 +571,17 @@ impl LLMClient for ResponsesClient {
                                                         model,
                                                         choices: choices.clone(),
                                                     };
-                                                    
+
                                                     let _ = tx.send(Ok(chunk));
                                                     tokio::task::yield_now().await;
                                                 }
                                             } else if !handled_delta {
                                                 // Try standard format (skip if we already handled a delta)
-                                                if let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(json_str) {
+                                                if let Ok(chunk) =
+                                                    serde_json::from_str::<ChatCompletionChunk>(
+                                                        json_str,
+                                                    )
+                                                {
                                                     let _ = tx.send(Ok(chunk));
                                                     tokio::task::yield_now().await;
                                                 }
@@ -556,7 +642,7 @@ impl LLMClient for ResponsesClient {
                 e
             ))
         })?;
-        
+
         let mut file_data = Vec::new();
         file.read_to_end(&mut file_data).map_err(|e| {
             Error::Other(format!(
@@ -646,10 +732,15 @@ impl ResponsesClient {
                         // Tool messages need to be sent as "user" role with just content
                         // The Responses API should automatically match tool results to tool calls by order
                         // Remove tool_call_id and name as they're not accepted on user messages
-                        let content_text = msg.content.as_ref()
+                        let content_text = msg
+                            .content
+                            .as_ref()
                             .map(|c| c.extract_text())
                             .unwrap_or_default();
-                        println!("[ResponsesClient] Tool message content text: {}", content_text);
+                        println!(
+                            "[ResponsesClient] Tool message content text: {}",
+                            content_text
+                        );
                         // Change role to "user" since Responses API doesn't support "tool" role
                         message_json["role"] = serde_json::Value::String("user".to_string());
                         message_json["content"] = serde_json::Value::String(content_text);
@@ -703,12 +794,10 @@ impl ResponsesClient {
                             let file_parts: Vec<serde_json::Value> = parts
                                 .iter()
                                 .filter_map(|part| match part {
-                                    ContentPart::File { file_id } => {
-                                        Some(serde_json::json!({
-                                            "type": "input_file",
-                                            "file_id": file_id
-                                        }))
-                                    }
+                                    ContentPart::File { file_id } => Some(serde_json::json!({
+                                        "type": "input_file",
+                                        "file_id": file_id
+                                    })),
                                     ContentPart::ImageUrl { image_url } => {
                                         Some(serde_json::json!({
                                             "type": "input_image",
@@ -725,7 +814,9 @@ impl ResponsesClient {
                             }
                         } else {
                             // No file, check if we have only text (can use string) or mixed content (need array)
-                            let has_images = parts.iter().any(|p| matches!(p, ContentPart::ImageUrl { .. }));
+                            let has_images = parts
+                                .iter()
+                                .any(|p| matches!(p, ContentPart::ImageUrl { .. }));
                             let text_parts: Vec<String> = parts
                                 .iter()
                                 .filter_map(|p| {
@@ -767,7 +858,8 @@ impl ResponsesClient {
                                         }
                                     })
                                     .collect();
-                                message_json["content"] = serde_json::Value::Array(transformed_parts);
+                                message_json["content"] =
+                                    serde_json::Value::Array(transformed_parts);
                                 transformed_messages.push(message_json);
                             }
                         }
@@ -787,7 +879,7 @@ impl ResponsesClient {
     }
 
     /// Transform tools from OpenAI format to Responses API format
-    /// 
+    ///
     /// OpenAI format: { "type": "function", "function": { "name": "...", "description": "...", "parameters": {...} } }
     /// Responses API format: { "type": "function", "name": "...", "description": "...", "parameters": {...} }
     fn transform_tools_for_responses_api(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
@@ -797,21 +889,25 @@ impl ResponsesClient {
                 // Extract the function definition from OpenAI format
                 if let Some(function_obj) = tool.get("function") {
                     // Get the type from the tool (usually "function")
-                    let tool_type = tool.get("type")
+                    let tool_type = tool
+                        .get("type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("function");
-                    
+
                     // Build the Responses API format with type, name, description, and parameters
                     let mut transformed = serde_json::Map::new();
-                    transformed.insert("type".to_string(), serde_json::Value::String(tool_type.to_string()));
-                    
+                    transformed.insert(
+                        "type".to_string(),
+                        serde_json::Value::String(tool_type.to_string()),
+                    );
+
                     // Copy all fields from function_obj (name, description, parameters)
                     if let Some(function_map) = function_obj.as_object() {
                         for (key, value) in function_map {
                             transformed.insert(key.clone(), value.clone());
                         }
                     }
-                    
+
                     Some(serde_json::Value::Object(transformed))
                 } else if tool.get("name").is_some() && tool.get("type").is_some() {
                     // Already in Responses API format, use as-is
@@ -830,15 +926,21 @@ impl ResponsesClient {
         transformed_messages: Vec<serde_json::Value>,
         stream: bool,
     ) -> Result<serde_json::Value> {
-        println!("[ResponsesClient] Building request body with {} messages", transformed_messages.len());
+        println!(
+            "[ResponsesClient] Building request body with {} messages",
+            transformed_messages.len()
+        );
         for (i, msg) in transformed_messages.iter().enumerate() {
-            println!("[ResponsesClient] Message {}: role={}, has_content={}", 
-                i, 
-                msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            println!(
+                "[ResponsesClient] Message {}: role={}, has_content={}",
+                i,
+                msg.get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown"),
                 msg.get("content").is_some()
             );
         }
-        
+
         let mut request_body = serde_json::json!({
             "model": request.model,
             "input": transformed_messages,
@@ -947,4 +1049,3 @@ impl ResponsesClient {
         }
     }
 }
-

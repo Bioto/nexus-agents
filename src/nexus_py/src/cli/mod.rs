@@ -25,8 +25,7 @@ pub enum Commands {
 }
 
 // Re-export command handlers for convenience
-pub use commands::shell::run_shell;
-pub use commands::py03::run_py03;
-pub use commands::exec_code::run_exec_code;
 pub use commands::docker_exec::run_docker_exec;
-
+pub use commands::exec_code::run_exec_code;
+pub use commands::py03::run_py03;
+pub use commands::shell::run_shell;

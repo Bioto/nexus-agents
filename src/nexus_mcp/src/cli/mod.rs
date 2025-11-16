@@ -23,4 +23,3 @@ pub enum Commands {
 // Re-export command handlers for convenience
 pub use commands::generate_code::run_generate_code;
 pub use commands::shell::run_shell;
-

@@ -39,14 +39,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Use the default PDF file in the project root
         let project_root = std::env::current_dir()?;
         let default_pdf = project_root.join("sample-local-pdf.pdf");
-        
+
         if !default_pdf.exists() {
             return Err(format!(
                 "Default PDF file not found: {}\nPlease provide a PDF file path as an argument.",
                 default_pdf.display()
-            ).into());
+            )
+            .into());
         }
-        
+
         println!("\nUsing default PDF file: {}", default_pdf.display());
         default_pdf
     };
@@ -59,7 +60,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verify it's a PDF file
     if let Some(ext) = file_path.extension() {
         if ext.to_str().unwrap_or("").to_lowercase() != "pdf" {
-            eprintln!("Warning: File does not have .pdf extension: {}", file_path.display());
+            eprintln!(
+                "Warning: File does not have .pdf extension: {}",
+                file_path.display()
+            );
         }
     } else {
         eprintln!("Warning: File has no extension: {}", file_path.display());
@@ -74,8 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  MIME Type: {}", uploaded_file.mime_type);
 
     // Get the model from environment or use a default
-    let model = std::env::var("DEFAULT_MODEL")
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let model = std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
     println!("\nCreating chat completion request with uploaded PDF...");
     println!("Model: {}", model);
@@ -109,5 +112,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-

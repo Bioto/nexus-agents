@@ -138,7 +138,7 @@ pub async fn run(
             state.pending_file_content = Some(content);
             state.status = String::from("File ready - type your message and press Enter");
         }
-        
+
         // If we're processing a file but haven't received a response, show a more informative status
         if state.pending_file.is_some() && state.pending_file_content.is_none() {
             // Keep showing processing status - it will update when file_rx receives the result
@@ -224,7 +224,7 @@ pub async fn run(
                         state.status = String::from("Ready");
                         continue;
                     }
-                    
+
                     // Check for Enter key to select a file
                     if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
                         // Get the currently selected file/directory
@@ -259,7 +259,8 @@ pub async fn run(
 
             // Process pending file if any (do this before key handling)
             if let Some(file_path) = state.pending_file.take() {
-                let file_name = file_path.file_name()
+                let file_name = file_path
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("file")
                     .to_string();
@@ -272,14 +273,14 @@ pub async fn run(
                 tokio::spawn(async move {
                     let is_image = is_image_file(&file_path_clone);
                     let is_pdf = is_pdf_file(&file_path_clone);
-                    
+
                     if is_image {
                         // Base64 encode image
                         match std::fs::read(&file_path_clone) {
                             Ok(file_data) => {
                                 use base64::Engine;
-                                let base64_data = base64::engine::general_purpose::STANDARD
-                                    .encode(&file_data);
+                                let base64_data =
+                                    base64::engine::general_purpose::STANDARD.encode(&file_data);
                                 let content = if input_text.trim().is_empty() {
                                     MessageContent::with_image("", base64_data)
                                 } else {
@@ -320,11 +321,17 @@ pub async fn run(
                         // Read file contents as text
                         match std::fs::read_to_string(&file_path_clone) {
                             Ok(file_contents) => {
-                                let wrapped_contents = format!("<attached_file filename=\"{}\">{}</attached_file>", file_name, file_contents);
+                                let wrapped_contents = format!(
+                                    "<attached_file filename=\"{}\">{}</attached_file>",
+                                    file_name, file_contents
+                                );
                                 let content = if input_text.trim().is_empty() {
                                     MessageContent::String(wrapped_contents)
                                 } else {
-                                    MessageContent::String(format!("{}\n\n{}", input_text, wrapped_contents))
+                                    MessageContent::String(format!(
+                                        "{}\n\n{}",
+                                        input_text, wrapped_contents
+                                    ))
                                 };
                                 let _ = file_tx_clone.send(content);
                             }
@@ -358,10 +365,11 @@ pub async fn run(
                     KeyCode::Enter => {
                         // Don't allow sending if a file is still being processed
                         if state.pending_file.is_some() {
-                            state.status = String::from("Please wait for file upload to complete...");
+                            state.status =
+                                String::from("Please wait for file upload to complete...");
                             continue;
                         }
-                        
+
                         if (!state.input.trim().is_empty() || state.pending_file_content.is_some())
                             && !state.is_loading
                         {
@@ -477,7 +485,7 @@ pub async fn run(
                                                                     .send(StreamUpdate::Done);
                                                             }
                                                         }
-                                                        },
+                                                        }
                                                         Err(e) => {
                                                             let _ = stream_tx_clone.send(
                                                                 StreamUpdate::Error(e.to_string()),
@@ -505,7 +513,7 @@ pub async fn run(
                                                 if let Some(content) = &message.content {
                                                     let text = content.extract_text();
                                                     if !text.is_empty() {
-                                                    let _ = stream_tx_clone
+                                                        let _ = stream_tx_clone
                                                             .send(StreamUpdate::Chunk(text));
                                                     }
                                                 }
@@ -528,14 +536,21 @@ pub async fn run(
                                     match client_clone.chat_stream(request).await {
                                         Ok(mut chunk_stream) => {
                                             while let Some(chunk_result) =
-                                                tokio_stream::StreamExt::next(&mut chunk_stream).await
+                                                tokio_stream::StreamExt::next(&mut chunk_stream)
+                                                    .await
                                             {
                                                 match chunk_result {
                                                     Ok(chunk) => {
-                                                        if let Some(choice) = chunk.choices.first() {
-                                                            if let Some(content) = &choice.delta.content {
-                                                                let _ = stream_tx_clone
-                                                                    .send(StreamUpdate::Chunk(content.clone()));
+                                                        if let Some(choice) = chunk.choices.first()
+                                                        {
+                                                            if let Some(content) =
+                                                                &choice.delta.content
+                                                            {
+                                                                let _ = stream_tx_clone.send(
+                                                                    StreamUpdate::Chunk(
+                                                                        content.clone(),
+                                                                    ),
+                                                                );
                                                             }
                                                         }
                                                     }
@@ -747,18 +762,20 @@ fn is_pdf_file(path: &std::path::Path) -> bool {
 fn replace_attached_file_with_name(text: &str) -> String {
     let mut result = String::new();
     let mut remaining = text;
-    
+
     while let Some(start_idx) = remaining.find("<attached_file filename=\"") {
         // Add text before the tag
         result.push_str(&remaining[..start_idx]);
-        
+
         // Find the end of the filename attribute
         let filename_start = start_idx + "<attached_file filename=\"".len();
         if let Some(filename_end) = remaining[filename_start..].find('"') {
             let filename = &remaining[filename_start..filename_start + filename_end];
-            
+
             // Find the closing tag
-            if let Some(close_idx) = remaining[filename_start + filename_end..].find("</attached_file>") {
+            if let Some(close_idx) =
+                remaining[filename_start + filename_end..].find("</attached_file>")
+            {
                 let tag_end = filename_start + filename_end + close_idx + "</attached_file>".len();
                 // Replace the entire tag with just the filename
                 result.push_str(&format!("[Attached file: {}]", filename));
@@ -774,7 +791,7 @@ fn replace_attached_file_with_name(text: &str) -> String {
             break;
         }
     }
-    
+
     // Add remaining text
     result.push_str(remaining);
     result
@@ -817,10 +834,7 @@ fn render_messages(f: &mut Frame, area: Rect, state: &mut ChatState) {
         )]));
 
         let display_streaming = replace_attached_file_with_name(&state.streaming_content);
-        let content = textwrap::wrap(
-            &display_streaming,
-            (area.width as usize).saturating_sub(2),
-        );
+        let content = textwrap::wrap(&display_streaming, (area.width as usize).saturating_sub(2));
         for line in content {
             lines.push(Line::from(line.to_string()));
         }
@@ -961,10 +975,7 @@ fn render_help_popup(f: &mut Frame, area: Rect) {
                 .bg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from(vec![Span::styled(
-            "",
-            Style::default().bg(Color::Black),
-        )]),
+        Line::from(vec![Span::styled("", Style::default().bg(Color::Black))]),
         Line::from(vec![
             Span::styled(
                 "Ctrl+Q / Esc",
@@ -1056,10 +1067,7 @@ fn render_help_popup(f: &mut Frame, area: Rect) {
                 Style::default().bg(Color::Black).fg(Color::White),
             ),
         ]),
-        Line::from(vec![Span::styled(
-            "",
-            Style::default().bg(Color::Black),
-        )]),
+        Line::from(vec![Span::styled("", Style::default().bg(Color::Black))]),
         Line::from(vec![Span::styled(
             "Press Ctrl+H to close",
             Style::default()
@@ -1159,7 +1167,6 @@ pub async fn run_swarm(
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
 ) -> Result<()> {
-
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<StreamUpdate>();
 
     #[derive(Debug)]

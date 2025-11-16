@@ -1,8 +1,8 @@
 use clap::Args;
+use nexus_core::client::ResponsesClient;
 use nexus_core::factories::AgentFactory;
 use nexus_core::load_env;
 use nexus_core::models::{Message, Result};
-use nexus_core::client::ResponsesClient;
 use nexus_core::services::AgentService;
 use std::path::PathBuf;
 
@@ -68,14 +68,16 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
 
     // Get model - use DEFAULT_MODEL env var if model is the default fallback
     let model = if args.model == "gpt-5-nano-2025-08-07" {
-        std::env::var("DEFAULT_MODEL")
-            .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
+        std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
     } else {
         args.model
     };
 
     println!("[test-python] Creating client and agent...");
-    println!("[test-python] Servers directory: {}", args.servers_dir.display());
+    println!(
+        "[test-python] Servers directory: {}",
+        args.servers_dir.display()
+    );
     println!("[test-python] Model: {}", model);
 
     // Create client
@@ -88,10 +90,8 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
     let service = AgentService::new(&client, &agent);
 
     // Create request
-    let mut request = nexus_core::models::ChatCompletionRequest::new(
-        model,
-        vec![Message::user(&args.prompt)],
-    );
+    let mut request =
+        nexus_core::models::ChatCompletionRequest::new(model, vec![Message::user(&args.prompt)]);
 
     if let Some(temp) = args.temperature {
         request = request.with_temperature(temp);
@@ -115,4 +115,3 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
 
     Ok(())
 }
-

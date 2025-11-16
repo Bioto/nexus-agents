@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod service;
 
-pub use cli::{Cli, Commands, run_shell, run_py03, run_exec_code, run_docker_exec};
-pub use service::{PythonExecutionService, ExecutionResult, PythonExecutionError};
-pub use service::docker::{DockerService, DockerConfig, DockerError};
-
+pub use cli::{run_docker_exec, run_exec_code, run_py03, run_shell, Cli, Commands};
+pub use service::docker::{DockerConfig, DockerError, DockerService};
+pub use service::{ExecutionResult, PythonExecutionError, PythonExecutionService};

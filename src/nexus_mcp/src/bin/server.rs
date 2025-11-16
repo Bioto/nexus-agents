@@ -1,14 +1,13 @@
 use clap::Parser;
 use nexus_mcp::server::NexusMcpServer;
+use rmcp::serve_server;
 use rmcp::transport::{
     stdio,
     streamable_http_server::{
-        session::local::LocalSessionManager,
-        tower::StreamableHttpService,
+        session::local::LocalSessionManager, tower::StreamableHttpService,
         StreamableHttpServerConfig,
     },
 };
-use rmcp::serve_server;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -54,9 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         "http" => {
             eprintln!("Using streamable HTTP transport");
-            let bind_addr: SocketAddr = args.bind.parse()
+            let bind_addr: SocketAddr = args
+                .bind
+                .parse()
                 .map_err(|e| format!("Invalid bind address '{}': {}", args.bind, e))?;
-            
+
             eprintln!("Binding HTTP server to {} (path: {})", bind_addr, args.path);
 
             let service: StreamableHttpService<NexusMcpServer, LocalSessionManager> =
@@ -72,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let router = axum::Router::new().nest_service(&args.path, service);
             let tcp_listener = tokio::net::TcpListener::bind(bind_addr).await?;
             let ct = CancellationToken::new();
-            
+
             eprintln!("HTTP server started. Waiting for connections...");
             eprintln!("Endpoint: http://{}{}", bind_addr, args.path);
 
@@ -91,7 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await?;
         }
         _ => {
-            eprintln!("[ERROR] Invalid transport type: {}. Use 'stdio' or 'http'", args.transport);
+            eprintln!(
+                "[ERROR] Invalid transport type: {}. Use 'stdio' or 'http'",
+                args.transport
+            );
             return Err(format!("Invalid transport type: {}", args.transport).into());
         }
     }
@@ -99,4 +103,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[DEBUG] Server ended");
     Ok(())
 }
-

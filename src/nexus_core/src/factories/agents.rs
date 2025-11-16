@@ -115,10 +115,11 @@ impl AgentFactory {
         let registry = ToolRegistry::new().register(Box::new(python_exec));
 
         let servers_path_str = servers_path.to_string_lossy();
-        let workspace_root_str = servers_path.parent()
+        let workspace_root_str = servers_path
+            .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
-        
+
         let system_prompt = format!(
             "You are an MCP Agent with access to MCP server tools via Python code execution.\n\n\
             You have access to MCP tools in the directory: {}\n\n\

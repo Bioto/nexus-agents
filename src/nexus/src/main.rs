@@ -1,21 +1,26 @@
 mod cli;
 
+use chrono;
 use clap::Parser;
 use cli::{Cli, Commands};
 use nexus_audio::{self, Commands as AudioCommands};
 use nexus_core::{self, Commands as CoreCommands};
 use nexus_gui::{self, Commands as GuiCommands};
 use nexus_screen::{self, Commands as ScreenCommands};
-use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, ColorChoice, WriteLogger};
+use simplelog::{
+    ColorChoice, CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger,
+};
+use std::env;
 use std::fs::File;
 use std::sync::OnceLock;
-use std::env;
-use chrono;
 
 static LOG_INIT: OnceLock<String> = OnceLock::new();
 
 fn get_log_level() -> LevelFilter {
-    match env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()).as_str() {
+    match env::var("RUST_LOG")
+        .unwrap_or_else(|_| "info".to_string())
+        .as_str()
+    {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
         "info" => LevelFilter::Info,
@@ -53,11 +58,7 @@ fn init_logging() -> String {
                     TerminalMode::Mixed,
                     ColorChoice::Auto,
                 ),
-                WriteLogger::new(
-                    file_level,
-                    Config::default(),
-                    file,
-                ),
+                WriteLogger::new(file_level, Config::default(), file),
             ])
             .expect("Failed to initialize logger");
 
@@ -95,16 +96,12 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         },
-        Commands::McpAgent(args) => {
-            cli::commands::mcp_agent::run_mcp_agent(args)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-        }
-        Commands::TestPython(args) => {
-            cli::commands::test_python::run_test_python(args)
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-        }
+        Commands::McpAgent(args) => cli::commands::mcp_agent::run_mcp_agent(args)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        Commands::TestPython(args) => cli::commands::test_python::run_test_python(args)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     }
 
     Ok(())

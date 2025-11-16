@@ -429,9 +429,7 @@ impl VoiceListener {
                                                 log::warn!("Transcription queue full");
                                             }
                                             mpsc::TrySendError::Disconnected(_) => {
-                                                log::error!(
-                                                    "Transcription thread disconnected"
-                                                );
+                                                log::error!("Transcription thread disconnected");
                                                 break;
                                             }
                                         }
@@ -441,7 +439,9 @@ impl VoiceListener {
                                         );
                                     }
                                 } else {
-                                    log::warn!("transcription_tx is None - transcription not initialized?");
+                                    log::warn!(
+                                        "transcription_tx is None - transcription not initialized?"
+                                    );
                                 }
                             }
 

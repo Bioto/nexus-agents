@@ -1,19 +1,17 @@
+use crate::codegen::CodeGenerator;
 use rmcp::{
     handler::server::{
-        router::tool::ToolRouter,
         router::prompt::PromptRouter,
-        ServerHandler,
+        router::tool::ToolRouter,
         wrapper::{Json, Parameters},
+        ServerHandler,
     },
     model::*,
-    ErrorData as McpError,
-    tool, tool_router, prompt, prompt_router,
-    schemars,
+    prompt, prompt_router, schemars, tool, tool_router, ErrorData as McpError,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::codegen::CodeGenerator;
 
 /// MCP Server with tools, resources, and prompts for testing
 #[derive(Clone)]
@@ -77,15 +75,20 @@ impl NexusMcpServer {
     }
 
     /// Generate code API tool - generates Python code API for all MCP tools
-    #[tool(description = "Generates Python code API files in directory structure (servers/nexus-mcp-server/) following the Anthropic code execution pattern. Returns the path where files were generated.")]
+    #[tool(
+        description = "Generates Python code API files in directory structure (servers/nexus-mcp-server/) following the Anthropic code execution pattern. Returns the path where files were generated."
+    )]
     async fn generate_code_api(
         &self,
         params: Parameters<GenerateCodeApiParams>,
     ) -> Result<CallToolResult, McpError> {
-        let server_url = params.0.server_url.unwrap_or_else(|| "http://127.0.0.1:8000".to_string());
+        let server_url = params
+            .0
+            .server_url
+            .unwrap_or_else(|| "http://127.0.0.1:8000".to_string());
         let output_dir = params.0.output_dir.unwrap_or_else(|| "servers".to_string());
         let generator = CodeGenerator::new(server_url);
-        
+
         let output_path = std::path::Path::new(&output_dir);
         match generator.generate_code_files(output_path).await {
             Ok(_) => {
@@ -126,7 +129,10 @@ impl NexusMcpServer {
     }
 
     /// Code review prompt
-    #[prompt(name = "code_review", description = "A prompt template for code review")]
+    #[prompt(
+        name = "code_review",
+        description = "A prompt template for code review"
+    )]
     async fn code_review_prompt(
         &self,
         params: Parameters<CodeReviewParams>,
@@ -222,16 +228,12 @@ impl ServerHandler for NexusMcpServer {
             Ok(InitializeResult {
                 protocol_version: ProtocolVersion::V_2024_11_05,
                 capabilities: ServerCapabilities {
-                    tools: Some(ToolsCapability {
-                        list_changed: None,
-                    }),
+                    tools: Some(ToolsCapability { list_changed: None }),
                     resources: Some(ResourcesCapability {
                         subscribe: None,
                         list_changed: None,
                     }),
-                    prompts: Some(PromptsCapability {
-                        list_changed: None,
-                    }),
+                    prompts: Some(PromptsCapability { list_changed: None }),
                     ..Default::default()
                 },
                 server_info: Implementation {
@@ -278,11 +280,8 @@ impl ServerHandler for NexusMcpServer {
         let tool_router = self.tool_router.clone();
         let server = self.clone();
         async move {
-            let tool_call_context = rmcp::handler::server::tool::ToolCallContext::new(
-                &server,
-                request,
-                context,
-            );
+            let tool_call_context =
+                rmcp::handler::server::tool::ToolCallContext::new(&server, request, context);
             tool_router.call(tool_call_context).await
         }
     }
@@ -328,7 +327,10 @@ impl ServerHandler for NexusMcpServer {
     ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let prompts = self.prompt_router.list_all();
         let prompt_count = prompts.len();
-        eprintln!("[DEBUG] list_prompts called, returning {} prompts", prompt_count);
+        eprintln!(
+            "[DEBUG] list_prompts called, returning {} prompts",
+            prompt_count
+        );
         async move {
             Ok(ListPromptsResult {
                 prompts,
@@ -416,4 +418,3 @@ impl ServerHandler for NexusMcpServer {
         }
     }
 }
-

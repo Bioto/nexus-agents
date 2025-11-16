@@ -1,8 +1,8 @@
 use clap::Args;
+use nexus_core::client::ResponsesClient;
 use nexus_core::factories::AgentFactory;
 use nexus_core::load_env;
 use nexus_core::models::Result;
-use nexus_core::client::ResponsesClient;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -79,8 +79,7 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
 
     // Get model - use DEFAULT_MODEL env var if model is the default fallback
     let model = if args.model == "gpt-5-nano-2025-08-07" {
-        std::env::var("DEFAULT_MODEL")
-            .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
+        std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string())
     } else {
         args.model
     };
@@ -91,10 +90,9 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
     // Create MCP agent
     let agent = AgentFactory::mcp_agent(&args.servers_dir);
 
-
     // Use the chat TUI with our custom agent
-    use nexus_core::cli::commands::tui::{self, ChatState};
     use crossterm::terminal;
+    use nexus_core::cli::commands::tui::{self, ChatState};
     use ratatui::{backend::CrosstermBackend, Terminal};
     use std::io;
 
@@ -112,16 +110,18 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
     state.set_tools(tools);
 
     // Setup terminal
-    terminal::enable_raw_mode()
-        .map_err(|e| nexus_core::models::Error::Other(format!("Failed to enable raw mode: {}", e)))?;
+    terminal::enable_raw_mode().map_err(|e| {
+        nexus_core::models::Error::Other(format!("Failed to enable raw mode: {}", e))
+    })?;
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, terminal::EnterAlternateScreen).map_err(|e| {
         nexus_core::models::Error::Other(format!("Failed to enter alternate screen: {}", e))
     })?;
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)
-        .map_err(|e| nexus_core::models::Error::Other(format!("Failed to create terminal: {}", e)))?;
+    let mut terminal = Terminal::new(backend).map_err(|e| {
+        nexus_core::models::Error::Other(format!("Failed to create terminal: {}", e))
+    })?;
 
     let temperature = args.temperature;
     let max_tokens = args.max_tokens;
@@ -151,4 +151,3 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
 
     result
 }
-

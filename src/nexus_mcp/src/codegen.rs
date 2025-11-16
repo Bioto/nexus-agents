@@ -67,7 +67,9 @@ impl CodeGenerator {
             .json(&init_request)
             .send()
             .await
-            .map_err(|e| CodegenError::HttpError(format!("Failed to connect to MCP server: {}", e)))?;
+            .map_err(|e| {
+                CodegenError::HttpError(format!("Failed to connect to MCP server: {}", e))
+            })?;
 
         if !init_response.status().is_success() {
             return Err(CodegenError::HttpError(format!(
@@ -84,10 +86,9 @@ impl CodeGenerator {
             .map(|s| s.to_string());
 
         // Parse SSE format response
-        let init_text = init_response
-            .text()
-            .await
-            .map_err(|e| CodegenError::ParseError(format!("Failed to read init response: {}", e)))?;
+        let init_text = init_response.text().await.map_err(|e| {
+            CodegenError::ParseError(format!("Failed to read init response: {}", e))
+        })?;
 
         let init_json = self.parse_sse_response(&init_text)?;
 
@@ -115,7 +116,10 @@ impl CodeGenerator {
             initialized_request = initialized_request.header("mcp-session-id", sid);
         }
 
-        let _ = initialized_request.json(&initialized_notification).send().await;
+        let _ = initialized_request
+            .json(&initialized_notification)
+            .send()
+            .await;
 
         // Step 3: Request tools list
         let tools_request = json!({
@@ -150,10 +154,9 @@ impl CodeGenerator {
         }
 
         // Parse SSE format response
-        let tools_text = tools_response
-            .text()
-            .await
-            .map_err(|e| CodegenError::ParseError(format!("Failed to read tools response: {}", e)))?;
+        let tools_text = tools_response.text().await.map_err(|e| {
+            CodegenError::ParseError(format!("Failed to read tools response: {}", e))
+        })?;
 
         let tools_json = self.parse_sse_response(&tools_text)?;
 
@@ -172,7 +175,9 @@ impl CodeGenerator {
         let tools = result
             .get("tools")
             .and_then(|t| t.as_array())
-            .ok_or_else(|| CodegenError::ParseError("Missing 'tools' array in result".to_string()))?;
+            .ok_or_else(|| {
+                CodegenError::ParseError("Missing 'tools' array in result".to_string())
+            })?;
 
         let mut tool_defs = Vec::new();
         for tool in tools {
@@ -196,7 +201,10 @@ impl CodeGenerator {
             .unwrap_or("")
             .to_string();
 
-        let input_schema = tool.get("inputSchema").cloned().unwrap_or_else(|| json!({}));
+        let input_schema = tool
+            .get("inputSchema")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
 
         Ok(ToolDefinition {
             name,
@@ -212,9 +220,12 @@ impl CodeGenerator {
     }
 
     /// Generate Python code files in directory structure
-    pub async fn generate_code_files(&self, output_dir: &std::path::Path) -> Result<(), CodegenError> {
+    pub async fn generate_code_files(
+        &self,
+        output_dir: &std::path::Path,
+    ) -> Result<(), CodegenError> {
         let tools = self.fetch_tools().await?;
-        
+
         // Create server directory (e.g., servers/nexus-mcp-server)
         let server_name = "nexus-mcp-server";
         let server_dir = output_dir.join(server_name);
@@ -234,10 +245,11 @@ impl CodeGenerator {
             let function_name = self.to_snake_case(&tool.name);
             let file_name = format!("{}.py", function_name);
             let file_path = server_dir.join(&file_name);
-            
-            std::fs::write(&file_path, tool_code)
-                .map_err(|e| CodegenError::ParseError(format!("Failed to write tool file: {}", e)))?;
-            
+
+            std::fs::write(&file_path, tool_code).map_err(|e| {
+                CodegenError::ParseError(format!("Failed to write tool file: {}", e))
+            })?;
+
             tool_exports.push((function_name, tool.name.clone()));
         }
 
@@ -250,8 +262,9 @@ impl CodeGenerator {
         // Generate __init__.py
         let init_code = self.generate_init_code(&tool_exports)?;
         let init_path = server_dir.join("__init__.py");
-        std::fs::write(&init_path, init_code)
-            .map_err(|e| CodegenError::ParseError(format!("Failed to write __init__ file: {}", e)))?;
+        std::fs::write(&init_path, init_code).map_err(|e| {
+            CodegenError::ParseError(format!("Failed to write __init__ file: {}", e))
+        })?;
 
         Ok(())
     }
@@ -281,7 +294,9 @@ impl CodeGenerator {
             &self.server_url
         };
         code.push_str(&format!("MCP_SERVER_URL = \"{}\"\n\n", base_url));
-        code.push_str("async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n");
+        code.push_str(
+            "async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n",
+        );
         code.push_str("    \"\"\"Call an MCP tool via HTTP transport\"\"\"\n");
         code.push_str("    request = {\n");
         code.push_str("        \"jsonrpc\": \"2.0\",\n");
@@ -321,16 +336,16 @@ impl CodeGenerator {
     /// Generate MCP client code (shared across all tool files)
     fn generate_mcp_client_code(&self) -> Result<String, CodegenError> {
         let mut code = String::new();
-        
+
         code.push_str("# uv: dependencies = [\"httpx\"]\n\n");
         code.push_str("\"\"\"\n");
         code.push_str("MCP Client - shared client for calling MCP tools via HTTP transport\n");
         code.push_str("Generated code - do not edit manually\n");
         code.push_str("\"\"\"\n\n");
-        
+
         code.push_str("import httpx\n");
         code.push_str("from typing import Any, Dict\n\n");
-        
+
         // Normalize server URL
         let base_url = if self.server_url.ends_with("/mcp") {
             self.server_url.trim_end_matches("/mcp")
@@ -338,8 +353,10 @@ impl CodeGenerator {
             &self.server_url
         };
         code.push_str(&format!("MCP_SERVER_URL = \"{}\"\n\n", base_url));
-        
-        code.push_str("async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n");
+
+        code.push_str(
+            "async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n",
+        );
         code.push_str("    \"\"\"Call an MCP tool via HTTP transport\"\"\"\n");
         code.push_str("    request = {\n");
         code.push_str("        \"jsonrpc\": \"2.0\",\n");
@@ -364,24 +381,24 @@ impl CodeGenerator {
         code.push_str("        if \"error\" in result:\n");
         code.push_str("            raise Exception(f\"MCP tool error: {result['error']}\")\n");
         code.push_str("        return result.get(\"result\", {})\n");
-        
+
         Ok(code)
     }
 
     /// Generate a single tool file (self-contained with inline MCP client)
     fn generate_tool_file_code(&self, tool: &ToolDefinition) -> Result<String, CodegenError> {
         let mut code = String::new();
-        
+
         code.push_str("# uv: dependencies = [\"httpx\"]\n\n");
         code.push_str("\"\"\"\n");
         code.push_str(&format!("{} - {}\n", tool.name, tool.description));
         code.push_str("Generated code - do not edit manually\n");
         code.push_str("This file is self-contained and can be executed independently.\n");
         code.push_str("\"\"\"\n\n");
-        
+
         code.push_str("from typing import Any, Dict, Optional, TypedDict\n");
         code.push_str("import httpx\n\n");
-        
+
         // Include MCP client code inline
         code.push_str("# === MCP Client Implementation (inline) ===\n");
         let base_url = if self.server_url.ends_with("/mcp") {
@@ -390,8 +407,10 @@ impl CodeGenerator {
             &self.server_url
         };
         code.push_str(&format!("MCP_SERVER_URL = \"{}\"\n\n", base_url));
-        
-        code.push_str("async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n");
+
+        code.push_str(
+            "async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n",
+        );
         code.push_str("    \"\"\"Call an MCP tool via HTTP transport\"\"\"\n");
         code.push_str("    request = {\n");
         code.push_str("        \"jsonrpc\": \"2.0\",\n");
@@ -417,18 +436,22 @@ impl CodeGenerator {
         code.push_str("            raise Exception(f\"MCP tool error: {result['error']}\")\n");
         code.push_str("        return result.get(\"result\", {})\n\n");
         code.push_str("# === Tool Definition ===\n\n");
-        
+
         // Parse input schema to generate TypedDict (only if tool has parameters)
-        let has_params = tool.input_schema
+        let has_params = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object())
             .map(|obj| !obj.is_empty())
             .unwrap_or(false);
 
         code.push_str(&format!("# Tool: {}\n", tool.name));
-        
+
         if has_params {
-            let input_type = self.schema_to_typed_dict(&tool.input_schema, &format!("{}Input", self.to_pascal_case(&tool.name)))?;
+            let input_type = self.schema_to_typed_dict(
+                &tool.input_schema,
+                &format!("{}Input", self.to_pascal_case(&tool.name)),
+            )?;
             code.push_str(&input_type);
             code.push_str("\n\n");
         }
@@ -440,64 +463,88 @@ impl CodeGenerator {
 
         // Function signature and body
         let function_name = self.to_snake_case(&tool.name);
-        
+
         if has_params {
             let input_type_name = format!("{}Input", self.to_pascal_case(&tool.name));
-            code.push_str(&format!("async def {}(input: {}) -> Dict[str, Any]:\n", function_name, input_type_name));
-            code.push_str(&format!("    return await call_mcp_tool(\"{}\", input)\n", tool.name));
+            code.push_str(&format!(
+                "async def {}(input: {}) -> Dict[str, Any]:\n",
+                function_name, input_type_name
+            ));
+            code.push_str(&format!(
+                "    return await call_mcp_tool(\"{}\", input)\n",
+                tool.name
+            ));
         } else {
-            code.push_str(&format!("async def {}() -> Dict[str, Any]:\n", function_name));
-            code.push_str(&format!("    return await call_mcp_tool(\"{}\", {{}})\n", tool.name));
+            code.push_str(&format!(
+                "async def {}() -> Dict[str, Any]:\n",
+                function_name
+            ));
+            code.push_str(&format!(
+                "    return await call_mcp_tool(\"{}\", {{}})\n",
+                tool.name
+            ));
         }
 
         Ok(code)
     }
 
     /// Generate index.py that re-exports all tools
-    fn generate_index_code(&self, tool_exports: &[(String, String)]) -> Result<String, CodegenError> {
+    fn generate_index_code(
+        &self,
+        tool_exports: &[(String, String)],
+    ) -> Result<String, CodegenError> {
         let mut code = String::new();
-        
+
         code.push_str("\"\"\"\n");
         code.push_str("Index file - re-exports all tools from this server\n");
         code.push_str("Generated code - do not edit manually\n");
         code.push_str("\"\"\"\n\n");
-        
+
         // Import all tools
         for (function_name, _) in tool_exports {
-            code.push_str(&format!("from .{} import {}\n", function_name, function_name));
+            code.push_str(&format!(
+                "from .{} import {}\n",
+                function_name, function_name
+            ));
         }
-        
+
         code.push_str("\n");
         code.push_str("__all__ = [\n");
         for (function_name, _) in tool_exports {
             code.push_str(&format!("    \"{}\",\n", function_name));
         }
         code.push_str("]\n");
-        
+
         Ok(code)
     }
 
     /// Generate __init__.py
-    fn generate_init_code(&self, tool_exports: &[(String, String)]) -> Result<String, CodegenError> {
+    fn generate_init_code(
+        &self,
+        tool_exports: &[(String, String)],
+    ) -> Result<String, CodegenError> {
         let mut code = String::new();
-        
+
         code.push_str("\"\"\"\n");
         code.push_str("Nexus MCP Server tools\n");
         code.push_str("Generated code - do not edit manually\n");
         code.push_str("\"\"\"\n\n");
-        
+
         // Import all tools
         for (function_name, _) in tool_exports {
-            code.push_str(&format!("from .{} import {}\n", function_name, function_name));
+            code.push_str(&format!(
+                "from .{} import {}\n",
+                function_name, function_name
+            ));
         }
-        
+
         code.push_str("\n");
         code.push_str("__all__ = [\n");
         for (function_name, _) in tool_exports {
             code.push_str(&format!("    \"{}\",\n", function_name));
         }
         code.push_str("]\n");
-        
+
         Ok(code)
     }
 
@@ -506,16 +553,20 @@ impl CodeGenerator {
         let mut code = String::new();
 
         // Parse input schema to generate TypedDict (only if tool has parameters)
-        let has_params = tool.input_schema
+        let has_params = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object())
             .map(|obj| !obj.is_empty())
             .unwrap_or(false);
 
         code.push_str(&format!("# Tool: {}\n", tool.name));
-        
+
         if has_params {
-            let input_type = self.schema_to_typed_dict(&tool.input_schema, &format!("{}Input", self.to_pascal_case(&tool.name)))?;
+            let input_type = self.schema_to_typed_dict(
+                &tool.input_schema,
+                &format!("{}Input", self.to_pascal_case(&tool.name)),
+            )?;
             code.push_str(&input_type);
             code.push_str("\n\n");
         }
@@ -527,9 +578,10 @@ impl CodeGenerator {
 
         // Function signature and body
         let function_name = self.to_snake_case(&tool.name);
-        
+
         // Check if the tool has any parameters
-        let has_params = tool.input_schema
+        let has_params = tool
+            .input_schema
             .get("properties")
             .and_then(|p| p.as_object())
             .map(|obj| !obj.is_empty())
@@ -537,22 +589,36 @@ impl CodeGenerator {
 
         if has_params {
             let input_type_name = format!("{}Input", self.to_pascal_case(&tool.name));
-            code.push_str(&format!("async def {}(input: {}) -> Dict[str, Any]:\n", function_name, input_type_name));
-            code.push_str(&format!("    return await call_mcp_tool(\"{}\", input)\n", tool.name));
+            code.push_str(&format!(
+                "async def {}(input: {}) -> Dict[str, Any]:\n",
+                function_name, input_type_name
+            ));
+            code.push_str(&format!(
+                "    return await call_mcp_tool(\"{}\", input)\n",
+                tool.name
+            ));
         } else {
-            code.push_str(&format!("async def {}() -> Dict[str, Any]:\n", function_name));
-            code.push_str(&format!("    return await call_mcp_tool(\"{}\", {{}})\n", tool.name));
+            code.push_str(&format!(
+                "async def {}() -> Dict[str, Any]:\n",
+                function_name
+            ));
+            code.push_str(&format!(
+                "    return await call_mcp_tool(\"{}\", {{}})\n",
+                tool.name
+            ));
         }
 
         Ok(code)
     }
 
     /// Convert JSON Schema to Python TypedDict
-    fn schema_to_typed_dict(&self, schema: &Value, type_name: &str) -> Result<String, CodegenError> {
+    fn schema_to_typed_dict(
+        &self,
+        schema: &Value,
+        type_name: &str,
+    ) -> Result<String, CodegenError> {
         // Handle empty schema or missing properties
-        let properties = schema
-            .get("properties")
-            .and_then(|p| p.as_object());
+        let properties = schema.get("properties").and_then(|p| p.as_object());
 
         if properties.is_none() {
             return Ok(format!("class {}(TypedDict):\n    pass\n", type_name));
@@ -574,7 +640,7 @@ impl CodeGenerator {
         for (name, prop) in properties {
             let python_type = self.json_type_to_python(prop)?;
             let is_required = required.contains(name);
-            
+
             if is_required {
                 fields.push(format!("    {}: {}", name, python_type));
             } else {
@@ -603,7 +669,9 @@ impl CodeGenerator {
             "string" => "str".to_string(),
             "number" | "integer" => {
                 // Check for integer specifically
-                if type_str == "integer" || prop.get("type").and_then(|t| t.as_str()) == Some("integer") {
+                if type_str == "integer"
+                    || prop.get("type").and_then(|t| t.as_str()) == Some("integer")
+                {
                     "int".to_string()
                 } else {
                     "float".to_string()
@@ -659,11 +727,14 @@ impl CodeGenerator {
         for line in text.lines() {
             let line = line.trim();
             if let Some(json_str) = line.strip_prefix("data: ") {
-                return serde_json::from_str(json_str)
-                    .map_err(|e| CodegenError::ParseError(format!("Failed to parse SSE JSON: {}", e)));
+                return serde_json::from_str(json_str).map_err(|e| {
+                    CodegenError::ParseError(format!("Failed to parse SSE JSON: {}", e))
+                });
             }
         }
-        Err(CodegenError::ParseError("No 'data: ' line found in SSE response".to_string()))
+        Err(CodegenError::ParseError(
+            "No 'data: ' line found in SSE response".to_string(),
+        ))
     }
 }
 
@@ -674,4 +745,3 @@ struct ToolDefinition {
     description: String,
     input_schema: Value,
 }
-

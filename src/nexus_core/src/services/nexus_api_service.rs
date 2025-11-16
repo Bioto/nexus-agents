@@ -93,8 +93,7 @@ impl ChatConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self::new(
-            std::env::var("DEFAULT_MODEL")
-                .unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string()),
+            std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-5-nano-2025-08-07".to_string()),
         )
     }
 }
@@ -214,9 +213,7 @@ impl NexusApiService {
             .choices
             .first()
             .map(|choice| choice.message.clone())
-            .ok_or_else(|| {
-                crate::models::Error::Other("No response from API".to_string())
-            })
+            .ok_or_else(|| crate::models::Error::Other("No response from API".to_string()))
     }
 
     /// Make a streaming API call without an agent
@@ -387,8 +384,7 @@ impl NexusApiService {
         &self,
         agent: &Agent,
         request: ChatCompletionRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<crate::services::AgentStreamEvent>> + Send>>>
-    {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<crate::services::AgentStreamEvent>> + Send>>> {
         let agent_service = AgentService::new(&self.client, agent);
         agent_service.chat_stream(request).await
     }
@@ -580,8 +576,7 @@ impl NexusApiService {
         agent: &Agent,
         config: ChatConfig,
         messages: Vec<Message>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<crate::services::AgentStreamEvent>> + Send>>>
-    {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<crate::services::AgentStreamEvent>> + Send>>> {
         let request = ChatCompletionRequest::new(config.model.clone(), messages);
         let request = config.apply_to_request(request);
         self.chat_with_agent_stream(agent, request).await
@@ -657,7 +652,9 @@ mod tests {
         assert_eq!(response.role, MessageRole::Assistant);
         assert_eq!(
             response.content,
-            Some(MessageContent::String("Hello! How can I help you?".to_string()))
+            Some(MessageContent::String(
+                "Hello! How can I help you?".to_string()
+            ))
         );
 
         mock.assert_async().await;
@@ -776,7 +773,10 @@ mod tests {
         let agent = AgentFactory::calculator();
         let request = ChatCompletionRequest::new(model, vec![Message::user("What is 2 + 2?")]);
 
-        let mut stream = service.chat_with_agent_stream(&agent, request).await.unwrap();
+        let mut stream = service
+            .chat_with_agent_stream(&agent, request)
+            .await
+            .unwrap();
 
         let mut events = Vec::new();
         while let Some(result) = stream.next().await {
@@ -785,9 +785,9 @@ mod tests {
 
         // Should have content deltas and a Done event
         assert!(!events.is_empty());
-        let has_content = events.iter().any(|e| {
-            matches!(e, Ok(crate::services::AgentStreamEvent::ContentDelta(_)))
-        });
+        let has_content = events
+            .iter()
+            .any(|e| matches!(e, Ok(crate::services::AgentStreamEvent::ContentDelta(_))));
         assert!(has_content);
 
         mock.assert_async().await;
@@ -804,7 +804,7 @@ mod tests {
     fn test_from_env_missing_api_key() {
         // Save the original value if it exists
         let original_key = std::env::var("OPENAI_API_KEY").ok();
-        
+
         // Remove the API key from environment
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
@@ -812,21 +812,24 @@ mod tests {
 
         // Try to create the service - this will call load_env() which may reload from .env
         let result = NexusApiService::from_env();
-        
+
         // Restore the original value if it existed
         if let Some(key) = original_key {
             std::env::set_var("OPENAI_API_KEY", key);
         }
-        
+
         // If the variable was loaded from .env file, the result will be Ok
         // In that case, we can't test the missing key scenario, so we skip the assertion
         if result.is_ok() {
             // The variable exists (likely from .env file), skip this test
             return;
         }
-        
+
         // Otherwise, we expect an error
-        assert!(result.is_err(), "Expected error when OPENAI_API_KEY is missing");
+        assert!(
+            result.is_err(),
+            "Expected error when OPENAI_API_KEY is missing"
+        );
         if let Err(crate::models::Error::Configuration(msg)) = result {
             assert!(msg.contains("OPENAI_API_KEY"));
         } else {
@@ -913,4 +916,3 @@ mod tests {
         mock.assert_async().await;
     }
 }
-

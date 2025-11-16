@@ -1,5 +1,5 @@
-use clap::Args;
 use crate::codegen::CodeGenerator;
+use clap::Args;
 use std::fs;
 use std::path::PathBuf;
 
@@ -48,7 +48,9 @@ pub async fn run_generate_code(args: GenerateCodeArgs) -> Result<(), Box<dyn std
         .await
         .map_err(|e| format!("Failed to generate code: {}", e))?;
 
-    println!("Successfully generated code API in directory {}", args.output.display());
+    println!(
+        "Successfully generated code API in directory {}",
+        args.output.display()
+    );
     Ok(())
 }
-

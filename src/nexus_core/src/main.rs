@@ -1,16 +1,21 @@
+use chrono;
 use clap::Parser;
 use nexus_core::cli::{run_chat, Cli, Commands};
 use nexus_core::init;
-use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, ColorChoice, WriteLogger};
+use simplelog::{
+    ColorChoice, CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger,
+};
+use std::env;
 use std::fs::File;
 use std::sync::OnceLock;
-use std::env;
-use chrono;
 
 static LOG_INIT: OnceLock<String> = OnceLock::new();
 
 fn get_log_level() -> LevelFilter {
-    match env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()).as_str() {
+    match env::var("RUST_LOG")
+        .unwrap_or_else(|_| "info".to_string())
+        .as_str()
+    {
         "trace" => LevelFilter::Trace,
         "debug" => LevelFilter::Debug,
         "info" => LevelFilter::Info,
@@ -48,11 +53,7 @@ fn init_logging() -> String {
                     TerminalMode::Mixed,
                     ColorChoice::Auto,
                 ),
-                WriteLogger::new(
-                    file_level,
-                    Config::default(),
-                    file,
-                ),
+                WriteLogger::new(file_level, Config::default(), file),
             ])
             .expect("Failed to initialize logger");
 

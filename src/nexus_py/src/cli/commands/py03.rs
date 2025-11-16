@@ -1,6 +1,6 @@
+use crate::service::PythonExecutionService;
 use clap::Args;
 use std::path::PathBuf;
-use crate::service::PythonExecutionService;
 
 #[derive(Args, Debug)]
 #[command(about = "Execute a Python script using uv with inline package dependencies")]
@@ -14,13 +14,10 @@ pub fn run_py03(args: Py03Args) -> Result<(), Box<dyn std::error::Error>> {
     let service = PythonExecutionService::new();
 
     // Use streaming execution to show output in real-time
-    let result = service.execute_script_streaming(
-        &args.script,
-        |line| {
-            println!("{}", line);
-            Ok(())
-        },
-    )?;
+    let result = service.execute_script_streaming(&args.script, |line| {
+        println!("{}", line);
+        Ok(())
+    })?;
 
     // If there's stderr output, print it
     if !result.stderr.is_empty() {
@@ -34,4 +31,3 @@ pub fn run_py03(args: Py03Args) -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

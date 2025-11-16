@@ -1,10 +1,10 @@
-use bollard::container::{Config, CreateContainerOptions, StartContainerOptions, LogOutput};
-use bollard::Docker;
+use bollard::container::{Config, CreateContainerOptions, LogOutput, StartContainerOptions};
 use bollard::exec::StartExecResults;
+use bollard::Docker;
 use futures_util::stream::StreamExt;
 use std::collections::HashMap;
-use std::path::Path;
 use std::env;
+use std::path::Path;
 use tokio::time;
 
 #[derive(Debug, Clone)]
@@ -69,28 +69,43 @@ impl DockerService {
         // First check DOCKER_HOST, then try Colima sockets, then default
         let docker = if let Ok(docker_host) = env::var("DOCKER_HOST") {
             // Use DOCKER_HOST if set
-            Docker::connect_with_socket(&docker_host, 120, bollard::API_DEFAULT_VERSION)
-                .map_err(|e| DockerError::ConnectionFailed(format!(
-                    "Failed to connect to Docker daemon at {}: {}",
-                    docker_host, e
-                )))?
+            Docker::connect_with_socket(&docker_host, 120, bollard::API_DEFAULT_VERSION).map_err(
+                |e| {
+                    DockerError::ConnectionFailed(format!(
+                        "Failed to connect to Docker daemon at {}: {}",
+                        docker_host, e
+                    ))
+                },
+            )?
         } else if let Ok(home) = env::var("HOME") {
             // Try Colima sockets (new location first, then old)
             let colima_socket_new = format!("{}/.config/colima/default/docker.sock", home);
             let colima_socket_old = format!("{}/.colima/default/docker.sock", home);
-            
+
             if Path::new(&colima_socket_new).exists() {
-                Docker::connect_with_socket(&format!("unix://{}", colima_socket_new), 120, bollard::API_DEFAULT_VERSION)
-                    .map_err(|e| DockerError::ConnectionFailed(format!(
+                Docker::connect_with_socket(
+                    &format!("unix://{}", colima_socket_new),
+                    120,
+                    bollard::API_DEFAULT_VERSION,
+                )
+                .map_err(|e| {
+                    DockerError::ConnectionFailed(format!(
                         "Failed to connect to Colima Docker daemon: {}",
                         e
-                    )))?
+                    ))
+                })?
             } else if Path::new(&colima_socket_old).exists() {
-                Docker::connect_with_socket(&format!("unix://{}", colima_socket_old), 120, bollard::API_DEFAULT_VERSION)
-                    .map_err(|e| DockerError::ConnectionFailed(format!(
+                Docker::connect_with_socket(
+                    &format!("unix://{}", colima_socket_old),
+                    120,
+                    bollard::API_DEFAULT_VERSION,
+                )
+                .map_err(|e| {
+                    DockerError::ConnectionFailed(format!(
                         "Failed to connect to Colima Docker daemon: {}",
                         e
-                    )))?
+                    ))
+                })?
             } else {
                 // Fall back to default connection
                 Docker::connect_with_local_defaults().map_err(|e| {
@@ -128,7 +143,7 @@ impl DockerService {
     /// Check if the Docker image exists
     pub async fn image_exists(&self) -> Result<bool, DockerError> {
         let image_name = self.image_full_name();
-        
+
         // Try inspect_image first (most reliable)
         match self.docker.inspect_image(&image_name).await {
             Ok(_) => {
@@ -136,34 +151,38 @@ impl DockerService {
             }
             Err(e) => {
                 let error_msg = e.to_string().to_lowercase();
-                
+
                 // If it's a "not found" error, try fallback method
-                if error_msg.contains("not found") || error_msg.contains("no such image") || error_msg.contains("404") {
+                if error_msg.contains("not found")
+                    || error_msg.contains("no such image")
+                    || error_msg.contains("404")
+                {
                     // Fallback: list all images and check repo_tags
                     let mut list_options = bollard::image::ListImagesOptions::<String>::default();
                     list_options.all = true;
-                    
-                    let images = self
-                        .docker
-                        .list_images(Some(list_options))
-                        .await
-                        .map_err(|e| {
-                            DockerError::ImageNotFound(format!("Failed to list images: {}", e))
-                        })?;
-                    
+
+                    let images =
+                        self.docker
+                            .list_images(Some(list_options))
+                            .await
+                            .map_err(|e| {
+                                DockerError::ImageNotFound(format!("Failed to list images: {}", e))
+                            })?;
+
                     // Debug: print what we're looking for and what we found
                     eprintln!("Looking for image: '{}'", image_name);
                     eprintln!("Checking {} images...", images.len());
-                    
+
                     // Check if any image has the tag we're looking for
                     let exists = images.iter().any(|img| {
                         // Check repo_tags (may be empty for some images)
                         if !img.repo_tags.is_empty() {
                             img.repo_tags.iter().any(|tag| {
-                                let matches = tag == &image_name || 
-                                    tag == &self.config.image_name ||
-                                    tag.starts_with(&format!("{}:", self.config.image_name)) ||
-                                    (tag.split(':').next().unwrap_or("") == self.config.image_name);
+                                let matches = tag == &image_name
+                                    || tag == &self.config.image_name
+                                    || tag.starts_with(&format!("{}:", self.config.image_name))
+                                    || (tag.split(':').next().unwrap_or("")
+                                        == self.config.image_name);
                                 if matches {
                                     eprintln!("Found matching image: '{}'", tag);
                                 }
@@ -173,21 +192,25 @@ impl DockerService {
                             false
                         }
                     });
-                    
+
                     if !exists {
-                        eprintln!("Image '{}' not found in {} listed images", image_name, images.len());
+                        eprintln!(
+                            "Image '{}' not found in {} listed images",
+                            image_name,
+                            images.len()
+                        );
                         // Show all images with nexus_py in the name for debugging
-                        let nexus_images: Vec<_> = images.iter()
-                            .filter(|img| {
-                                img.repo_tags.iter().any(|tag| tag.contains("nexus"))
-                            })
+                        let nexus_images: Vec<_> = images
+                            .iter()
+                            .filter(|img| img.repo_tags.iter().any(|tag| tag.contains("nexus")))
                             .flat_map(|img| img.repo_tags.iter())
                             .collect();
                         if !nexus_images.is_empty() {
                             eprintln!("Found nexus-related images: {:?}", nexus_images);
                         }
                         // Show first few images for debugging
-                        let sample: Vec<_> = images.iter()
+                        let sample: Vec<_> = images
+                            .iter()
                             .filter(|img| !img.repo_tags.is_empty())
                             .take(10)
                             .flat_map(|img| img.repo_tags.iter())
@@ -195,7 +218,7 @@ impl DockerService {
                         if !sample.is_empty() {
                             eprintln!("Sample of available images: {:?}", sample);
                         }
-                        
+
                         // Last resort: try to inspect by ID or try creating a container
                         // Sometimes images exist but aren't in list_images
                         eprintln!("Attempting direct container creation test...");
@@ -204,20 +227,34 @@ impl DockerService {
                             cmd: Some(vec!["echo".to_string(), "test".to_string()]),
                             ..Default::default()
                         };
-                        match self.docker.create_container(None::<CreateContainerOptions<String>>, test_config).await {
+                        match self
+                            .docker
+                            .create_container(None::<CreateContainerOptions<String>>, test_config)
+                            .await
+                        {
                             Ok(container) => {
                                 // Image exists! Clean up the test container
-                                let _ = self.docker.remove_container(&container.id, Some(bollard::container::RemoveContainerOptions {
-                                    force: true,
-                                    ..Default::default()
-                                })).await;
+                                let _ = self
+                                    .docker
+                                    .remove_container(
+                                        &container.id,
+                                        Some(bollard::container::RemoveContainerOptions {
+                                            force: true,
+                                            ..Default::default()
+                                        }),
+                                    )
+                                    .await;
                                 eprintln!("Image exists (verified by test container creation)");
                                 return Ok(true);
                             }
                             Err(e) => {
                                 let err_msg = e.to_string().to_lowercase();
-                                if err_msg.contains("no such image") || err_msg.contains("not found") {
-                                    eprintln!("Image confirmed not found via container creation test");
+                                if err_msg.contains("no such image")
+                                    || err_msg.contains("not found")
+                                {
+                                    eprintln!(
+                                        "Image confirmed not found via container creation test"
+                                    );
                                 } else {
                                     // Other error might mean image exists but can't create container
                                     eprintln!("Container creation test error (might indicate image exists): {}", e);
@@ -225,7 +262,7 @@ impl DockerService {
                             }
                         }
                     }
-                    
+
                     Ok(exists)
                 } else {
                     // For other errors (connection issues, etc.), return an error
@@ -237,7 +274,6 @@ impl DockerService {
             }
         }
     }
-
 
     /// Create a container with the specified command
     pub async fn create_container(
@@ -256,7 +292,7 @@ impl DockerService {
         mounts: Option<Vec<(String, String)>>, // Vec of (host_path, container_path) tuples
     ) -> Result<String, DockerError> {
         use bollard::models::{HostConfig, Mount, MountTypeEnum};
-        
+
         let image_name = self.image_full_name();
         let container_name = format!("{}_{}", self.config.image_name, uuid::Uuid::new_v4());
 
@@ -264,17 +300,15 @@ impl DockerService {
         let host_config = if let Some(mounts) = mounts {
             let docker_mounts: Vec<Mount> = mounts
                 .into_iter()
-                .map(|(host_path, container_path)| {
-                    Mount {
-                        target: Some(container_path),
-                        source: Some(host_path),
-                        typ: Some(MountTypeEnum::BIND),
-                        read_only: Some(false),
-                        ..Default::default()
-                    }
+                .map(|(host_path, container_path)| Mount {
+                    target: Some(container_path),
+                    source: Some(host_path),
+                    typ: Some(MountTypeEnum::BIND),
+                    read_only: Some(false),
+                    ..Default::default()
                 })
                 .collect();
-            
+
             Some(HostConfig {
                 mounts: Some(docker_mounts),
                 ..Default::default()
@@ -286,11 +320,7 @@ impl DockerService {
         let container_config = Config {
             image: Some(image_name),
             cmd: Some(command),
-            env: env.map(|e| {
-                e.into_iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect()
-            }),
+            env: env.map(|e| e.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
             host_config: host_config,
@@ -344,23 +374,22 @@ impl DockerService {
             .docker
             .create_exec(container_id, exec_config)
             .await
-            .map_err(|e| {
-                DockerError::ExecutionFailed(format!("Failed to create exec: {}", e))
-            })?;
+            .map_err(|e| DockerError::ExecutionFailed(format!("Failed to create exec: {}", e)))?;
 
         let exec_response = self
             .docker
             .start_exec(&exec_result.id, None)
             .await
-            .map_err(|e| {
-                DockerError::ExecutionFailed(format!("Failed to start exec: {}", e))
-            })?;
+            .map_err(|e| DockerError::ExecutionFailed(format!("Failed to start exec: {}", e)))?;
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         match exec_response {
-            StartExecResults::Attached { mut output, input: _ } => {
+            StartExecResults::Attached {
+                mut output,
+                input: _,
+            } => {
                 while let Some(result) = output.next().await {
                     match result {
                         Ok(LogOutput::StdOut { message }) => {
@@ -395,9 +424,7 @@ impl DockerService {
             .docker
             .inspect_exec(&exec_result.id)
             .await
-            .map_err(|e| {
-                DockerError::ExecutionFailed(format!("Failed to inspect exec: {}", e))
-            })?;
+            .map_err(|e| DockerError::ExecutionFailed(format!("Failed to inspect exec: {}", e)))?;
 
         let exit_code = inspect_result
             .exit_code
@@ -428,7 +455,9 @@ impl DockerService {
         env: Option<HashMap<String, String>>,
         mounts: Option<Vec<(String, String)>>,
     ) -> Result<(String, String, i32), DockerError> {
-        let container_id = self.create_container_with_mounts(command.clone(), env, mounts).await?;
+        let container_id = self
+            .create_container_with_mounts(command.clone(), env, mounts)
+            .await?;
         self.start_container(&container_id).await?;
 
         // Wait for container to finish
@@ -473,8 +502,8 @@ impl DockerService {
                 if let Some(state) = inspect_result.state {
                     if let Some(status) = &state.status {
                         match status {
-                            bollard::models::ContainerStateStatusEnum::EXITED |
-                            bollard::models::ContainerStateStatusEnum::DEAD => {
+                            bollard::models::ContainerStateStatusEnum::EXITED
+                            | bollard::models::ContainerStateStatusEnum::DEAD => {
                                 break; // Container has finished
                             }
                             _ => {
@@ -487,7 +516,7 @@ impl DockerService {
                 attempts += 1;
                 if attempts >= max_attempts {
                     return Err(DockerError::ExecutionFailed(
-                        "Container did not finish within timeout".to_string()
+                        "Container did not finish within timeout".to_string(),
                     ));
                 }
 
@@ -502,9 +531,7 @@ impl DockerService {
             ..Default::default()
         };
 
-        let mut logs = self
-            .docker
-            .logs(&container_id, Some(logs_options));
+        let mut logs = self.docker.logs(&container_id, Some(logs_options));
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -612,7 +639,11 @@ impl DockerService {
         // Mount the script as a volume or copy it in
         // For now, we'll assume the script is available in the container
         // In a production setup, you'd want to handle volume mounting properly
-        let command = vec!["exec-code".to_string(), "--file".to_string(), script_path.to_string()];
+        let command = vec![
+            "exec-code".to_string(),
+            "--file".to_string(),
+            script_path.to_string(),
+        ];
 
         self.run_command(command, None).await
     }

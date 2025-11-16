@@ -1,6 +1,6 @@
+use crate::service::PythonExecutionService;
 use clap::Args;
 use std::io::{self, Read};
-use crate::service::PythonExecutionService;
 
 #[derive(Args, Debug)]
 #[command(about = "Execute Python code from a string using uv inline packages")]
@@ -29,13 +29,10 @@ pub fn run_exec_code(args: ExecCodeArgs) -> Result<(), Box<dyn std::error::Error
     }
 
     // Use streaming execution to show output in real-time
-    let result = service.execute_code_streaming(
-        &code,
-        |line| {
-            println!("{}", line);
-            Ok(())
-        },
-    )?;
+    let result = service.execute_code_streaming(&code, |line| {
+        println!("{}", line);
+        Ok(())
+    })?;
 
     // If there's stderr output, print it
     if !result.stderr.is_empty() {
@@ -49,7 +46,3 @@ pub fn run_exec_code(args: ExecCodeArgs) -> Result<(), Box<dyn std::error::Error
 
     Ok(())
 }
-
-
-
-

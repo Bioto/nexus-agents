@@ -27,8 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Service created successfully!");
 
     // Get the model from environment or use a default
-    let model = std::env::var("DEFAULT_MODEL")
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+    let model = std::env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
     println!("\nCreating chat completion request...");
     println!("Model: {}", model);
@@ -37,7 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a chat completion request
     let request = ChatCompletionRequest::new(
         model,
-        vec![Message::user("Hello! Can you tell me a fun fact about Rust programming?")],
+        vec![Message::user(
+            "Hello! Can you tell me a fun fact about Rust programming?",
+        )],
     );
 
     // Send the request
@@ -56,8 +57,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-
-
-
-
