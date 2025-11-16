@@ -1,0 +1,13 @@
+[package]
+name = "nexus_py"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tempfile = "3.10"
+tokio = { version = "1", features = ["full"] }
+bollard = "0.16"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+tar = "0.4"

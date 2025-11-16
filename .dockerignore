@@ -1,0 +1,37 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Git files
+.git/
+.gitignore
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation (but keep Cargo.toml files)
+*.md
+README*
+
+# Test files
+**/__scripts__/
+**/*_test.py
+**/*_test.rs
+
+# Docker files (don't need to copy into image)
+**/.docker/
+
+# Logs
+logs/
+**/logs/
+
+# Test files directory
+__test_files__/
+
+# Keep all source files and Cargo.toml files - they're needed for workspace resolution
+
+
+
