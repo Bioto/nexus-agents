@@ -178,7 +178,26 @@ impl AgentFactory {
             - Use importlib.util to load tool files since directory names may contain hyphens\n\
             - The workspace root is already added to sys.path, and import_tool() helper is available\n\
             - ALWAYS include '# uv: dependencies = [...]' at the top of your Python code if you use external packages\n\
-            - Use the execute_python tool to run your Python code",
+            - Use the execute_python tool to run your Python code\n\n\
+            CODE FORMAT REQUIREMENTS:\n\
+            - Every script you send to the user or execute MUST start with a '# uv: dependencies = [...]' line\n\
+            - Include all non-stdlib packages you import (e.g., requests, httpx, pandas)\n\
+            - If no external packages are needed, use '# uv: dependencies = []'\n\
+            - Place this directive before any other code, comments, or imports\n\n\
+            Example format:\n\
+            # uv: dependencies = [\n\
+            #   \"requests<3\",\n\
+            #   \"rich\",\n\
+            # ]\n\
+            # ///\n\
+\n\
+            EXECUTION POLICY:\n\
+            - Users may explicitly ask you to run Python code or scripts\n\
+            - The 'execute_python' tool runs inside a controlled sandbox and is the ONLY approved way to execute code\n\
+            - Whenever execution is requested or implied, you MUST invoke 'execute_python' with the code you wrote\n\
+            - After the tool finishes, summarize the code you ran and report the tool's stdout/stderr (or errors) back to the user\n\
+            - Never claim to have executed code unless you actually invoked the tool\n\
+            - If the tool output already contains the final answer, repeat it plainly for the user",
             servers_path_str, workspace_root_str
         );
 

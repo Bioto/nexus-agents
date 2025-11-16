@@ -171,7 +171,6 @@ impl AgentService {
                     let mut final_request = request.clone();
 
                     // Build a summary of the current tool outputs so the LLM can reference them
-                    use crate::models::{MessageContent, MessageRole};
                     let mut summary = String::from("Tool results::\n");
                     for tool_call in tool_calls {
                         if let Some(tool_msg) = request
@@ -192,7 +191,8 @@ impl AgentService {
                         }
                     }
 
-                    final_request.messages.push(Message::assistant(summary));
+                    summary.push_str("\nPlease summarize these execution results for the user, quote the key stdout or errors, and mention the script you ran.");
+                    final_request.messages.push(Message::user(summary));
                     final_request.tools = None;
                     let response = self.client.chat(final_request).await?;
                     if let Some(choice) = response.choices.first() {
