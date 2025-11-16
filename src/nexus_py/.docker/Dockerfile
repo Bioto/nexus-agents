@@ -35,6 +35,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Runtime stage
 FROM alpine:latest
 
+# Build argument for Python version (default: 3.14)
+ARG PYTHON_VERSION=3.14
+
 # Install runtime dependencies
 RUN apk add --no-cache \
     ca-certificates \
@@ -50,6 +53,10 @@ ENV PATH="/root/.local/bin:$PATH"
 
 # Verify uv installation
 RUN uv --version
+
+# Pre-install Python version to avoid download messages on first run
+RUN uv python install ${PYTHON_VERSION} && \
+    uv python list
 
 # Copy the binary from builder (copied to non-cached location)
 COPY --from=builder /build/nexus_py /usr/local/bin/nexus_py
