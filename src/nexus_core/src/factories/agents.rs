@@ -1,7 +1,8 @@
 use crate::models::agent::{Agent, AgentBuilder, AgentStore};
 use crate::models::task_manager::TaskManager;
 use crate::models::tasks::{TaskAssignment, TaskDecomposition};
-use crate::tools::{calculator::Calculator, ExecutableTool, ToolRegistry};
+use crate::tools::{calculator::Calculator, python_exec::PythonExec, ExecutableTool, ToolRegistry};
+use std::path::PathBuf;
 
 /// Factory for creating pre-configured agents with their tool registries
 pub struct AgentFactory;
@@ -103,6 +104,89 @@ impl AgentFactory {
             .description("An agent that analyzes user requests and decomposes them into structured, actionable tasks")
             .system_prompt(prompt)
             .with_json_schema(TaskDecomposition::to_output_format())
+            .build()
+    }
+
+    /// Create an MCP agent that can execute Python code with access to MCP server tools
+    pub fn mcp_agent(servers_dir: impl Into<PathBuf>) -> Agent {
+        let servers_path: PathBuf = servers_dir.into();
+        let python_exec = PythonExec::new(&servers_path);
+        let tool_definition = python_exec.definition();
+        let registry = ToolRegistry::new().register(Box::new(python_exec));
+
+        let servers_path_str = servers_path.to_string_lossy();
+        let workspace_root_str = servers_path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+        
+        let system_prompt = format!(
+            "You are an MCP Agent with access to MCP server tools via Python code execution.\n\n\
+            You have access to MCP tools in the directory: {}\n\n\
+            Available MCP tools are organized in the following structure:\n\
+            - servers/nexus-mcp-server/ contains individual tool files\n\
+            - Each tool file (e.g., echo.py, add.py) is self-contained and can be imported\n\n\
+            To use MCP tools, you can:\n\
+            1. Use the import_tool() helper function (already available in your execution environment)\n\
+            2. Or use importlib.util to load tool files directly\n\
+            3. Execute the code using the 'execute_python' tool\n\n\
+            CRITICAL: Python Dependencies\n\
+            - All Python code is executed via 'uv' with inline dependency management\n\
+            - You MUST add dependencies at the top of your Python code using this format:\n\
+              # uv: dependencies = [\"package1\", \"package2\"]\n\
+            - This must be the FIRST line(s) of your Python code\n\
+            - Example: If you need 'requests', start your code with:\n\
+              # uv: dependencies = [\"requests\"]\n\
+            - Standard library modules (like 'asyncio', 'importlib', 'pathlib', etc.) don't need to be listed\n\
+            - Always include external packages you import (e.g., requests, httpx, pandas, etc.)\n\n\
+            Example usage:\n\
+            ```python\n\
+            # uv: dependencies = [\"httpx\"]\n\
+            \n\
+            import asyncio\n\
+            import importlib.util\n\
+            from pathlib import Path\n\
+            \n\
+            # Workspace root is already in sys.path\n\
+            workspace_root = Path(r\"{}\")\n\
+            \n\
+            # Load echo tool using importlib (handles hyphens in directory names)\n\
+            echo_path = workspace_root / 'servers' / 'nexus-mcp-server' / 'echo.py'\n\
+            echo_spec = importlib.util.spec_from_file_location('echo', echo_path)\n\
+            echo_module = importlib.util.module_from_spec(echo_spec)\n\
+            echo_spec.loader.exec_module(echo_module)\n\
+            \n\
+            # Load add tool\n\
+            add_path = workspace_root / 'servers' / 'nexus-mcp-server' / 'add.py'\n\
+            add_spec = importlib.util.spec_from_file_location('add', add_path)\n\
+            add_module = importlib.util.module_from_spec(add_spec)\n\
+            add_spec.loader.exec_module(add_module)\n\
+            \n\
+            async def main():\n\
+                # Use echo tool\n\
+                result = await echo_module.echo({{'message': 'Hello'}})\n\
+                print(result)\n\
+                \n\
+                # Use add tool\n\
+                result = await add_module.add({{'a': 5, 'b': 3}})\n\
+                print(result)\n\n\
+            asyncio.run(main())\n\
+            ```\n\n\
+            IMPORTANT:\n\
+            - All tool functions are async, so you must use asyncio.run() or await them in an async function\n\
+            - Each tool file is self-contained with its own MCP client\n\
+            - You can explore the servers/ directory to discover available tools\n\
+            - Use importlib.util to load tool files since directory names may contain hyphens\n\
+            - The workspace root is already added to sys.path, and import_tool() helper is available\n\
+            - ALWAYS include '# uv: dependencies = [...]' at the top of your Python code if you use external packages\n\
+            - Use the execute_python tool to run your Python code",
+            servers_path_str, workspace_root_str
+        );
+
+        AgentBuilder::new("MCP Agent")
+            .description("An agent that can interact with MCP servers by executing Python code with access to generated tool files")
+            .system_prompt(system_prompt)
+            .add_tool(tool_definition)
+            .tool_registry(registry)
             .build()
     }
 }

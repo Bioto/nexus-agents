@@ -18,3 +18,5 @@ nexus-core = { path = "../nexus_core" }
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = "0.4.38"
+crossterm = "0.28"
+ratatui = { workspace = true }

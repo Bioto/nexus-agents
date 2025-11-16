@@ -1,4 +1,4 @@
-mod commands;
+pub mod commands;
 
 use clap::{Parser, Subcommand};
 use nexus_audio::Commands as AudioCommands;
@@ -38,4 +38,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: CoreCommands,
     },
+    /// Start an MCP agent with access to MCP server tools
+    McpAgent(commands::mcp_agent::McpAgentArgs),
+    /// Test execute_python tool with a one-off prompt
+    TestPython(commands::test_python::TestPythonArgs),
 }

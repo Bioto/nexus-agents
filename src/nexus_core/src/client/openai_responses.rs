@@ -4,6 +4,7 @@ use crate::models::{
 };
 use async_trait::async_trait;
 use futures::StreamExt;
+use log::debug;
 use reqwest::Client as HttpClient;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -102,6 +103,9 @@ impl LLMClient for ResponsesClient {
         // Parse Responses API response and transform to ChatCompletionResponse format
         let response_json: serde_json::Value = response.json().await?;
         
+        println!("[ResponsesClient] Raw API response: {}", serde_json::to_string_pretty(&response_json).unwrap_or_default());
+        debug!("[ResponsesClient] Raw API response: {:?}", response_json);
+        
         // Transform Responses API response to ChatCompletionResponse format
         // Responses API uses different field names and structure
         let id = response_json
@@ -120,10 +124,15 @@ impl LLMClient for ResponsesClient {
         use crate::models::Choice;
         let mut choices = Vec::new();
         
+        println!("[ResponsesClient] Looking for 'output' field in response...");
         // Try to extract from "output" array (Responses API format)
         if let Some(output) = response_json.get("output") {
+            println!("[ResponsesClient] Found 'output' field: {:?}", output);
             if let Some(output_array) = output.as_array() {
-                for (index, item) in output_array.iter().enumerate() {
+                let mut tool_calls = Vec::new();
+                let mut message_text = String::new();
+                
+                for (_index, item) in output_array.iter().enumerate() {
                     if let Some(content_type) = item.get("type").and_then(|v| v.as_str()) {
                         match content_type {
                             "message" => {
@@ -142,69 +151,115 @@ impl LLMClient for ResponsesClient {
                                     }
                                     
                                     if !text_parts.is_empty() {
-                                        let combined_text = text_parts.join("");
-                                        let message = ResponsesClient::create_message_from_text(combined_text);
-                                        
-                                        choices.push(Choice {
-                                            index: index as u32,
-                                            message,
-                                            finish_reason: Some("stop".to_string()),
-                                        });
+                                        message_text = text_parts.join("");
                                     }
                                 }
                             }
                             "output_text" => {
                                 // Direct output_text type (if it exists at top level)
-                                let text = item
-                                    .get("text")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                
-                                let message = ResponsesClient::create_message_from_text(text);
-                                
-                                choices.push(Choice {
-                                    index: index as u32,
-                                    message,
-                                    finish_reason: Some("stop".to_string()),
-                                });
+                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                    message_text = text.to_string();
+                                }
                             }
                             "summary_text" => {
                                 // Handle summary_text type as well
-                                let text = item
-                                    .get("text")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                
-                                let message = ResponsesClient::create_message_from_text(text);
-                                
-                                choices.push(Choice {
-                                    index: index as u32,
-                                    message,
-                                    finish_reason: Some("stop".to_string()),
-                                });
+                                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                                    message_text = text.to_string();
+                                }
                             }
-                            _ => {}
+                            "function_call" => {
+                                // Handle function_call type - extract tool call information
+                                println!("[ResponsesClient] Found function_call in output");
+                                if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                                    if let Some(arguments) = item.get("arguments").and_then(|v| v.as_str()) {
+                                        if let Some(call_id) = item.get("call_id").and_then(|v| v.as_str()) {
+                                            println!("[ResponsesClient] Function call: name={}, call_id={}", name, call_id);
+                                            
+                                            use crate::models::{FunctionCall, ToolCall};
+                                            tool_calls.push(ToolCall {
+                                                id: call_id.to_string(),
+                                                call_type: "function".to_string(),
+                                                function: FunctionCall {
+                                                    name: name.to_string(),
+                                                    arguments: arguments.to_string(),
+                                                },
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            "reasoning" => {
+                                // Reasoning type - we can ignore it or extract summary if needed
+                                println!("[ResponsesClient] Found reasoning in output (ignoring)");
+                            }
+                            _ => {
+                                println!("[ResponsesClient] Unknown output type: {}", content_type);
+                            }
                         }
                     }
+                }
+                
+                // Create message with tool calls if we have any, otherwise use text
+                use crate::models::{Message, MessageContent, MessageRole};
+                if !tool_calls.is_empty() {
+                    println!("[ResponsesClient] Creating message with {} tool calls", tool_calls.len());
+                    let message = Message {
+                        role: MessageRole::Assistant,
+                        content: if message_text.is_empty() { None } else { Some(MessageContent::String(message_text)) },
+                        tool_calls: Some(tool_calls),
+                        tool_call_id: None,
+                        name: None,
+                    };
+                    
+                    choices.push(Choice {
+                        index: 0,
+                        message,
+                        finish_reason: Some("tool_calls".to_string()),
+                    });
+                } else if !message_text.is_empty() {
+                    println!("[ResponsesClient] Creating message with text: {}", message_text);
+                    let message = Message {
+                        role: MessageRole::Assistant,
+                        content: Some(MessageContent::String(message_text)),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    };
+                    
+                    choices.push(Choice {
+                        index: 0,
+                        message,
+                        finish_reason: Some("stop".to_string()),
+                    });
+                } else {
+                    // No content and no tool calls - this shouldn't happen but handle it
+                    println!("[ResponsesClient] WARNING: No content and no tool calls in output");
                 }
             }
         }
         
         // If no choices from output, try standard "choices" format
         if choices.is_empty() {
+            println!("[ResponsesClient] No choices from 'output', trying 'choices' field...");
             if let Some(choices_array) = response_json.get("choices").and_then(|v| v.as_array()) {
+                println!("[ResponsesClient] Found 'choices' array with {} items", choices_array.len());
                 if let Ok(parsed_choices) = serde_json::from_value::<Vec<Choice>>(serde_json::Value::Array(choices_array.clone())) {
                     choices = parsed_choices;
+                    println!("[ResponsesClient] Parsed {} choices from 'choices' array", choices.len());
+                } else {
+                    println!("[ResponsesClient] Failed to parse 'choices' array");
                 }
+            } else {
+                println!("[ResponsesClient] No 'choices' field found");
             }
         }
         
         // If still no choices, try to extract text from top-level fields
         if choices.is_empty() {
+            println!("[ResponsesClient] Still no choices, trying top-level 'text' field...");
             // Some APIs might return text directly
             if let Some(text) = response_json.get("text").and_then(|v| v.as_str()) {
+                println!("[ResponsesClient] Found top-level 'text' field: {}", text);
                 let message = ResponsesClient::create_message_from_text(text.to_string());
                 
                 choices.push(Choice {
@@ -212,8 +267,12 @@ impl LLMClient for ResponsesClient {
                     message,
                     finish_reason: Some("stop".to_string()),
                 });
+            } else {
+                println!("[ResponsesClient] No top-level 'text' field found");
             }
         }
+        
+        println!("[ResponsesClient] Final choices count: {}", choices.len());
         
         // Extract usage if present
         let usage = response_json
@@ -571,9 +630,41 @@ impl ResponsesClient {
         let mut transformed_messages: Vec<serde_json::Value> = Vec::new();
 
         for msg in messages {
+            use crate::models::MessageRole;
             let mut message_json = serde_json::json!({
                 "role": msg.role,
             });
+
+            // Handle tool messages specially
+            // Responses API doesn't support "tool" role, so we send tool results as "user" messages
+            // The API should automatically associate tool results with the previous assistant message's tool calls
+            if matches!(msg.role, MessageRole::Tool) {
+                println!("[ResponsesClient] Processing tool message: tool_call_id={:?}, name={:?}, content={:?}", 
+                    msg.tool_call_id, msg.name, msg.content);
+                if let Some(tool_call_id) = &msg.tool_call_id {
+                    if let Some(name) = &msg.name {
+                        // Tool messages need to be sent as "user" role with just content
+                        // The Responses API should automatically match tool results to tool calls by order
+                        // Remove tool_call_id and name as they're not accepted on user messages
+                        let content_text = msg.content.as_ref()
+                            .map(|c| c.extract_text())
+                            .unwrap_or_default();
+                        println!("[ResponsesClient] Tool message content text: {}", content_text);
+                        // Change role to "user" since Responses API doesn't support "tool" role
+                        message_json["role"] = serde_json::Value::String("user".to_string());
+                        message_json["content"] = serde_json::Value::String(content_text);
+                        // Note: Responses API should match tool results to tool calls by order in the conversation
+                        println!("[ResponsesClient] Transformed tool message (removed tool_call_id and name): {}", serde_json::to_string_pretty(&message_json).unwrap_or_default());
+                        transformed_messages.push(message_json);
+                        continue; // Skip the rest of the loop
+                    } else {
+                        println!("[ResponsesClient] ERROR: Tool message missing 'name' field");
+                    }
+                } else {
+                    println!("[ResponsesClient] ERROR: Tool message missing 'tool_call_id' field");
+                }
+                println!("[ResponsesClient] WARNING: Tool message missing required fields (tool_call_id or name)");
+            }
 
             if let Some(content) = &msg.content {
                 match content {
@@ -683,12 +774,54 @@ impl ResponsesClient {
                     }
                 }
             } else {
-                // Message with no content, add as-is
+                // Message with no content - might be assistant with tool_calls
+                // Responses API requires content field, so add empty string if missing
+                if !message_json.get("content").is_some() {
+                    message_json["content"] = serde_json::Value::String(String::new());
+                }
                 transformed_messages.push(message_json);
             }
         }
 
         transformed_messages
+    }
+
+    /// Transform tools from OpenAI format to Responses API format
+    /// 
+    /// OpenAI format: { "type": "function", "function": { "name": "...", "description": "...", "parameters": {...} } }
+    /// Responses API format: { "type": "function", "name": "...", "description": "...", "parameters": {...} }
+    fn transform_tools_for_responses_api(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
+        tools
+            .iter()
+            .filter_map(|tool| {
+                // Extract the function definition from OpenAI format
+                if let Some(function_obj) = tool.get("function") {
+                    // Get the type from the tool (usually "function")
+                    let tool_type = tool.get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("function");
+                    
+                    // Build the Responses API format with type, name, description, and parameters
+                    let mut transformed = serde_json::Map::new();
+                    transformed.insert("type".to_string(), serde_json::Value::String(tool_type.to_string()));
+                    
+                    // Copy all fields from function_obj (name, description, parameters)
+                    if let Some(function_map) = function_obj.as_object() {
+                        for (key, value) in function_map {
+                            transformed.insert(key.clone(), value.clone());
+                        }
+                    }
+                    
+                    Some(serde_json::Value::Object(transformed))
+                } else if tool.get("name").is_some() && tool.get("type").is_some() {
+                    // Already in Responses API format, use as-is
+                    Some(tool.clone())
+                } else {
+                    // Invalid format, skip
+                    None
+                }
+            })
+            .collect()
     }
 
     /// Build request body for Responses API from ChatCompletionRequest
@@ -697,6 +830,15 @@ impl ResponsesClient {
         transformed_messages: Vec<serde_json::Value>,
         stream: bool,
     ) -> Result<serde_json::Value> {
+        println!("[ResponsesClient] Building request body with {} messages", transformed_messages.len());
+        for (i, msg) in transformed_messages.iter().enumerate() {
+            println!("[ResponsesClient] Message {}: role={}, has_content={}", 
+                i, 
+                msg.get("role").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                msg.get("content").is_some()
+            );
+        }
+        
         let mut request_body = serde_json::json!({
             "model": request.model,
             "input": transformed_messages,
@@ -738,7 +880,8 @@ impl ResponsesClient {
             request_body["stream"] = serde_json::Value::Bool(true);
         }
         if let Some(ref tools) = request.tools {
-            request_body["tools"] = serde_json::Value::Array(tools.clone());
+            let transformed_tools = ResponsesClient::transform_tools_for_responses_api(tools);
+            request_body["tools"] = serde_json::Value::Array(transformed_tools);
         }
         if let Some(ref response_format) = request.response_format {
             request_body["response_format"] = serde_json::to_value(response_format)

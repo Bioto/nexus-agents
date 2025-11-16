@@ -245,8 +245,43 @@ impl DockerService {
         command: Vec<String>,
         env: Option<HashMap<String, String>>,
     ) -> Result<String, DockerError> {
+        self.create_container_with_mounts(command, env, None).await
+    }
+
+    /// Create a container with the specified command and volume mounts
+    pub async fn create_container_with_mounts(
+        &self,
+        command: Vec<String>,
+        env: Option<HashMap<String, String>>,
+        mounts: Option<Vec<(String, String)>>, // Vec of (host_path, container_path) tuples
+    ) -> Result<String, DockerError> {
+        use bollard::models::{HostConfig, Mount, MountTypeEnum};
+        
         let image_name = self.image_full_name();
         let container_name = format!("{}_{}", self.config.image_name, uuid::Uuid::new_v4());
+
+        // Build mounts if provided
+        let host_config = if let Some(mounts) = mounts {
+            let docker_mounts: Vec<Mount> = mounts
+                .into_iter()
+                .map(|(host_path, container_path)| {
+                    Mount {
+                        target: Some(container_path),
+                        source: Some(host_path),
+                        typ: Some(MountTypeEnum::BIND),
+                        read_only: Some(false),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+            
+            Some(HostConfig {
+                mounts: Some(docker_mounts),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
 
         let container_config = Config {
             image: Some(image_name),
@@ -258,6 +293,7 @@ impl DockerService {
             }),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
+            host_config: host_config,
             ..Default::default()
         };
 
@@ -382,7 +418,17 @@ impl DockerService {
         command: Vec<String>,
         env: Option<HashMap<String, String>>,
     ) -> Result<(String, String, i32), DockerError> {
-        let container_id = self.create_container(command.clone(), env).await?;
+        self.run_command_with_mounts(command, env, None).await
+    }
+
+    /// Run a command in a new container with volume mounts and return the output
+    pub async fn run_command_with_mounts(
+        &self,
+        command: Vec<String>,
+        env: Option<HashMap<String, String>>,
+        mounts: Option<Vec<(String, String)>>,
+    ) -> Result<(String, String, i32), DockerError> {
+        let container_id = self.create_container_with_mounts(command.clone(), env, mounts).await?;
         self.start_container(&container_id).await?;
 
         // Wait for container to finish
@@ -538,6 +584,15 @@ impl DockerService {
         &self,
         code: &str,
     ) -> Result<(String, String, i32), DockerError> {
+        self.execute_python_code_with_mounts(code, None).await
+    }
+
+    /// Execute Python code in a container with volume mounts
+    pub async fn execute_python_code_with_mounts(
+        &self,
+        code: &str,
+        mounts: Option<Vec<(String, String)>>,
+    ) -> Result<(String, String, i32), DockerError> {
         // Create a temporary file in the container with the code
         // We'll use the exec-code command that the Dockerfile supports
         let command = vec![
@@ -546,7 +601,7 @@ impl DockerService {
             code.to_string(),
         ];
 
-        self.run_command(command, None).await
+        self.run_command_with_mounts(command, None, mounts).await
     }
 
     /// Execute a Python script file in a container

@@ -95,6 +95,16 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         },
+        Commands::McpAgent(args) => {
+            cli::commands::mcp_agent::run_mcp_agent(args)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        }
+        Commands::TestPython(args) => {
+            cli::commands::test_python::run_test_python(args)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        }
     }
 
     Ok(())
