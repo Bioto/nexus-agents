@@ -1,7 +1,7 @@
 # uv: dependencies = ["httpx"]
 
 """
-get_counter - Returns the current value of the internal counter
+generate_code_api - Generates Python code API files in directory structure (servers/nexus-mcp-server/) following the Anthropic code execution pattern. Returns the path where files were generated.
 Generated code - do not edit manually
 This file is self-contained and can be executed independently.
 """
@@ -153,7 +153,11 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
 
 # === Tool Definition ===
 
-# Tool: get_counter
-"""Returns the current value of the internal counter"""
-async def get_counter() -> Dict[str, Any]:
-    return await call_mcp_tool("get_counter", {})
+# Tool: generate_code_api
+class GenerateCodeApiInput(TypedDict):
+    output_dir: Optional[str]
+    server_url: Optional[str]
+
+"""Generates Python code API files in directory structure (servers/nexus-mcp-server/) following the Anthropic code execution pattern. Returns the path where files were generated."""
+async def generate_code_api(input: GenerateCodeApiInput) -> Dict[str, Any]:
+    return await call_mcp_tool("generate_code_api", input)

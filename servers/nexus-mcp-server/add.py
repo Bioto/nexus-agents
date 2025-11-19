@@ -1,11 +1,3 @@
-
-# /// script
-# requires-python = ">=3.10"
-# dependencies = [
-#     "httpx",
-# ]
-# ///
-
 # uv: dependencies = ["httpx"]
 
 """
@@ -16,10 +8,11 @@ This file is self-contained and can be executed independently.
 
 from typing import Any, Dict, Optional, TypedDict
 import httpx
-import os
 
 # === MCP Client Implementation (inline) ===
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://172.17.0.1:8000")
+import os
+import re
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000")
 
 # Session state for MCP initialization
 _mcp_session_id: Optional[str] = None
@@ -60,16 +53,25 @@ async def _ensure_mcp_initialized(client: httpx.AsyncClient) -> str:
     _mcp_session_id = init_response.headers.get("mcp-session-id")
     
     # Parse SSE format response (data: {...})
-    import json
     init_text = init_response.text
-    # Extract JSON from SSE format: data: {...}
-    for line in init_text.split('\n'):
-        line = line.strip()
-        if line.startswith('data: '):
-            data_json = json.loads(line[6:])  # Skip 'data: '
+    if isinstance(init_text, str):
+        # Extract JSON from SSE format: data: {...}
+        for line in init_text.split('\n'):
+            if line.startswith('data: '):
+                import json
+                data_json = json.loads(line[6:])  # Skip 'data: '
+                if 'error' in data_json:
+                    raise Exception(f"MCP initialization error: {data_json['error']}")
+                break
+    else:
+        # Try to parse as JSON directly
+        try:
+            import json
+            data_json = init_response.json()
             if 'error' in data_json:
                 raise Exception(f"MCP initialization error: {data_json['error']}")
-            break
+        except:
+            pass
     
     # Step 2: Send initialized notification
     initialized_notification = {
@@ -117,31 +119,19 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
         if session_id:
             headers["mcp-session-id"] = session_id
         
-        full_url = f"{MCP_SERVER_URL}/mcp"
-        print(f"[call_mcp_tool] MCP_SERVER_URL: {MCP_SERVER_URL}")
-        print(f"[call_mcp_tool] Full URL: {full_url}")
-        print(f"[call_mcp_tool] Calling tool '{tool_name}' with params: {params}")
-        print(f"[call_mcp_tool] Request payload: {request}")
+        response = await client.post(
+            f"{MCP_SERVER_URL}/mcp",
+            json=request,
+            headers=headers
+        )
+        response.raise_for_status()
         
-        try:
-            print(f"[call_mcp_tool] Sending POST request to: {full_url}")
-            response = await client.post(
-                full_url,
-                json=request,
-                headers=headers,
-                timeout=10.0
-            )
-            print(f"[call_mcp_tool] Response status: {response.status_code}")
-            print(f"[call_mcp_tool] Response headers: {dict(response.headers)}")
-            print(f"[call_mcp_tool] Response text (first 500 chars): {response.text[:500]}")
-            response.raise_for_status()
-            
-            # Parse SSE format response (data: {...})
+        # Parse SSE format response (data: {...})
+        response_text = response.text
+        if isinstance(response_text, str):
             import json
-            response_text = response.text
             # Extract JSON from SSE format: data: {...}
             for line in response_text.split('\n'):
-                line = line.strip()
                 if line.startswith('data: '):
                     result = json.loads(line[6:])  # Skip 'data: '
                     if "error" in result:
@@ -155,13 +145,11 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
                 return result.get("result", {})
             except:
                 raise Exception(f"Failed to parse MCP response: {response_text[:200]}")
-        except httpx.ConnectError as e:
-            print(f"[call_mcp_tool] Connection error: {e}")
-            print(f"[call_mcp_tool] Failed to connect to: {full_url}")
-            raise
-        except Exception as e:
-            print(f"[call_mcp_tool] Error: {type(e).__name__}: {e}")
-            raise
+        else:
+            result = response.json()
+            if "error" in result:
+                raise Exception(f"MCP tool error: {result['error']}")
+            return result.get("result", {})
 
 # === Tool Definition ===
 
