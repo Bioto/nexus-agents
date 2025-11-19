@@ -1,15 +1,24 @@
 # uv: dependencies = ["httpx"]
 
 """
-MCP Client - shared client for calling MCP tools via HTTP transport
+get-library-docs - Fetches up-to-date documentation for a library. You must call 'resolve-library-id' first to obtain the exact Context7-compatible library ID required to use this tool, UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.
 Generated code - do not edit manually
+This file is self-contained and can be executed independently.
 """
 
+from typing import Any, Dict, Optional, TypedDict
 import httpx
-import os
-from typing import Any, Dict, Optional
 
+# === MCP Client Implementation (inline) ===
+import os
+import re
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://mcp.context7.com")
+
+# Custom headers from configuration
+def get_custom_headers() -> Dict[str, str]:
+    headers = {}
+    headers["CONTEXT7_API_KEY"] = os.getenv("CONTEXT7_API_KEY", "ctx7sk-10e3ae20-7221-4088-a0fc-019fd769cdc4")
+    return headers
 
 # Session state for MCP initialization
 _mcp_session_id: Optional[str] = None
@@ -113,6 +122,7 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json"
         }
+        headers.update(get_custom_headers())
         if session_id:
             headers["mcp-session-id"] = session_id
         
@@ -124,21 +134,38 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
         response.raise_for_status()
         
         # Parse SSE format response (data: {...})
-        import json
         response_text = response.text
-        # Extract JSON from SSE format: data: {...}
-        for line in response_text.split('\n'):
-            line = line.strip()
-            if line.startswith('data: '):
-                result = json.loads(line[6:])  # Skip 'data: '
+        if isinstance(response_text, str):
+            import json
+            # Extract JSON from SSE format: data: {...}
+            for line in response_text.split('\n'):
+                if line.startswith('data: '):
+                    result = json.loads(line[6:])  # Skip 'data: '
+                    if "error" in result:
+                        raise Exception(f"MCP tool error: {result['error']}")
+                    return result.get("result", {})
+            # Fallback: try to parse as JSON directly
+            try:
+                result = response.json()
                 if "error" in result:
                     raise Exception(f"MCP tool error: {result['error']}")
                 return result.get("result", {})
-        # Fallback: try to parse as JSON directly
-        try:
+            except:
+                raise Exception(f"Failed to parse MCP response: {response_text[:200]}")
+        else:
             result = response.json()
             if "error" in result:
                 raise Exception(f"MCP tool error: {result['error']}")
             return result.get("result", {})
-        except:
-            raise Exception(f"Failed to parse MCP response: {response_text[:200]}")
+
+# === Tool Definition ===
+
+# Tool: get-library-docs
+class GetLibraryDocsInput(TypedDict):
+    context7CompatibleLibraryID: str
+    page: Optional[int]
+    topic: Optional[str]
+
+"""Fetches up-to-date documentation for a library. You must call 'resolve-library-id' first to obtain the exact Context7-compatible library ID required to use this tool, UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query."""
+async def get-library-docs(input: GetLibraryDocsInput) -> Dict[str, Any]:
+    return await call_mcp_tool("get-library-docs", input)

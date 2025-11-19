@@ -68,6 +68,9 @@ pub fn run_search_mcp_tools(args: SearchMcpToolsArgs) -> Result<()> {
         payload.insert("limit".to_string(), Value::Number(limit.into()));
     }
 
+    println!("payload: {:?}", payload);
+    std::process::exit(0);
+
     let response = discovery.execute(Value::Object(payload))?;
     let parsed: Value = serde_json::from_str(&response)
         .map_err(|e| Error::Other(format!("Failed to parse tool discovery response: {}", e)))?;

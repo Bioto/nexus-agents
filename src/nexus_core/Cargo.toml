@@ -36,6 +36,7 @@ log = "0.4.22"
 simplelog = "0.12.2"
 chrono = "0.4.38"
 nexus_py = { path = "../nexus_py" }
+nexus_mcp = { path = "../nexus_mcp" }
 
 [dev-dependencies]
 mockito = "1.3"

@@ -1,15 +1,43 @@
 # uv: dependencies = ["httpx"]
 
 """
-MCP Client - shared client for calling MCP tools via HTTP transport
+resolve-library-id - Resolves a package/product name to a Context7-compatible library ID and returns a list of matching libraries.
+
+You MUST call this function before 'get-library-docs' to obtain a valid Context7-compatible library ID UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.
+
+Selection Process:
+1. Analyze the query to understand what library/package the user is looking for
+2. Return the most relevant match based on:
+- Name similarity to the query (exact matches prioritized)
+- Description relevance to the query's intent
+- Documentation coverage (prioritize libraries with higher Code Snippet counts)
+- Source reputation (consider libraries with High or Medium reputation more authoritative)
+- Benchmark Score: Quality indicator (100 is the highest score)
+
+Response Format:
+- Return the selected library ID in a clearly marked section
+- Provide a brief explanation for why this library was chosen
+- If multiple good matches exist, acknowledge this but proceed with the most relevant one
+- If no good matches exist, clearly state this and suggest query refinements
+
+For ambiguous queries, request clarification before proceeding with a best-guess match.
 Generated code - do not edit manually
+This file is self-contained and can be executed independently.
 """
 
+from typing import Any, Dict, Optional, TypedDict
 import httpx
-import os
-from typing import Any, Dict, Optional
 
+# === MCP Client Implementation (inline) ===
+import os
+import re
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://mcp.context7.com")
+
+# Custom headers from configuration
+def get_custom_headers() -> Dict[str, str]:
+    headers = {}
+    headers["CONTEXT7_API_KEY"] = os.getenv("CONTEXT7_API_KEY", "ctx7sk-10e3ae20-7221-4088-a0fc-019fd769cdc4")
+    return headers
 
 # Session state for MCP initialization
 _mcp_session_id: Optional[str] = None
@@ -113,6 +141,7 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json"
         }
+        headers.update(get_custom_headers())
         if session_id:
             headers["mcp-session-id"] = session_id
         
@@ -124,21 +153,55 @@ async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any
         response.raise_for_status()
         
         # Parse SSE format response (data: {...})
-        import json
         response_text = response.text
-        # Extract JSON from SSE format: data: {...}
-        for line in response_text.split('\n'):
-            line = line.strip()
-            if line.startswith('data: '):
-                result = json.loads(line[6:])  # Skip 'data: '
+        if isinstance(response_text, str):
+            import json
+            # Extract JSON from SSE format: data: {...}
+            for line in response_text.split('\n'):
+                if line.startswith('data: '):
+                    result = json.loads(line[6:])  # Skip 'data: '
+                    if "error" in result:
+                        raise Exception(f"MCP tool error: {result['error']}")
+                    return result.get("result", {})
+            # Fallback: try to parse as JSON directly
+            try:
+                result = response.json()
                 if "error" in result:
                     raise Exception(f"MCP tool error: {result['error']}")
                 return result.get("result", {})
-        # Fallback: try to parse as JSON directly
-        try:
+            except:
+                raise Exception(f"Failed to parse MCP response: {response_text[:200]}")
+        else:
             result = response.json()
             if "error" in result:
                 raise Exception(f"MCP tool error: {result['error']}")
             return result.get("result", {})
-        except:
-            raise Exception(f"Failed to parse MCP response: {response_text[:200]}")
+
+# === Tool Definition ===
+
+# Tool: resolve-library-id
+class ResolveLibraryIdInput(TypedDict):
+    libraryName: str
+
+"""Resolves a package/product name to a Context7-compatible library ID and returns a list of matching libraries.
+
+You MUST call this function before 'get-library-docs' to obtain a valid Context7-compatible library ID UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query.
+
+Selection Process:
+1. Analyze the query to understand what library/package the user is looking for
+2. Return the most relevant match based on:
+- Name similarity to the query (exact matches prioritized)
+- Description relevance to the query's intent
+- Documentation coverage (prioritize libraries with higher Code Snippet counts)
+- Source reputation (consider libraries with High or Medium reputation more authoritative)
+- Benchmark Score: Quality indicator (100 is the highest score)
+
+Response Format:
+- Return the selected library ID in a clearly marked section
+- Provide a brief explanation for why this library was chosen
+- If multiple good matches exist, acknowledge this but proceed with the most relevant one
+- If no good matches exist, clearly state this and suggest query refinements
+
+For ambiguous queries, request clarification before proceeding with a best-guess match."""
+async def resolve-library-id(input: ResolveLibraryIdInput) -> Dict[str, Any]:
+    return await call_mcp_tool("resolve-library-id", input)

@@ -43,6 +43,8 @@ impl From<crate::schema::SchemaError> for CodegenError {
 pub struct CodeGenerator {
     server_url: String,
     mcp_client: McpClient,
+    headers: Option<std::collections::HashMap<String, String>>,
+    server_name: String,
 }
 
 impl CodeGenerator {
@@ -52,6 +54,29 @@ impl CodeGenerator {
         Self {
             server_url: server_url.clone(),
             mcp_client: McpClient::new(server_url),
+            headers: None,
+            server_name: "nexus-mcp-server".to_string(),
+        }
+    }
+
+    /// Create a new code generator with custom headers and server name
+    pub fn with_config(
+        server_url: impl Into<String>,
+        server_name: impl Into<String>,
+        headers: Option<std::collections::HashMap<String, String>>,
+    ) -> Self {
+        let server_url = server_url.into();
+        let headers_clone = headers.clone();
+        let mcp_client = if let Some(ref h) = headers_clone {
+            McpClient::with_headers(server_url.clone(), h.clone())
+        } else {
+            McpClient::new(server_url.clone())
+        };
+        Self {
+            server_url,
+            mcp_client,
+            headers,
+            server_name: server_name.into(),
         }
     }
 
@@ -62,9 +87,8 @@ impl CodeGenerator {
     ) -> Result<(), CodegenError> {
         let tools = self.mcp_client.fetch_tools().await?;
 
-        // Create server directory (e.g., servers/nexus-mcp-server)
-        let server_name = "nexus-mcp-server";
-        let server_dir = output_dir.join(server_name);
+        // Create server directory (e.g., servers/context7)
+        let server_dir = output_dir.join(&self.server_name);
         std::fs::create_dir_all(&server_dir)
             .map_err(|e| CodegenError::ParseError(format!("Failed to create directory: {}", e)))?;
 
@@ -294,6 +318,22 @@ impl CodeGenerator {
             "MCP_SERVER_URL = os.getenv(\"MCP_SERVER_URL\", \"{}\")\n\n",
             base_url
         ));
+        
+        // Generate custom headers from environment variables if configured
+        if let Some(ref headers) = self.headers {
+            code.push_str("# Custom headers from configuration\n");
+            code.push_str("def get_custom_headers() -> Dict[str, str]:\n");
+            code.push_str("    headers = {}\n");
+            for (key, default_value) in headers {
+                // Convert header key to env var name (e.g., CONTEXT7_API_KEY -> CONTEXT7_API_KEY)
+                let env_var = key.replace("-", "_").to_uppercase();
+                code.push_str(&format!(
+                    "    headers[\"{}\"] = os.getenv(\"{}\", \"{}\")\n",
+                    key, env_var, default_value
+                ));
+            }
+            code.push_str("    return headers\n\n");
+        }
 
         code.push_str("# Session state for MCP initialization\n");
         code.push_str("_mcp_session_id: Optional[str] = None\n");
@@ -399,6 +439,9 @@ impl CodeGenerator {
         code.push_str("            \"Accept\": \"application/json, text/event-stream\",\n");
         code.push_str("            \"Content-Type\": \"application/json\"\n");
         code.push_str("        }\n");
+        if let Some(_) = self.headers {
+            code.push_str("        headers.update(get_custom_headers())\n");
+        }
         code.push_str("        if session_id:\n");
         code.push_str("            headers[\"mcp-session-id\"] = session_id\n");
         code.push_str("        \n");

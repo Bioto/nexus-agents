@@ -10,6 +10,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::GenerateCode(args) => {
             nexus_mcp::run_generate_code(args).await?;
         }
+        Commands::GenerateExternal(args) => {
+            nexus_mcp::run_generate_external(args).await?;
+        }
         Commands::StartServers(args) => {
             nexus_mcp::run_start_servers(args)
                 .await

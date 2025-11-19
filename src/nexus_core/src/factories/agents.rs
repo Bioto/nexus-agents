@@ -111,8 +111,52 @@ impl AgentFactory {
     }
 
     /// Create an MCP agent that can execute Python code with access to MCP server tools
+    /// This will also generate Python tool files for any external MCP servers configured in mcp-servers.toml
     pub fn mcp_agent(servers_dir: impl Into<PathBuf>) -> Agent {
         let servers_path: PathBuf = servers_dir.into();
+        
+        // Generate code for external servers from config if it exists
+        let config_path = servers_path
+            .parent()
+            .map(|p| p.join("mcp-servers.toml"))
+            .or_else(|| Some(std::path::PathBuf::from("mcp-servers.toml")));
+        
+        if let Some(config_path) = config_path {
+            if config_path.exists() {
+                // Use tokio runtime to run async code generation
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    // We're in an async context, spawn the task
+                    let config_path_clone = config_path.clone();
+                    let servers_path_clone = servers_path.clone();
+                    handle.spawn(async move {
+                        if let Err(e) = nexus_mcp::generate_external_server_tools(
+                            &config_path_clone,
+                            &servers_path_clone,
+                        )
+                        .await
+                        {
+                            eprintln!("Warning: Failed to generate external server tools: {}", e);
+                        }
+                    });
+                } else {
+                    // We're not in an async context, create a runtime
+                    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|_| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("Failed to create tokio runtime")
+                    });
+                    
+                    if let Err(e) = rt.block_on(nexus_mcp::generate_external_server_tools(
+                        &config_path,
+                        &servers_path,
+                    )) {
+                        eprintln!("Warning: Failed to generate external server tools: {}", e);
+                    }
+                }
+            }
+        }
+        
         let python_exec = PythonExec::new(&servers_path);
         let discovery_tool = ToolDiscovery::new(&servers_path);
         let execute_definition = python_exec.definition();
