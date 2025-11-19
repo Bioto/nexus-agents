@@ -1,6 +1,7 @@
 use anyhow::{self, Result};
 use ffmpeg::{
     codec,
+    codec::context::Context as CodecContext,
     device::input,
     encoder, format,
     format::Pixel,
@@ -414,7 +415,7 @@ impl ScreenRecorder {
                                         name: device_index.to_string(),
                                         display_name: name.clone(),
                                         resolution: None,
-                                        is_primary: device_index == 1, // Typically index 1 is primary
+                                        is_primary: device_index == 0, // Device index 0 is the primary screen
                                         offset_x: None,
                                         offset_y: None,
                                     });
@@ -440,8 +441,8 @@ impl ScreenRecorder {
         if monitors.is_empty() {
             monitors.push(MonitorInfo {
                 index: 0,
-                name: "1".to_string(),
-                display_name: "Default Screen (1)".to_string(),
+                name: "0".to_string(),
+                display_name: "Default Screen (Capture screen 0)".to_string(),
                 resolution: None,
                 is_primary: true,
                 offset_x: None,
@@ -454,7 +455,7 @@ impl ScreenRecorder {
 
     fn get_input_format_and_url(
         monitor_index: Option<usize>,
-        window_info: Option<&WindowInfo>,
+        _window_info: Option<&WindowInfo>,
         fps: u32,
     ) -> Result<InputParams> {
         #[cfg(target_os = "linux")]
@@ -475,7 +476,7 @@ impl ScreenRecorder {
             };
 
             // If window_info is provided, use window geometry for recording
-            let (offset_x, offset_y, video_size_str) = if let Some(window) = window_info {
+            let (offset_x, offset_y, video_size_str) = if let Some(window) = _window_info {
                 if let Some(geom) = &window.geometry {
                     let size = format!("{}x{}", geom.width, geom.height);
                     (geom.x, geom.y, Some(size))
@@ -558,10 +559,10 @@ impl ScreenRecorder {
         {
             // macOS: use avfoundation
             // Format: avfoundation -i "device_index:audio_index" -framerate fps
-            // For screen capture, device_index is typically 1 (screen), audio_index can be :none or a number
+            // For screen capture, device_index 0 is the primary screen
             let device_index = monitor_index
                 .map(|i| i.to_string())
-                .unwrap_or_else(|| "1".to_string());
+                .unwrap_or_else(|| "0".to_string());
             let url = format!("{}:none", device_index); // :none means no audio
 
             // avfoundation options
@@ -636,14 +637,23 @@ impl ScreenRecorder {
             .ok_or_else(|| anyhow::anyhow!("No video stream found"))?;
         let input_stream_index = input_stream.index();
 
-        // Get decoder
-        let codec_ctx = input_stream.codec();
-        let decoder_result = codec_ctx.decoder();
-        let mut decoder = decoder_result.video()?;
+        // Get decoder using parameters (cross-platform compatible)
+        // Use Context::from_parameters() as per ffmpeg-next API
+        let codec_params = input_stream.parameters();
+        let context_decoder = CodecContext::from_parameters(codec_params.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to create decoder context: {:?}", e))?;
+        let mut decoder = context_decoder.decoder().video()?;
 
-        let width = decoder.width();
-        let height = decoder.height();
-        let input_pixel_format = decoder.format();
+        // Get video parameters from codec_params using unsafe FFI
+        let (width, height, input_pixel_format) = unsafe {
+            use ffmpeg::ffi::AVPixelFormat;
+            let params_ptr = codec_params.as_ptr();
+            let width = (*params_ptr).width as u32;
+            let height = (*params_ptr).height as u32;
+            let pix_fmt = std::mem::transmute::<i32, AVPixelFormat>((*params_ptr).format);
+            let input_pixel_format = Pixel::from(pix_fmt);
+            (width, height, input_pixel_format)
+        };
 
         // Create frame buffers
         let mut input_frame = Video::new(input_pixel_format, width, height);
@@ -720,9 +730,6 @@ impl ScreenRecorder {
     pub fn record(&self, config: RecordingConfig, stop_signal: Arc<AtomicBool>) -> Result<()> {
         let fps = config.framerate;
         let frame_interval = Duration::from_nanos(1_000_000_000u64 / fps as u64);
-        let end_time = config
-            .duration_secs
-            .map(|secs| Instant::now() + Duration::from_secs(secs));
 
         // Setup FFmpeg output
         let mut octx = format::output(&config.output_path)?;
@@ -794,14 +801,20 @@ impl ScreenRecorder {
             .ok_or_else(|| anyhow::anyhow!("No video stream found in input"))?;
         let input_stream_index = input_stream.index();
 
-        // Get decoder
-        let codec_ctx = input_stream.codec();
-        let decoder_result = codec_ctx.decoder();
-        let mut decoder = decoder_result.video()?;
-
-        // Get actual dimensions from input stream
-        let raw_width = decoder.width();
-        let raw_height = decoder.height();
+        // Get decoder using parameters (cross-platform compatible)
+        // Use Context::from_parameters() as per ffmpeg-next API
+        let codec_params = input_stream.parameters();
+        let context_decoder = CodecContext::from_parameters(codec_params.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to create decoder context: {:?}", e))?;
+        let mut decoder = context_decoder.decoder().video()?;
+        
+        // Get video parameters from codec_params using unsafe FFI
+        let (raw_width, raw_height) = unsafe {
+            let params_ptr = codec_params.as_ptr();
+            let width = (*params_ptr).width as u32;
+            let height = (*params_ptr).height as u32;
+            (width, height)
+        };
         let width = if raw_width % 2 == 0 {
             raw_width
         } else {
@@ -819,36 +832,56 @@ impl ScreenRecorder {
         );
 
         let ostream_idx = stream.index();
-        let mut encoder_ctx = stream.codec().encoder().video()?;
-        encoder_ctx.set_width(width);
-        encoder_ctx.set_height(height);
-        encoder_ctx.set_format(Pixel::YUV420P);
+        
+        // Configure the stream parameters directly using unsafe FFI
+        // This is the proper way to set up encoding parameters before opening
+        unsafe {
+            use ffmpeg::ffi::*;
+            let mut stream_ptr = octx.stream_mut(ostream_idx)
+                .ok_or_else(|| anyhow::anyhow!("Stream {} not found", ostream_idx))?;
+            let params_ptr = stream_ptr.parameters().as_ptr() as *mut AVCodecParameters;
+            
+            // Set codec parameters on the stream
+            (*params_ptr).codec_type = AVMediaType::AVMEDIA_TYPE_VIDEO;
+            (*params_ptr).codec_id = codec.id().into();
+            (*params_ptr).width = width as i32;
+            (*params_ptr).height = height as i32;
+            (*params_ptr).format = AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
+            
+            // Set stream time_base
+            let stream_ptr_raw = stream_ptr.as_mut_ptr();
+            (*stream_ptr_raw).time_base = AVRational { num: 1, den: fps as i32 };
+        }
 
         // Set time_base for proper timestamp handling
-        // Use a standard time_base that works well with MP4 container
-        // MP4 typically uses 1/90000 or 1/1000, but we'll use 1/fps for encoder
-        // and let FFmpeg handle conversion to stream time_base
         let encoder_time_base = Rational(1, fps as i32);
-        encoder_ctx.set_time_base(encoder_time_base);
-        encoder_ctx.set_frame_rate(Some(Rational(fps as i32, 1)));
 
-        // Set encoder options for immediate packet output
-        encoder_ctx.set_max_b_frames(0); // No B-frames for lower latency
-        encoder_ctx.set_gop(1); // Force every frame to be a keyframe for immediate output
-
-        // Set x264-specific options via parameters
+        // Write header first - this prepares the output file
+        octx.write_header()?;
+        
+        // Now create and open the encoder with the correct parameters
+        let mut encoder_ctx = CodecContext::new_with_codec(codec);
         unsafe {
             use ffmpeg::ffi::*;
             let ctx_ptr = encoder_ctx.as_mut_ptr();
+            (*ctx_ptr).width = width as i32;
+            (*ctx_ptr).height = height as i32;
+            (*ctx_ptr).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
+            (*ctx_ptr).time_base = AVRational { num: 1, den: fps as i32 };
+            (*ctx_ptr).framerate = AVRational { num: fps as i32, den: 1 };
+            (*ctx_ptr).max_b_frames = 0;
+            (*ctx_ptr).gop_size = 1;
             (*ctx_ptr).flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
             (*ctx_ptr).flags2 |= AV_CODEC_FLAG2_FAST;
+            
+            // Actually open the codec
+            if avcodec_open2(ctx_ptr, (*ctx_ptr).codec, std::ptr::null_mut()) < 0 {
+                return Err(anyhow::anyhow!("Failed to open H.264 encoder"));
+            }
         }
-
-        let mut video_encoder = encoder_ctx.open_as(codec)?;
-
-        // Write header to finalize stream setup
-        // Note: We need to drop the stream reference before this mutable borrow
-        octx.write_header()?;
+        
+        // Get the encoder interface
+        let mut video_encoder = encoder_ctx.encoder().video()?;
 
         // Get stream time_base after writing header (access stream through octx)
         let stream_time_base = octx
@@ -891,13 +924,19 @@ impl ScreenRecorder {
 
         // Input frames from FFmpeg will be in the decoder's format
         // We may need to scale if dimensions don't match or format differs
-        let input_pixel_format = decoder.format();
+        let input_pixel_format = unsafe {
+            use ffmpeg::ffi::AVPixelFormat;
+            let params_ptr = codec_params.as_ptr();
+            let pix_fmt = std::mem::transmute::<i32, AVPixelFormat>((*params_ptr).format);
+            Pixel::from(pix_fmt)
+        };
         let mut input_frame = Video::new(input_pixel_format, raw_width, raw_height);
         let mut scaled_frame = Video::new(Pixel::YUV420P, width, height);
 
         // Only create scaler if we need to convert format or resize
         let needs_scaling =
             input_pixel_format != Pixel::YUV420P || raw_width != width || raw_height != height;
+        
         let mut scaler = if needs_scaling {
             Some(
                 Scaler::get(
@@ -924,6 +963,11 @@ impl ScreenRecorder {
         let mut frames_with_packets: std::collections::HashSet<usize> =
             std::collections::HashSet::new(); // Track which frames have produced packets
         let start_time = Instant::now();
+        
+        // Calculate end_time AFTER all setup is complete, right before the recording loop
+        let end_time = config
+            .duration_secs
+            .map(|secs| start_time + Duration::from_secs(secs));
 
         // Calculate DTS increment in stream time_base (1 frame in encoder time_base)
         // This is: 1 * (stream_tb.den * encoder_tb.num) / (stream_tb.num * encoder_tb.den)
@@ -939,9 +983,11 @@ impl ScreenRecorder {
         let calculate_expected_duration =
             |total_frames: i64| -> f64 { total_frames as f64 / fps as f64 };
 
-        loop {
+        // Use a single consuming loop through packets instead of nested loops
+        for (stream, pkt) in ictx.packets() {
             let loop_start = Instant::now();
 
+            // Check stop conditions
             if let Some(et) = &end_time {
                 if Instant::now() >= *et {
                     println!("Duration limit reached, stopping...");
@@ -953,42 +999,41 @@ impl ScreenRecorder {
                 break;
             }
 
+            // Only process packets from the video stream
+            if stream.index() != input_stream_index {
+                continue;
+            }
+
             // Read frame from FFmpeg input
             let capture_start = Instant::now();
 
-            // Use packets() iterator to read from input
-            // For live capture, we need to read one packet at a time
+            // Decode the packet into a frame
+            decoder.send_packet(&pkt).map_err(|e| {
+                anyhow::anyhow!("Failed to send packet to decoder: {:?}", e)
+            })?;
+            
+            // Try to receive decoded frames (there might be multiple frames per packet or vice versa)
             let mut got_frame = false;
-            for (stream, pkt) in ictx.packets() {
-                if stream.index() == input_stream_index {
-                    // Decode the packet into a frame
-                    decoder.send_packet(&pkt)?;
-                    match decoder.receive_frame(&mut input_frame) {
-                        Ok(()) => {
-                            // Got a frame!
-                            got_frame = true;
-                            break;
-                        }
-                        Err(ffmpeg::Error::Other { errno: -11 }) => {
-                            // EAGAIN - need more packets, continue reading
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to decode frame {}: {:?}", frame_num, e);
-                            if !config.fast {
-                                std::thread::sleep(frame_interval);
-                            }
-                            continue;
-                        }
+            loop {
+                match decoder.receive_frame(&mut input_frame) {
+                    Ok(()) => {
+                        // Got a frame!
+                        got_frame = true;
+                        break;
+                    }
+                    Err(ffmpeg::Error::Other { errno: -11 }) => {
+                        // EAGAIN - need more input packets
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to decode frame {}: {:?}", frame_num, e);
+                        break;
                     }
                 }
             }
 
             if !got_frame {
-                // No frame available yet, skip this iteration
-                if !config.fast {
-                    std::thread::sleep(frame_interval);
-                }
+                // No frame decoded yet, continue to next packet
                 continue;
             }
 
@@ -1015,7 +1060,9 @@ impl ScreenRecorder {
 
             // Encode frame
             let encode_start = Instant::now();
-            video_encoder.send_frame(frame_to_encode)?;
+            video_encoder.send_frame(frame_to_encode).map_err(|e| {
+                anyhow::anyhow!("Failed to send frame to encoder (frame {}): {:?}", frame_num, e)
+            })?;
 
             // Calculate PTS and DTS in stream time_base
             // PTS represents when the frame should be displayed

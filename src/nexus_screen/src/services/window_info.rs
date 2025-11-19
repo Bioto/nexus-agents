@@ -534,7 +534,7 @@ impl WindowInfoService {
     fn list_windows_macos_simple() -> Result<Vec<WindowInfo>> {
         // Use osascript to get window info from each application
         // This is a simplified version that queries known applications
-        let mut windows = Vec::new();
+        let windows = Vec::new();
 
         // Get window info using a more direct AppleScript approach
         let script = r#"
@@ -564,7 +564,7 @@ impl WindowInfoService {
 
         if output.status.success() {
             // Parse the output (format is complex, simplified here)
-            let stdout = String::from_utf8_lossy(&output.stdout);
+            let _stdout = String::from_utf8_lossy(&output.stdout);
             // AppleScript returns a list format that's hard to parse
             // For production, consider using a proper AppleScript parser or Objective-C bridge
         }
@@ -606,7 +606,7 @@ impl WindowInfoService {
             r#"
         tell application "System Events"
             set proc to first process whose unix id is {}
-            set windowList to {}
+            set windowList to {{}}
             repeat with win in windows of proc
                 set end of windowList to {{id of win, name of win, visible of win, minimized of win}}
             end repeat
