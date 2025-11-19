@@ -1,0 +1,8 @@
+# Example: External MCP server with custom headers
+# The API key is read from the CONTEXT7_API_KEY environment variable
+[[servers]]
+name = "context7"
+transport = "http"
+url = "https://mcp.context7.com/mcp"
+headers = { CONTEXT7_API_KEY = "${MCP_CONTEXT_7}" }
+

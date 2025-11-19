@@ -1,0 +1,34 @@
+# Example configuration file for starting multiple MCP servers
+# Copy this file to mcp-servers.toml and customize as needed
+
+[[servers]]
+name = "server-1"
+transport = "http"
+bind = "127.0.0.1:8000"
+path = "/mcp"
+
+[[servers]]
+name = "server-2"
+transport = "http"
+bind = "127.0.0.1:8001"
+path = "/mcp"
+
+# Example with default values (transport defaults to "stdio", but HTTP is recommended for multi-server)
+# [[servers]]
+# name = "server-3"
+# transport = "http"
+# bind = "127.0.0.1:8002"
+# path = "/mcp"
+
+# Note: stdio servers are not recommended in multi-server mode
+# as they require exclusive access to stdin/stdout
+
+# Example: External MCP server with custom headers
+# The API key is read from the CONTEXT7_API_KEY environment variable
+# You can use either ${VAR_NAME} or $VAR_NAME syntax
+[[servers]]
+name = "context7"
+transport = "http"
+url = "https://mcp.context7.com/mcp"
+headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }
+
