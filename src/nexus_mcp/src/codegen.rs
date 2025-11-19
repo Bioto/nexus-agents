@@ -116,7 +116,8 @@ impl CodeGenerator {
         code.push_str("\"\"\"\n\n");
 
         code.push_str("import httpx\n");
-        code.push_str("from typing import Any, Dict\n\n");
+        code.push_str("import os\n");
+        code.push_str("from typing import Any, Dict, Optional\n\n");
 
         // Normalize server URL
         let base_url = if self.server_url.ends_with("/mcp") {
@@ -124,35 +125,144 @@ impl CodeGenerator {
         } else {
             &self.server_url
         };
-        code.push_str(&format!("MCP_SERVER_URL = \"{}\"\n\n", base_url));
+        code.push_str(&format!(
+            "MCP_SERVER_URL = os.getenv(\"MCP_SERVER_URL\", \"{}\")\n\n",
+            base_url
+        ));
+
+        code.push_str("# Session state for MCP initialization\n");
+        code.push_str("_mcp_session_id: Optional[str] = None\n");
+        code.push_str("_mcp_initialized = False\n\n");
+
+        code.push_str("async def _ensure_mcp_initialized(client: httpx.AsyncClient) -> str:\n");
+        code.push_str("    \"\"\"Initialize MCP session if not already initialized\"\"\"\n");
+        code.push_str("    global _mcp_session_id, _mcp_initialized\n");
+        code.push_str("    if _mcp_initialized and _mcp_session_id:\n");
+        code.push_str("        return _mcp_session_id\n");
+        code.push_str("    \n");
+        code.push_str("    # Step 1: Initialize the MCP session\n");
+        code.push_str("    init_request = {\n");
+        code.push_str("        \"jsonrpc\": \"2.0\",\n");
+        code.push_str("        \"id\": 1,\n");
+        code.push_str("        \"method\": \"initialize\",\n");
+        code.push_str("        \"params\": {\n");
+        code.push_str("            \"protocolVersion\": \"2024-11-05\",\n");
+        code.push_str("            \"capabilities\": {},\n");
+        code.push_str("            \"clientInfo\": {\n");
+        code.push_str("                \"name\": \"nexus-mcp-python-client\",\n");
+        code.push_str("                \"version\": \"0.1.0\"\n");
+        code.push_str("            }\n");
+        code.push_str("        }\n");
+        code.push_str("    }\n");
+        code.push_str("    \n");
+        code.push_str("    init_response = await client.post(\n");
+        code.push_str("        f\"{MCP_SERVER_URL}/mcp\",\n");
+        code.push_str("        json=init_request,\n");
+        code.push_str("        headers={\n");
+        code.push_str("            \"Accept\": \"application/json, text/event-stream\",\n");
+        code.push_str("            \"Content-Type\": \"application/json\"\n");
+        code.push_str("        }\n");
+        code.push_str("    )\n");
+        code.push_str("    init_response.raise_for_status()\n");
+        code.push_str("    \n");
+        code.push_str("    # Extract session ID from response headers\n");
+        code.push_str("    _mcp_session_id = init_response.headers.get(\"mcp-session-id\")\n");
+        code.push_str("    \n");
+        code.push_str("    # Parse SSE format response (data: {...})\n");
+        code.push_str("    init_text = init_response.text\n");
+        code.push_str("    if isinstance(init_text, str):\n");
+        code.push_str("        # Extract JSON from SSE format: data: {...}\n");
+        code.push_str("        for line in init_text.split('\\n'):\n");
+        code.push_str("            if line.startswith('data: '):\n");
+        code.push_str("                import json\n");
+        code.push_str("                data_json = json.loads(line[6:])  # Skip 'data: '\n");
+        code.push_str("                if 'error' in data_json:\n");
+        code.push_str("                    raise Exception(f\"MCP initialization error: {data_json['error']}\")\n");
+        code.push_str("                break\n");
+        code.push_str("    else:\n");
+        code.push_str("        # Try to parse as JSON directly\n");
+        code.push_str("        try:\n");
+        code.push_str("            import json\n");
+        code.push_str("            data_json = init_response.json()\n");
+        code.push_str("            if 'error' in data_json:\n");
+        code.push_str("                raise Exception(f\"MCP initialization error: {data_json['error']}\")\n");
+        code.push_str("        except:\n");
+        code.push_str("            pass\n");
+        code.push_str("    \n");
+        code.push_str("    # Step 2: Send initialized notification\n");
+        code.push_str("    initialized_notification = {\n");
+        code.push_str("        \"jsonrpc\": \"2.0\",\n");
+        code.push_str("        \"method\": \"notifications/initialized\"\n");
+        code.push_str("    }\n");
+        code.push_str("    \n");
+        code.push_str("    initialized_headers = {\n");
+        code.push_str("        \"Accept\": \"application/json, text/event-stream\",\n");
+        code.push_str("        \"Content-Type\": \"application/json\"\n");
+        code.push_str("    }\n");
+        code.push_str("    if _mcp_session_id:\n");
+        code.push_str("        initialized_headers[\"mcp-session-id\"] = _mcp_session_id\n");
+        code.push_str("    \n");
+        code.push_str("    await client.post(\n");
+        code.push_str("        f\"{MCP_SERVER_URL}/mcp\",\n");
+        code.push_str("        json=initialized_notification,\n");
+        code.push_str("        headers=initialized_headers\n");
+        code.push_str("    )\n");
+        code.push_str("    \n");
+        code.push_str("    _mcp_initialized = True\n");
+        code.push_str("    return _mcp_session_id or \"\"\n\n");
 
         code.push_str(
             "async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n",
         );
         code.push_str("    \"\"\"Call an MCP tool via HTTP transport\"\"\"\n");
-        code.push_str("    request = {\n");
-        code.push_str("        \"jsonrpc\": \"2.0\",\n");
-        code.push_str("        \"id\": 1,\n");
-        code.push_str("        \"method\": \"tools/call\",\n");
-        code.push_str("        \"params\": {\n");
-        code.push_str("            \"name\": tool_name,\n");
-        code.push_str("            \"arguments\": params\n");
-        code.push_str("        }\n");
-        code.push_str("    }\n");
         code.push_str("    async with httpx.AsyncClient() as client:\n");
+        code.push_str("        # Ensure MCP session is initialized\n");
+        code.push_str("        session_id = await _ensure_mcp_initialized(client)\n");
+        code.push_str("        \n");
+        code.push_str("        # Make tool call request\n");
+        code.push_str("        request = {\n");
+        code.push_str("            \"jsonrpc\": \"2.0\",\n");
+        code.push_str("            \"id\": 1,\n");
+        code.push_str("            \"method\": \"tools/call\",\n");
+        code.push_str("            \"params\": {\n");
+        code.push_str("                \"name\": tool_name,\n");
+        code.push_str("                \"arguments\": params\n");
+        code.push_str("            }\n");
+        code.push_str("        }\n");
+        code.push_str("        \n");
+        code.push_str("        headers = {\n");
+        code.push_str("            \"Accept\": \"application/json, text/event-stream\",\n");
+        code.push_str("            \"Content-Type\": \"application/json\"\n");
+        code.push_str("        }\n");
+        code.push_str("        if session_id:\n");
+        code.push_str("            headers[\"mcp-session-id\"] = session_id\n");
+        code.push_str("        \n");
         code.push_str("        response = await client.post(\n");
         code.push_str("            f\"{MCP_SERVER_URL}/mcp\",\n");
         code.push_str("            json=request,\n");
-        code.push_str("            headers={\n");
-        code.push_str("                \"Accept\": \"application/json, text/event-stream\",\n");
-        code.push_str("                \"Content-Type\": \"application/json\"\n");
-        code.push_str("            }\n");
+        code.push_str("            headers=headers\n");
         code.push_str("        )\n");
         code.push_str("        response.raise_for_status()\n");
-        code.push_str("        result = response.json()\n");
-        code.push_str("        if \"error\" in result:\n");
-        code.push_str("            raise Exception(f\"MCP tool error: {result['error']}\")\n");
-        code.push_str("        return result.get(\"result\", {})\n");
+        code.push_str("        \n");
+        code.push_str("        # Parse SSE format response (data: {...})\n");
+        code.push_str("        import json\n");
+        code.push_str("        response_text = response.text\n");
+        code.push_str("        # Extract JSON from SSE format: data: {...}\n");
+        code.push_str("        for line in response_text.split('\\n'):\n");
+        code.push_str("            line = line.strip()\n");
+        code.push_str("            if line.startswith('data: '):\n");
+        code.push_str("                result = json.loads(line[6:])  # Skip 'data: '\n");
+        code.push_str("                if \"error\" in result:\n");
+        code.push_str("                    raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str("                return result.get(\"result\", {})\n");
+        code.push_str("        # Fallback: try to parse as JSON directly\n");
+        code.push_str("        try:\n");
+        code.push_str("            result = response.json()\n");
+        code.push_str("            if \"error\" in result:\n");
+        code.push_str("                raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str("            return result.get(\"result\", {})\n");
+        code.push_str("        except:\n");
+        code.push_str("            raise Exception(f\"Failed to parse MCP response: {response_text[:200]}\")\n");
 
         Ok(code)
     }
@@ -173,40 +283,156 @@ impl CodeGenerator {
 
         // Include MCP client code inline
         code.push_str("# === MCP Client Implementation (inline) ===\n");
+        code.push_str("import os\n");
+        code.push_str("import re\n");
         let base_url = if self.server_url.ends_with("/mcp") {
             self.server_url.trim_end_matches("/mcp")
         } else {
             &self.server_url
         };
-        code.push_str(&format!("MCP_SERVER_URL = \"{}\"\n\n", base_url));
+        code.push_str(&format!(
+            "MCP_SERVER_URL = os.getenv(\"MCP_SERVER_URL\", \"{}\")\n\n",
+            base_url
+        ));
+
+        code.push_str("# Session state for MCP initialization\n");
+        code.push_str("_mcp_session_id: Optional[str] = None\n");
+        code.push_str("_mcp_initialized = False\n\n");
+
+        code.push_str("async def _ensure_mcp_initialized(client: httpx.AsyncClient) -> str:\n");
+        code.push_str("    \"\"\"Initialize MCP session if not already initialized\"\"\"\n");
+        code.push_str("    global _mcp_session_id, _mcp_initialized\n");
+        code.push_str("    if _mcp_initialized and _mcp_session_id:\n");
+        code.push_str("        return _mcp_session_id\n");
+        code.push_str("    \n");
+        code.push_str("    # Step 1: Initialize the MCP session\n");
+        code.push_str("    init_request = {\n");
+        code.push_str("        \"jsonrpc\": \"2.0\",\n");
+        code.push_str("        \"id\": 1,\n");
+        code.push_str("        \"method\": \"initialize\",\n");
+        code.push_str("        \"params\": {\n");
+        code.push_str("            \"protocolVersion\": \"2024-11-05\",\n");
+        code.push_str("            \"capabilities\": {},\n");
+        code.push_str("            \"clientInfo\": {\n");
+        code.push_str("                \"name\": \"nexus-mcp-python-client\",\n");
+        code.push_str("                \"version\": \"0.1.0\"\n");
+        code.push_str("            }\n");
+        code.push_str("        }\n");
+        code.push_str("    }\n");
+        code.push_str("    \n");
+        code.push_str("    init_response = await client.post(\n");
+        code.push_str("        f\"{MCP_SERVER_URL}/mcp\",\n");
+        code.push_str("        json=init_request,\n");
+        code.push_str("        headers={\n");
+        code.push_str("            \"Accept\": \"application/json, text/event-stream\",\n");
+        code.push_str("            \"Content-Type\": \"application/json\"\n");
+        code.push_str("        }\n");
+        code.push_str("    )\n");
+        code.push_str("    init_response.raise_for_status()\n");
+        code.push_str("    \n");
+        code.push_str("    # Extract session ID from response headers\n");
+        code.push_str("    _mcp_session_id = init_response.headers.get(\"mcp-session-id\")\n");
+        code.push_str("    \n");
+        code.push_str("    # Parse SSE format response (data: {...})\n");
+        code.push_str("    init_text = init_response.text\n");
+        code.push_str("    if isinstance(init_text, str):\n");
+        code.push_str("        # Extract JSON from SSE format: data: {...}\n");
+        code.push_str("        for line in init_text.split('\\n'):\n");
+        code.push_str("            if line.startswith('data: '):\n");
+        code.push_str("                import json\n");
+        code.push_str("                data_json = json.loads(line[6:])  # Skip 'data: '\n");
+        code.push_str("                if 'error' in data_json:\n");
+        code.push_str("                    raise Exception(f\"MCP initialization error: {data_json['error']}\")\n");
+        code.push_str("                break\n");
+        code.push_str("    else:\n");
+        code.push_str("        # Try to parse as JSON directly\n");
+        code.push_str("        try:\n");
+        code.push_str("            import json\n");
+        code.push_str("            data_json = init_response.json()\n");
+        code.push_str("            if 'error' in data_json:\n");
+        code.push_str("                raise Exception(f\"MCP initialization error: {data_json['error']}\")\n");
+        code.push_str("        except:\n");
+        code.push_str("            pass\n");
+        code.push_str("    \n");
+        code.push_str("    # Step 2: Send initialized notification\n");
+        code.push_str("    initialized_notification = {\n");
+        code.push_str("        \"jsonrpc\": \"2.0\",\n");
+        code.push_str("        \"method\": \"notifications/initialized\"\n");
+        code.push_str("    }\n");
+        code.push_str("    \n");
+        code.push_str("    initialized_headers = {\n");
+        code.push_str("        \"Accept\": \"application/json, text/event-stream\",\n");
+        code.push_str("        \"Content-Type\": \"application/json\"\n");
+        code.push_str("    }\n");
+        code.push_str("    if _mcp_session_id:\n");
+        code.push_str("        initialized_headers[\"mcp-session-id\"] = _mcp_session_id\n");
+        code.push_str("    \n");
+        code.push_str("    await client.post(\n");
+        code.push_str("        f\"{MCP_SERVER_URL}/mcp\",\n");
+        code.push_str("        json=initialized_notification,\n");
+        code.push_str("        headers=initialized_headers\n");
+        code.push_str("    )\n");
+        code.push_str("    \n");
+        code.push_str("    _mcp_initialized = True\n");
+        code.push_str("    return _mcp_session_id or \"\"\n\n");
 
         code.push_str(
             "async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:\n",
         );
         code.push_str("    \"\"\"Call an MCP tool via HTTP transport\"\"\"\n");
-        code.push_str("    request = {\n");
-        code.push_str("        \"jsonrpc\": \"2.0\",\n");
-        code.push_str("        \"id\": 1,\n");
-        code.push_str("        \"method\": \"tools/call\",\n");
-        code.push_str("        \"params\": {\n");
-        code.push_str("            \"name\": tool_name,\n");
-        code.push_str("            \"arguments\": params\n");
-        code.push_str("        }\n");
-        code.push_str("    }\n");
         code.push_str("    async with httpx.AsyncClient() as client:\n");
+        code.push_str("        # Ensure MCP session is initialized\n");
+        code.push_str("        session_id = await _ensure_mcp_initialized(client)\n");
+        code.push_str("        \n");
+        code.push_str("        # Make tool call request\n");
+        code.push_str("        request = {\n");
+        code.push_str("            \"jsonrpc\": \"2.0\",\n");
+        code.push_str("            \"id\": 1,\n");
+        code.push_str("            \"method\": \"tools/call\",\n");
+        code.push_str("            \"params\": {\n");
+        code.push_str("                \"name\": tool_name,\n");
+        code.push_str("                \"arguments\": params\n");
+        code.push_str("            }\n");
+        code.push_str("        }\n");
+        code.push_str("        \n");
+        code.push_str("        headers = {\n");
+        code.push_str("            \"Accept\": \"application/json, text/event-stream\",\n");
+        code.push_str("            \"Content-Type\": \"application/json\"\n");
+        code.push_str("        }\n");
+        code.push_str("        if session_id:\n");
+        code.push_str("            headers[\"mcp-session-id\"] = session_id\n");
+        code.push_str("        \n");
         code.push_str("        response = await client.post(\n");
         code.push_str("            f\"{MCP_SERVER_URL}/mcp\",\n");
         code.push_str("            json=request,\n");
-        code.push_str("            headers={\n");
-        code.push_str("                \"Accept\": \"application/json, text/event-stream\",\n");
-        code.push_str("                \"Content-Type\": \"application/json\"\n");
-        code.push_str("            }\n");
+        code.push_str("            headers=headers\n");
         code.push_str("        )\n");
         code.push_str("        response.raise_for_status()\n");
-        code.push_str("        result = response.json()\n");
-        code.push_str("        if \"error\" in result:\n");
-        code.push_str("            raise Exception(f\"MCP tool error: {result['error']}\")\n");
-        code.push_str("        return result.get(\"result\", {})\n\n");
+        code.push_str("        \n");
+        code.push_str("        # Parse SSE format response (data: {...})\n");
+        code.push_str("        response_text = response.text\n");
+        code.push_str("        if isinstance(response_text, str):\n");
+        code.push_str("            import json\n");
+        code.push_str("            # Extract JSON from SSE format: data: {...}\n");
+        code.push_str("            for line in response_text.split('\\n'):\n");
+        code.push_str("                if line.startswith('data: '):\n");
+        code.push_str("                    result = json.loads(line[6:])  # Skip 'data: '\n");
+        code.push_str("                    if \"error\" in result:\n");
+        code.push_str("                        raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str("                    return result.get(\"result\", {})\n");
+        code.push_str("            # Fallback: try to parse as JSON directly\n");
+        code.push_str("            try:\n");
+        code.push_str("                result = response.json()\n");
+        code.push_str("                if \"error\" in result:\n");
+        code.push_str("                    raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str("                return result.get(\"result\", {})\n");
+        code.push_str("            except:\n");
+        code.push_str("                raise Exception(f\"Failed to parse MCP response: {response_text[:200]}\")\n");
+        code.push_str("        else:\n");
+        code.push_str("            result = response.json()\n");
+        code.push_str("            if \"error\" in result:\n");
+        code.push_str("                raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str("            return result.get(\"result\", {})\n\n");
         code.push_str("# === Tool Definition ===\n\n");
 
         // Parse input schema to generate TypedDict (only if tool has parameters)

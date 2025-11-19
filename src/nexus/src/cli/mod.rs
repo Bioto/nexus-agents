@@ -44,4 +44,6 @@ pub enum Commands {
     TestPython(commands::test_python::TestPythonArgs),
     /// Search generated MCP tool files and metadata
     SearchMcpTools(commands::search_mcp_tools::SearchMcpToolsArgs),
+    /// Search for an MCP tool and immediately execute it
+    TestMcpFlow(commands::test_mcp_flow::TestMcpFlowArgs),
 }

@@ -22,7 +22,7 @@ struct Args {
 
     /// Bind address for HTTP transport (e.g., "127.0.0.1:8000")
     /// Only used when transport is "http"
-    #[arg(short, long, default_value = "127.0.0.1:8000")]
+    #[arg(short, long, default_value = "0.0.0.0:8000")]
     bind: String,
 
     /// HTTP path endpoint (default: "/mcp")
@@ -41,16 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let server = NexusMcpServer::new();
 
-    match args.transport.as_str() {
-        "stdio" => {
-            eprintln!("Using stdio transport");
-            let transport = stdio();
-            eprintln!("Server waiting for connections on stdin/stdout...");
-            if let Err(e) = serve_server(server, transport).await {
-                eprintln!("[ERROR] serve_server error: {}", e);
-                return Err(e.into());
-            }
-        }
+    match "http" {
         "http" => {
             eprintln!("Using streamable HTTP transport");
             let bind_addr: SocketAddr = args

@@ -85,7 +85,7 @@ impl NexusMcpServer {
         let server_url = params
             .0
             .server_url
-            .unwrap_or_else(|| "http://127.0.0.1:8000".to_string());
+            .unwrap_or_else(|| "http://0.0.0.0:8000".to_string());
         let output_dir = params.0.output_dir.unwrap_or_else(|| "servers".to_string());
         let generator = CodeGenerator::new(server_url);
 

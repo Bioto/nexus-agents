@@ -10,10 +10,12 @@ from typing import Any, Dict, Optional, TypedDict
 import httpx
 
 # === MCP Client Implementation (inline) ===
-MCP_SERVER_URL = "http://127.0.0.1:8000"
+MCP_SERVER_URL = "http://192.168.1.63:8000"
+print(f"MCP_SERVER_URL: {MCP_SERVER_URL}")
 
 async def call_mcp_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Call an MCP tool via HTTP transport"""
+    print(f"Calling MCP tool: {tool_name} with params: {params}")
     request = {
         "jsonrpc": "2.0",
         "id": 1,

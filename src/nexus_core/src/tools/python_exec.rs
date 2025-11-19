@@ -279,25 +279,60 @@ impl ExecutableTool for PythonExec {
 
         // Update the code to use /workspace instead of the host path
         // Note: Using raw string with proper indentation - the indentation after \n\ is preserved
+        // Prepend uv dependency management. We parse the special `# uv: dependencies = [...]` directive
+        // (from the .py file) and run `uv pip install ...` dynamically for those dependencies.
+        //
+        // We ensure this install step happens before importing/using any tool code.
+        // This allows users to add structured dependencies for each tool and keeps
+        // the container environment isolated.
         let container_code = format!(
-            "import sys
+            r#"import sys
 import importlib.util
 from pathlib import Path
+import subprocess
+import re
+import os
 
 # Workspace root is mounted at /workspace
-workspace_root = Path(\"/workspace\")
+workspace_root = Path("/workspace")
+extra_deps_dir = Path("/tmp/nexus_uv_deps")
+extra_deps_dir.mkdir(parents=True, exist_ok=True)
+sys.path.insert(0, str(extra_deps_dir))
 sys.path.insert(0, str(workspace_root))
+
+# --- Dependency Management (uv) ---
+def install_uv_dependencies(py_code):
+    # Find a line like '# uv: dependencies = ["foo", ...]'
+    m = re.search(r'# uv: dependencies\s*=\s*(\[.*?\])', py_code)
+    if not m:
+        print('[uv] No dependencies directive found')
+        return
+    import ast
+    deps = ast.literal_eval(m.group(1))
+    if not isinstance(deps, list):
+        print('[uv] Dependencies directive not a list, skipping')
+        return
+    if deps:
+        print(f'[uv] Installing dependencies: {{deps}}')
+        cmd = ["uv", "pip", "install", "--target", str(extra_deps_dir), *deps]
+        subprocess.check_call(cmd)
+    else:
+        print('[uv] No dependencies to install.')
 
 # Helper to import from servers directory (handles hyphens in directory names)
 def import_tool(server_name, tool_name):
     server_path = workspace_root / 'servers' / server_name / f'{{tool_name}}.py'
+    # Read raw code to install uv dependencies
+    raw_code = server_path.read_text(encoding='utf-8')
+    install_uv_dependencies(raw_code)
     spec = importlib.util.spec_from_file_location(tool_name, server_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
-{}",
-            code
+{code}
+"#,
+            code = code
         );
 
         println!(
@@ -349,6 +384,58 @@ def import_tool(server_name, tool_name):
             container_id
         );
 
+        // Get MCP_SERVER_URL from environment and convert for Docker networking
+        // If it's localhost/127.0.0.1/0.0.0.0/172.17.0.1, use host.docker.internal instead
+        let mcp_server_url = std::env::var("MCP_SERVER_URL")
+            .ok()
+            .map(|url| {
+                // Convert localhost/Docker bridge addresses to host.docker.internal for Docker networking
+                let docker_url = if url.starts_with("http://127.0.0.1:")
+                    || url.starts_with("http://0.0.0.0:")
+                    || url.starts_with("http://localhost:")
+                    || url.starts_with("http://172.17.0.1:")
+                {
+                    // Extract port and path from URL
+                    let parts: Vec<&str> = url.split(':').collect();
+                    if parts.len() >= 3 {
+                        let port_and_path = parts[2];
+                        let (port, path) = if let Some(slash_idx) = port_and_path.find('/') {
+                            (
+                                &port_and_path[..slash_idx],
+                                &port_and_path[slash_idx..],
+                            )
+                        } else {
+                            (port_and_path, "")
+                        };
+                        format!("http://host.docker.internal:{}{}", port, path)
+                    } else {
+                        // Fallback if URL parsing fails
+                        url.replace("127.0.0.1", "host.docker.internal")
+                            .replace("0.0.0.0", "host.docker.internal")
+                            .replace("localhost", "host.docker.internal")
+                            .replace("172.17.0.1", "host.docker.internal")
+                    }
+                } else {
+                    url
+                };
+                let original_url = std::env::var("MCP_SERVER_URL").unwrap_or_default();
+                if docker_url != original_url {
+                    println!(
+                        "[execute_python] Converted MCP_SERVER_URL from {} to {} for Docker networking",
+                        original_url, docker_url
+                    );
+                } else {
+                    println!(
+                        "[execute_python] Using MCP_SERVER_URL: {}",
+                        docker_url
+                    );
+                }
+                docker_url
+            });
+
+        // Build environment variables for Docker exec
+        let env_vars = mcp_server_url.map(|url| vec![format!("MCP_SERVER_URL={}", url)]);
+
         // Use the current runtime handle to execute async code
         let handle = tokio::runtime::Handle::try_current().map_err(|_| {
             crate::models::Error::Other(
@@ -359,7 +446,11 @@ def import_tool(server_name, tool_name):
         let (stdout, stderr, exit_code) = loop {
             let result = handle.block_on(async {
                 docker_service
-                    .execute_python_code_in_container(&container_id, &container_code)
+                    .execute_python_code_in_container_with_env(
+                        &container_id,
+                        &container_code,
+                        env_vars.clone(),
+                    )
                     .await
             });
 
@@ -424,6 +515,9 @@ def import_tool(server_name, tool_name):
                 }
             }
         };
+
+        // Clean up env_vars clone
+        drop(env_vars);
 
         // Convert to ExecutionResult format
         use nexus_py::ExecutionResult;

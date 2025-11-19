@@ -106,6 +106,9 @@ async fn main() -> anyhow::Result<()> {
             cli::commands::search_mcp_tools::run_search_mcp_tools(args)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?
         }
+        Commands::TestMcpFlow(args) => cli::commands::test_mcp_flow::run_test_mcp_flow(args)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     }
 
     Ok(())

@@ -437,12 +437,22 @@ impl DockerService {
         container_id: &str,
         command: Vec<String>,
     ) -> Result<(String, String, i32), DockerError> {
+        self.exec_in_container_with_env(container_id, command, None).await
+    }
+
+    pub async fn exec_in_container_with_env(
+        &self,
+        container_id: &str,
+        command: Vec<String>,
+        env: Option<Vec<String>>,
+    ) -> Result<(String, String, i32), DockerError> {
         use bollard::exec::CreateExecOptions;
 
         let exec_config = CreateExecOptions {
             cmd: Some(command),
             attach_stdout: Some(true),
             attach_stderr: Some(true),
+            env: env,
             ..Default::default()
         };
 
@@ -873,6 +883,16 @@ impl DockerService {
         container_id: &str,
         code: &str,
     ) -> Result<(String, String, i32), DockerError> {
+        self.execute_python_code_in_container_with_env(container_id, code, None).await
+    }
+
+    /// Execute Python code in an existing container using exec with environment variables
+    pub async fn execute_python_code_in_container_with_env(
+        &self,
+        container_id: &str,
+        code: &str,
+        env: Option<Vec<String>>,
+    ) -> Result<(String, String, i32), DockerError> {
         // Ensure the container is running before trying to exec
         self.ensure_container_running(container_id).await?;
 
@@ -884,7 +904,7 @@ impl DockerService {
             code.to_string(),
         ];
 
-        self.exec_in_container(container_id, command).await
+        self.exec_in_container_with_env(container_id, command, env).await
     }
 
     /// Create a long-running container that can be reused for multiple Python executions
@@ -900,7 +920,7 @@ impl DockerService {
         let container_name = format!("{}_{}", self.config.image_name, uuid::Uuid::new_v4());
 
         // Build mounts if provided
-        let host_config = if let Some(mounts) = mounts {
+        let mut host_config = if let Some(mounts) = mounts {
             let docker_mounts: Vec<Mount> = mounts
                 .into_iter()
                 .map(|(host_path, container_path)| Mount {
@@ -917,8 +937,15 @@ impl DockerService {
                 ..Default::default()
             })
         } else {
-            None
+            Some(HostConfig::default())
         };
+
+        // Add host.docker.internal to extra_hosts for Linux compatibility
+        // This allows containers to reach the host machine
+        // Format: "hostname:ip" where "host-gateway" is a special Docker keyword
+        if let Some(ref mut config) = host_config {
+            config.extra_hosts = Some(vec!["host.docker.internal:host-gateway".to_string()]);
+        }
 
         // Override entrypoint to /bin/sh and use sleep infinity to keep container running
         // The Dockerfile has ENTRYPOINT ["nexus_py"], so we need to override it

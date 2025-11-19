@@ -154,9 +154,16 @@ impl AgentFactory {
             - Standard library modules (like 'asyncio', 'importlib', 'pathlib', etc.) don't need to be listed\n\
             - Always include external packages you import (e.g., requests, httpx, pandas, etc.)\n\n\
             Example usage:\n\
-            ```python\n\
-            # uv: dependencies = [\"httpx\"]\n\
-            \n\
+            ```python
+            # 
+            # /// script
+            # requires-python = \">=3.10\"
+            # dependencies = [
+            #     \"requests\",
+            #     \"rich\",
+            # ]
+            # ///
+
             import asyncio\n\
             import importlib.util\n\
             from pathlib import Path\n\
