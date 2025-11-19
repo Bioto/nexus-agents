@@ -42,4 +42,6 @@ pub enum Commands {
     McpAgent(commands::mcp_agent::McpAgentArgs),
     /// Test execute_python tool with a one-off prompt
     TestPython(commands::test_python::TestPythonArgs),
+    /// Search generated MCP tool files and metadata
+    SearchMcpTools(commands::search_mcp_tools::SearchMcpToolsArgs),
 }

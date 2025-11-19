@@ -1,7 +1,10 @@
 use crate::models::agent::{Agent, AgentBuilder, AgentStore};
 use crate::models::task_manager::TaskManager;
 use crate::models::tasks::{TaskAssignment, TaskDecomposition};
-use crate::tools::{calculator::Calculator, python_exec::PythonExec, ExecutableTool, ToolRegistry};
+use crate::tools::{
+    calculator::Calculator, python_exec::PythonExec, tool_discovery::ToolDiscovery, ExecutableTool,
+    ToolRegistry,
+};
 use std::path::PathBuf;
 
 /// Factory for creating pre-configured agents with their tool registries
@@ -111,8 +114,12 @@ impl AgentFactory {
     pub fn mcp_agent(servers_dir: impl Into<PathBuf>) -> Agent {
         let servers_path: PathBuf = servers_dir.into();
         let python_exec = PythonExec::new(&servers_path);
-        let tool_definition = python_exec.definition();
-        let registry = ToolRegistry::new().register(Box::new(python_exec));
+        let discovery_tool = ToolDiscovery::new(&servers_path);
+        let execute_definition = python_exec.definition();
+        let discovery_definition = discovery_tool.definition();
+        let registry = ToolRegistry::new()
+            .register(Box::new(python_exec))
+            .register(Box::new(discovery_tool));
 
         let servers_path_str = servers_path.to_string_lossy();
         let workspace_root_str = servers_path
@@ -126,6 +133,13 @@ impl AgentFactory {
             Available MCP tools are organized in the following structure:\n\
             - servers/nexus-mcp-server/ contains individual tool files\n\
             - Each tool file (e.g., echo.py, add.py) is self-contained and can be imported\n\n\
+            Helper tools available:\n\
+            - search_mcp_tools: discover tools quickly. Parameters:\n\
+                • query (optional) to filter by keyword\n\
+                • detail (name|summary|full) controls how much metadata is returned\n\
+                • limit (defaults to 25, max 100)\n\
+              Use this before writing Python so you don't read every file blindly.\n\
+            - execute_python: run code via uv/Docker with access to the mounted workspace\n\n\
             To use MCP tools, you can:\n\
             1. Use the import_tool() helper function (already available in your execution environment)\n\
             2. Or use importlib.util to load tool files directly\n\
@@ -205,7 +219,8 @@ impl AgentFactory {
         AgentBuilder::new("MCP Agent")
             .description("An agent that can interact with MCP servers by executing Python code with access to generated tool files")
             .system_prompt(system_prompt)
-            .add_tool(tool_definition)
+            .add_tool(execute_definition)
+            .add_tool(discovery_definition)
             .tool_registry(registry)
             .build()
     }

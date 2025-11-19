@@ -3168,6 +3168,7 @@ dependencies = [
  "nexus-gui",
  "nexus-screen",
  "ratatui",
+ "serde_json",
  "simplelog",
  "tokio",
 ]

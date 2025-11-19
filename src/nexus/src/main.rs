@@ -102,6 +102,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::TestPython(args) => cli::commands::test_python::run_test_python(args)
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        Commands::SearchMcpTools(args) => {
+            cli::commands::search_mcp_tools::run_search_mcp_tools(args)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        }
     }
 
     Ok(())

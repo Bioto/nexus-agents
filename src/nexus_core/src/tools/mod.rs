@@ -1,5 +1,6 @@
 pub mod calculator;
 pub mod python_exec;
+pub mod tool_discovery;
 
 use crate::models::tool::Tool;
 use crate::models::Result;
