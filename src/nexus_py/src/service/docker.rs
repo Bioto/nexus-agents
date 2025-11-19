@@ -355,6 +355,85 @@ impl DockerService {
         Ok(())
     }
 
+    /// Check if a container is running
+    pub async fn is_container_running(&self, container_id: &str) -> Result<bool, DockerError> {
+        let inspect_result = self
+            .docker
+            .inspect_container(container_id, None)
+            .await
+            .map_err(|e| {
+                DockerError::ExecutionFailed(format!("Failed to inspect container: {}", e))
+            })?;
+
+        if let Some(state) = inspect_result.state {
+            if let Some(status) = &state.status {
+                return Ok(matches!(
+                    status,
+                    bollard::models::ContainerStateStatusEnum::RUNNING
+                ));
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Ensure a container is running, restarting it if necessary
+    pub async fn ensure_container_running(&self, container_id: &str) -> Result<(), DockerError> {
+        let is_running = self.is_container_running(container_id).await?;
+
+        if !is_running {
+            // Container is not running - try to start it
+            // This works for both stopped and exited containers
+            eprintln!(
+                "[DockerService] Container {} is not running, attempting to start it...",
+                container_id
+            );
+            match self.start_container(container_id).await {
+                Ok(_) => {
+                    // Give it a moment to start
+                    time::sleep(time::Duration::from_millis(500)).await;
+                    // Verify it's actually running now
+                    let is_running_after = self.is_container_running(container_id).await?;
+                    if !is_running_after {
+                        return Err(DockerError::ContainerStartFailed(format!(
+                            "Container {} started but is not running",
+                            container_id
+                        )));
+                    }
+                    eprintln!(
+                        "[DockerService] Container {} successfully started",
+                        container_id
+                    );
+                }
+                Err(e) => {
+                    // Check if container exists at all
+                    let inspect_result = self
+                        .docker
+                        .inspect_container(container_id, None)
+                        .await;
+                    match inspect_result {
+                        Ok(_) => {
+                            // Container exists but failed to start
+                            return Err(DockerError::ContainerStartFailed(format!(
+                                "Failed to restart container {}: {}",
+                                container_id, e
+                            )));
+                        }
+                        Err(_) => {
+                            // Container doesn't exist
+                            return Err(DockerError::ContainerStartFailed(format!(
+                                "Container {} does not exist. It may have been removed.",
+                                container_id
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Execute a command in a container and wait for completion
     pub async fn exec_in_container(
         &self,
@@ -454,6 +533,19 @@ impl DockerService {
         command: Vec<String>,
         env: Option<HashMap<String, String>>,
         mounts: Option<Vec<(String, String)>>,
+    ) -> Result<(String, String, i32), DockerError> {
+        self.run_command_with_mounts_and_cleanup(command, env, mounts, true).await
+    }
+
+    /// Run a command in a new container with volume mounts and return the output
+    /// If `remove_after` is false, the container will be kept running and the container ID
+    /// will be included in the error message (as a workaround since we can't change the return type)
+    pub async fn run_command_with_mounts_and_cleanup(
+        &self,
+        command: Vec<String>,
+        env: Option<HashMap<String, String>>,
+        mounts: Option<Vec<(String, String)>>,
+        remove_after: bool,
     ) -> Result<(String, String, i32), DockerError> {
         let container_id = self
             .create_container_with_mounts(command.clone(), env, mounts)
@@ -575,13 +667,144 @@ impl DockerService {
             .try_into()
             .unwrap_or(-1);
 
-        // Clean up container
-        let _ = self.remove_container(&container_id, true).await;
+        // Clean up container if requested
+        if remove_after {
+            let _ = self.remove_container(&container_id, true).await;
+        } else {
+            eprintln!("Container {} kept alive (not removed)", container_id);
+        }
 
         Ok((
             String::from_utf8_lossy(&stdout).to_string(),
             String::from_utf8_lossy(&stderr).to_string(),
             exit_code,
+        ))
+    }
+
+    /// Run a command in a new container with volume mounts and return the output and container ID
+    /// The container is NOT removed, allowing it to be reused
+    pub async fn run_command_with_mounts_keep_alive(
+        &self,
+        command: Vec<String>,
+        env: Option<HashMap<String, String>>,
+        mounts: Option<Vec<(String, String)>>,
+    ) -> Result<(String, String, i32, String), DockerError> {
+        let container_id = self
+            .create_container_with_mounts(command.clone(), env, mounts)
+            .await?;
+        self.start_container(&container_id).await?;
+
+        // Wait for container to finish
+        let wait_success = tokio::time::timeout(
+            time::Duration::from_secs(300),
+            async {
+                let mut wait_stream = self.docker.wait_container::<String>(&container_id, None);
+                while let Some(result) = wait_stream.next().await {
+                    match result {
+                        Ok(_status) => {
+                            return Ok::<bool, DockerError>(true);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Container wait stream error: {}, will check container state directly", e);
+                            return Ok::<bool, DockerError>(false);
+                        }
+                    }
+                }
+                Ok::<bool, DockerError>(false)
+            }
+        ).await;
+
+        // If wait failed or timed out, poll the container state
+        if wait_success.is_err() || matches!(wait_success, Ok(Ok(false))) {
+            let mut attempts = 0;
+            let max_attempts = 60;
+            loop {
+                let inspect_result = self
+                    .docker
+                    .inspect_container(&container_id, None)
+                    .await
+                    .map_err(|e| {
+                        DockerError::ExecutionFailed(format!("Failed to inspect container: {}", e))
+                    })?;
+
+                if let Some(state) = inspect_result.state {
+                    if let Some(status) = &state.status {
+                        match status {
+                            bollard::models::ContainerStateStatusEnum::EXITED
+                            | bollard::models::ContainerStateStatusEnum::DEAD => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                attempts += 1;
+                if attempts >= max_attempts {
+                    return Err(DockerError::ExecutionFailed(
+                        "Container did not finish within timeout".to_string(),
+                    ));
+                }
+
+                time::sleep(time::Duration::from_millis(500)).await;
+            }
+        }
+
+        // Get logs
+        let logs_options = bollard::container::LogsOptions::<String> {
+            stdout: true,
+            stderr: true,
+            ..Default::default()
+        };
+
+        let mut logs = self.docker.logs(&container_id, Some(logs_options));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        while let Some(chunk) = logs.next().await {
+            match chunk {
+                Ok(LogOutput::StdOut { message }) => {
+                    stdout.extend_from_slice(&message);
+                }
+                Ok(LogOutput::StdErr { message }) => {
+                    stderr.extend_from_slice(&message);
+                }
+                Ok(LogOutput::Console { message }) => {
+                    stdout.extend_from_slice(&message);
+                }
+                Ok(LogOutput::StdIn { .. }) => {}
+                Err(e) => {
+                    return Err(DockerError::ExecutionFailed(format!(
+                        "Log stream error: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        // Get exit code
+        let inspect_result = self
+            .docker
+            .inspect_container(&container_id, None)
+            .await
+            .map_err(|e| {
+                DockerError::ExecutionFailed(format!("Failed to inspect container: {}", e))
+            })?;
+
+        let exit_code = inspect_result
+            .state
+            .and_then(|s| s.exit_code)
+            .unwrap_or(-1)
+            .try_into()
+            .unwrap_or(-1);
+
+        // Container is NOT removed - caller is responsible for cleanup
+        Ok((
+            String::from_utf8_lossy(&stdout).to_string(),
+            String::from_utf8_lossy(&stderr).to_string(),
+            exit_code,
+            container_id,
         ))
     }
 
@@ -620,6 +843,17 @@ impl DockerService {
         code: &str,
         mounts: Option<Vec<(String, String)>>,
     ) -> Result<(String, String, i32), DockerError> {
+        self.execute_python_code_with_mounts_and_cleanup(code, mounts, true).await
+    }
+
+    /// Execute Python code in a container with volume mounts
+    /// If `remove_after` is false, the container will be kept running
+    pub async fn execute_python_code_with_mounts_and_cleanup(
+        &self,
+        code: &str,
+        mounts: Option<Vec<(String, String)>>,
+        remove_after: bool,
+    ) -> Result<(String, String, i32), DockerError> {
         // Create a temporary file in the container with the code
         // We'll use the exec-code command that the Dockerfile supports
         let command = vec![
@@ -628,7 +862,92 @@ impl DockerService {
             code.to_string(),
         ];
 
-        self.run_command_with_mounts(command, None, mounts).await
+        self.run_command_with_mounts_and_cleanup(command, None, mounts, remove_after).await
+    }
+
+    /// Execute Python code in an existing container using exec
+    /// This allows reusing a running container for multiple executions
+    /// Automatically ensures the container is running before executing
+    pub async fn execute_python_code_in_container(
+        &self,
+        container_id: &str,
+        code: &str,
+    ) -> Result<(String, String, i32), DockerError> {
+        // Ensure the container is running before trying to exec
+        self.ensure_container_running(container_id).await?;
+
+        // Use nexus_py exec-code since the persistent container has entrypoint overridden to /bin/sh
+        let command = vec![
+            "nexus_py".to_string(),
+            "exec-code".to_string(),
+            "--code".to_string(),
+            code.to_string(),
+        ];
+
+        self.exec_in_container(container_id, command).await
+    }
+
+    /// Create a long-running container that can be reused for multiple Python executions
+    /// The container runs a sleep command to keep it alive
+    /// Overrides the Dockerfile entrypoint to use /bin/sh since the image has ENTRYPOINT ["nexus_py"]
+    pub async fn create_persistent_container(
+        &self,
+        mounts: Option<Vec<(String, String)>>,
+    ) -> Result<String, DockerError> {
+        use bollard::models::{HostConfig, Mount, MountTypeEnum};
+
+        let image_name = self.image_full_name();
+        let container_name = format!("{}_{}", self.config.image_name, uuid::Uuid::new_v4());
+
+        // Build mounts if provided
+        let host_config = if let Some(mounts) = mounts {
+            let docker_mounts: Vec<Mount> = mounts
+                .into_iter()
+                .map(|(host_path, container_path)| Mount {
+                    target: Some(container_path),
+                    source: Some(host_path),
+                    typ: Some(MountTypeEnum::BIND),
+                    read_only: Some(false),
+                    ..Default::default()
+                })
+                .collect();
+
+            Some(HostConfig {
+                mounts: Some(docker_mounts),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        // Override entrypoint to /bin/sh and use sleep infinity to keep container running
+        // The Dockerfile has ENTRYPOINT ["nexus_py"], so we need to override it
+        let container_config = Config {
+            image: Some(image_name),
+            entrypoint: Some(vec!["/bin/sh".to_string()]), // Override the nexus_py entrypoint
+            cmd: Some(vec!["-c".to_string(), "sleep infinity".to_string()]), // Run sleep infinity via sh
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            host_config: host_config,
+            ..Default::default()
+        };
+
+        let options = CreateContainerOptions {
+            name: container_name.clone(),
+            platform: None,
+        };
+
+        let result = self
+            .docker
+            .create_container(Some(options), container_config)
+            .await
+            .map_err(|e| {
+                DockerError::ContainerCreationFailed(format!("Failed to create container: {}", e))
+            })?;
+
+        let container_id = result.id;
+        self.start_container(&container_id).await?;
+        Ok(container_id)
     }
 
     /// Execute a Python script file in a container

@@ -4,7 +4,7 @@ use crate::models::{
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use log::debug;
+use log::{debug, error, warn};
 use reqwest::Client as HttpClient;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ impl LLMClient for ResponsesClient {
         // Parse Responses API response and transform to ChatCompletionResponse format
         let response_json: serde_json::Value = response.json().await?;
 
-        println!(
+        debug!(
             "[ResponsesClient] Raw API response: {}",
             serde_json::to_string_pretty(&response_json).unwrap_or_default()
         );
@@ -131,10 +131,10 @@ impl LLMClient for ResponsesClient {
         use crate::models::Choice;
         let mut choices = Vec::new();
 
-        println!("[ResponsesClient] Looking for 'output' field in response...");
+        debug!("[ResponsesClient] Looking for 'output' field in response...");
         // Try to extract from "output" array (Responses API format)
         if let Some(output) = response_json.get("output") {
-            println!("[ResponsesClient] Found 'output' field: {:?}", output);
+            debug!("[ResponsesClient] Found 'output' field: {:?}", output);
             if let Some(output_array) = output.as_array() {
                 let mut tool_calls = Vec::new();
                 let mut message_text = String::new();
@@ -183,7 +183,7 @@ impl LLMClient for ResponsesClient {
                             }
                             "function_call" => {
                                 // Handle function_call type - extract tool call information
-                                println!("[ResponsesClient] Found function_call in output");
+                                debug!("[ResponsesClient] Found function_call in output");
                                 if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
                                     if let Some(arguments) =
                                         item.get("arguments").and_then(|v| v.as_str())
@@ -191,7 +191,7 @@ impl LLMClient for ResponsesClient {
                                         if let Some(call_id) =
                                             item.get("call_id").and_then(|v| v.as_str())
                                         {
-                                            println!("[ResponsesClient] Function call: name={}, call_id={}", name, call_id);
+                                            debug!("[ResponsesClient] Function call: name={}, call_id={}", name, call_id);
 
                                             use crate::models::{FunctionCall, ToolCall};
                                             tool_calls.push(ToolCall {
@@ -208,10 +208,10 @@ impl LLMClient for ResponsesClient {
                             }
                             "reasoning" => {
                                 // Reasoning type - we can ignore it or extract summary if needed
-                                println!("[ResponsesClient] Found reasoning in output (ignoring)");
+                                debug!("[ResponsesClient] Found reasoning in output (ignoring)");
                             }
                             _ => {
-                                println!("[ResponsesClient] Unknown output type: {}", content_type);
+                                warn!("[ResponsesClient] Unknown output type: {}", content_type);
                             }
                         }
                     }
@@ -220,7 +220,7 @@ impl LLMClient for ResponsesClient {
                 // Create message with tool calls if we have any, otherwise use text
                 use crate::models::{Message, MessageContent, MessageRole};
                 if !tool_calls.is_empty() {
-                    println!(
+                    debug!(
                         "[ResponsesClient] Creating message with {} tool calls",
                         tool_calls.len()
                     );
@@ -242,7 +242,7 @@ impl LLMClient for ResponsesClient {
                         finish_reason: Some("tool_calls".to_string()),
                     });
                 } else if !message_text.is_empty() {
-                    println!(
+                    debug!(
                         "[ResponsesClient] Creating message with text: {}",
                         message_text
                     );
@@ -261,16 +261,16 @@ impl LLMClient for ResponsesClient {
                     });
                 } else {
                     // No content and no tool calls - this shouldn't happen but handle it
-                    println!("[ResponsesClient] WARNING: No content and no tool calls in output");
+                    warn!("[ResponsesClient] No content and no tool calls in output");
                 }
             }
         }
 
         // If no choices from output, try standard "choices" format
         if choices.is_empty() {
-            println!("[ResponsesClient] No choices from 'output', trying 'choices' field...");
+            debug!("[ResponsesClient] No choices from 'output', trying 'choices' field...");
             if let Some(choices_array) = response_json.get("choices").and_then(|v| v.as_array()) {
-                println!(
+                debug!(
                     "[ResponsesClient] Found 'choices' array with {} items",
                     choices_array.len()
                 );
@@ -278,24 +278,24 @@ impl LLMClient for ResponsesClient {
                     serde_json::Value::Array(choices_array.clone()),
                 ) {
                     choices = parsed_choices;
-                    println!(
+                    debug!(
                         "[ResponsesClient] Parsed {} choices from 'choices' array",
                         choices.len()
                     );
                 } else {
-                    println!("[ResponsesClient] Failed to parse 'choices' array");
+                    warn!("[ResponsesClient] Failed to parse 'choices' array");
                 }
             } else {
-                println!("[ResponsesClient] No 'choices' field found");
+                debug!("[ResponsesClient] No 'choices' field found");
             }
         }
 
         // If still no choices, try to extract text from top-level fields
         if choices.is_empty() {
-            println!("[ResponsesClient] Still no choices, trying top-level 'text' field...");
+            debug!("[ResponsesClient] Still no choices, trying top-level 'text' field...");
             // Some APIs might return text directly
             if let Some(text) = response_json.get("text").and_then(|v| v.as_str()) {
-                println!("[ResponsesClient] Found top-level 'text' field: {}", text);
+                debug!("[ResponsesClient] Found top-level 'text' field: {}", text);
                 let message = ResponsesClient::create_message_from_text(text.to_string());
 
                 choices.push(Choice {
@@ -304,11 +304,11 @@ impl LLMClient for ResponsesClient {
                     finish_reason: Some("stop".to_string()),
                 });
             } else {
-                println!("[ResponsesClient] No top-level 'text' field found");
+                debug!("[ResponsesClient] No top-level 'text' field found");
             }
         }
 
-        println!("[ResponsesClient] Final choices count: {}", choices.len());
+        debug!("[ResponsesClient] Final choices count: {}", choices.len());
 
         // Extract usage if present
         let usage = response_json
@@ -725,10 +725,10 @@ impl ResponsesClient {
             // Responses API doesn't support "tool" role, so we send tool results as "user" messages
             // The API should automatically associate tool results with the previous assistant message's tool calls
             if matches!(msg.role, MessageRole::Tool) {
-                println!("[ResponsesClient] Processing tool message: tool_call_id={:?}, name={:?}, content={:?}", 
+                debug!("[ResponsesClient] Processing tool message: tool_call_id={:?}, name={:?}, content={:?}", 
                     msg.tool_call_id, msg.name, msg.content);
-                if let Some(tool_call_id) = &msg.tool_call_id {
-                    if let Some(name) = &msg.name {
+                if let Some(_tool_call_id) = &msg.tool_call_id {
+                    if let Some(_name) = &msg.name {
                         // Tool messages need to be sent as "user" role with just content
                         // The Responses API should automatically match tool results to tool calls by order
                         // Remove tool_call_id and name as they're not accepted on user messages
@@ -737,7 +737,7 @@ impl ResponsesClient {
                             .as_ref()
                             .map(|c| c.extract_text())
                             .unwrap_or_default();
-                        println!(
+                        debug!(
                             "[ResponsesClient] Tool message content text: {}",
                             content_text
                         );
@@ -745,16 +745,16 @@ impl ResponsesClient {
                         message_json["role"] = serde_json::Value::String("user".to_string());
                         message_json["content"] = serde_json::Value::String(content_text);
                         // Note: Responses API should match tool results to tool calls by order in the conversation
-                        println!("[ResponsesClient] Transformed tool message (removed tool_call_id and name): {}", serde_json::to_string_pretty(&message_json).unwrap_or_default());
+                        debug!("[ResponsesClient] Transformed tool message (removed tool_call_id and name): {}", serde_json::to_string_pretty(&message_json).unwrap_or_default());
                         transformed_messages.push(message_json);
                         continue; // Skip the rest of the loop
                     } else {
-                        println!("[ResponsesClient] ERROR: Tool message missing 'name' field");
+                        error!("[ResponsesClient] Tool message missing 'name' field");
                     }
                 } else {
-                    println!("[ResponsesClient] ERROR: Tool message missing 'tool_call_id' field");
+                    error!("[ResponsesClient] Tool message missing 'tool_call_id' field");
                 }
-                println!("[ResponsesClient] WARNING: Tool message missing required fields (tool_call_id or name)");
+                warn!("[ResponsesClient] Tool message missing required fields (tool_call_id or name)");
             }
 
             if let Some(content) = &msg.content {
@@ -926,12 +926,12 @@ impl ResponsesClient {
         transformed_messages: Vec<serde_json::Value>,
         stream: bool,
     ) -> Result<serde_json::Value> {
-        println!(
+        debug!(
             "[ResponsesClient] Building request body with {} messages",
             transformed_messages.len()
         );
         for (i, msg) in transformed_messages.iter().enumerate() {
-            println!(
+            debug!(
                 "[ResponsesClient] Message {}: role={}, has_content={}",
                 i,
                 msg.get("role")

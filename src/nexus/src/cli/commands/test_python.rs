@@ -1,4 +1,5 @@
 use clap::Args;
+use log::{info, warn};
 use nexus_core::client::ResponsesClient;
 use nexus_core::factories::AgentFactory;
 use nexus_core::load_env;
@@ -73,12 +74,12 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
         args.model
     };
 
-    println!("[test-python] Creating client and agent...");
-    println!(
+    info!("[test-python] Creating client and agent...");
+    info!(
         "[test-python] Servers directory: {}",
         args.servers_dir.display()
     );
-    println!("[test-python] Model: {}", model);
+    info!("[test-python] Model: {}", model);
 
     // Create client
     let client = ResponsesClient::new(api_key, base_url);
@@ -100,17 +101,17 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
         request = request.with_max_tokens(max);
     }
 
-    println!("[test-python] Sending prompt: {}", args.prompt);
-    println!("[test-python] Waiting for response...\n");
+    info!("[test-python] Sending prompt: {}", args.prompt);
+    info!("[test-python] Waiting for response...");
 
     // Send the request and get response
     let response = service.chat(request).await?;
 
-    println!("[test-python] Response received:");
+    info!("[test-python] Response received:");
     if let Some(content) = &response.content {
-        println!("{}", content.extract_text());
+        info!("{}", content.extract_text());
     } else {
-        println!("(No content in response)");
+        warn!("[test-python] No content in response");
     }
 
     Ok(())

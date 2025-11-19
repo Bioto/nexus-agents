@@ -1,7 +1,7 @@
 use crate::client::{LLMClient, ResponsesClient};
 use crate::models::{Agent, ChatCompletionRequest, FunctionCall, Message, Result, ToolCall};
 use futures::StreamExt;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
@@ -41,9 +41,9 @@ impl AgentService {
 
         loop {
             // Make the LLM call
-            println!("[AgentService] Making LLM call...");
+            debug!("[AgentService] Making LLM call...");
             let response = self.client.chat(request.clone()).await?;
-            println!(
+            debug!(
                 "[AgentService] LLM call completed. Response has {} choices",
                 response.choices.len()
             );
@@ -51,7 +51,7 @@ impl AgentService {
 
             if let Some(choice) = response.choices.first() {
                 let message = &choice.message;
-                println!(
+                debug!(
                     "[AgentService] Got message from choice. Content: {:?}",
                     message.content
                 );
@@ -74,17 +74,12 @@ impl AgentService {
                     let mut has_error = false;
                     for tool_call in tool_calls {
                         let tool_name = &tool_call.function.name;
-                        println!("[AgentService] Executing tool: {}", tool_name);
                         info!("[AgentService] Executing tool: {}", tool_name);
 
                         let result = match serde_json::from_str::<serde_json::Value>(
                             &tool_call.function.arguments,
                         ) {
                             Ok(args) => {
-                                println!(
-                                    "[AgentService] Tool {} arguments parsed successfully",
-                                    tool_name
-                                );
                                 debug!(
                                     "[AgentService] Tool {} arguments parsed successfully",
                                     tool_name
@@ -95,36 +90,24 @@ impl AgentService {
                                 let tool_name_clone = tool_name.clone();
                                 let args_clone = args.clone();
 
-                                println!(
-                                    "[AgentService] Spawning blocking task for tool: {}",
-                                    tool_name
-                                );
                                 info!(
                                     "[AgentService] Spawning blocking task for tool: {}",
                                     tool_name
                                 );
 
                                 // Add a 60 second timeout to prevent hanging
-                                println!(
+                                debug!(
                                     "[AgentService] Starting timeout (60s) for tool: {}",
                                     tool_name
                                 );
                                 match tokio::time::timeout(
                                     tokio::time::Duration::from_secs(60),
                                     tokio::task::spawn_blocking(move || {
-                                        println!(
-                                            "[AgentService] Blocking task started for tool: {}",
-                                            tool_name_clone
-                                        );
                                         debug!(
                                             "[AgentService] Blocking task started for tool: {}",
                                             tool_name_clone
                                         );
                                         let result = registry.execute(&tool_name_clone, args_clone);
-                                        println!(
-                                            "[AgentService] Blocking task completed for tool: {}",
-                                            tool_name_clone
-                                        );
                                         debug!(
                                             "[AgentService] Blocking task completed for tool: {}",
                                             tool_name_clone
@@ -135,7 +118,6 @@ impl AgentService {
                                 .await
                                 {
                                     Ok(Ok(Ok(result))) => {
-                                        println!("[AgentService] Tool {} executed successfully (result length: {} chars)", tool_name, result.len());
                                         info!(
                                             "[AgentService] Tool {} executed successfully",
                                             tool_name
@@ -148,10 +130,6 @@ impl AgentService {
                                         result
                                     }
                                     Ok(Ok(Err(e))) => {
-                                        println!(
-                                            "[AgentService] ERROR: Tool {} execution error: {}",
-                                            tool_name, e
-                                        );
                                         error!(
                                             "[AgentService] Tool {} execution error: {}",
                                             tool_name, e
@@ -160,10 +138,6 @@ impl AgentService {
                                         format!("Error executing tool: {}", e)
                                     }
                                     Ok(Err(e)) => {
-                                        println!(
-                                            "[AgentService] ERROR: Tool {} task error: {}",
-                                            tool_name, e
-                                        );
                                         error!(
                                             "[AgentService] Tool {} task error: {}",
                                             tool_name, e
@@ -172,7 +146,6 @@ impl AgentService {
                                         format!("Error in tool execution task: {}", e)
                                     }
                                     Err(_) => {
-                                        println!("[AgentService] ERROR: Tool {} execution timed out after 60 seconds", tool_name);
                                         error!("[AgentService] Tool {} execution timed out after 60 seconds", tool_name);
                                         has_error = true;
                                         format!("Tool execution timed out after 60 seconds")
@@ -180,7 +153,6 @@ impl AgentService {
                                 }
                             }
                             Err(e) => {
-                                println!("[AgentService] ERROR: Failed to parse arguments for tool {}: {}", tool_name, e);
                                 error!(
                                     "[AgentService] Failed to parse arguments for tool {}: {}",
                                     tool_name, e
@@ -191,11 +163,11 @@ impl AgentService {
                         };
 
                         // Add tool result to history
-                        println!("[AgentService] Adding tool result to history: tool_call_id={}, name={}, result_length={}", 
+                        debug!("[AgentService] Adding tool result to history: tool_call_id={}, name={}, result_length={}", 
                             tool_call.id, tool_name, result.len());
                         let tool_message =
                             Message::tool(tool_call.id.clone(), tool_name.clone(), result.clone());
-                        println!("[AgentService] Tool message: role={:?}, content={:?}, tool_call_id={:?}, name={:?}", 
+                        debug!("[AgentService] Tool message: role={:?}, content={:?}, tool_call_id={:?}, name={:?}", 
                             tool_message.role, tool_message.content, tool_message.tool_call_id, tool_message.name);
                         request.messages.push(tool_message);
                     }
@@ -214,17 +186,17 @@ impl AgentService {
                     }
 
                     // Debug: Print message history to check for duplicates
-                    println!(
+                    debug!(
                         "[AgentService] Message history length: {}",
                         request.messages.len()
                     );
                     for (i, msg) in request.messages.iter().enumerate() {
-                        println!("[AgentService] Message {}: role={:?}, has_tool_calls={:?}, tool_call_id={:?}", 
+                        debug!("[AgentService] Message {}: role={:?}, has_tool_calls={:?}, tool_call_id={:?}", 
                             i, msg.role, msg.tool_calls.is_some(), msg.tool_call_id);
                     }
 
                     // After successful tool execution, request a final response
-                    println!(
+                    debug!(
                         "[AgentService] Requesting final response using executed tool results"
                     );
                     let mut final_request = request.clone();
@@ -257,12 +229,12 @@ impl AgentService {
                     let response = self.client.chat(final_request).await?;
                     if let Some(choice) = response.choices.first() {
                         if choice.message.tool_calls.is_none() {
-                            println!("[AgentService] Got final text response after tool execution");
+                            debug!("[AgentService] Got final text response after tool execution");
                             return Ok(choice.message.clone());
                         }
                     }
 
-                    println!("[AgentService] Still getting tool calls in final request, returning last tool result as response");
+                    warn!("[AgentService] Still getting tool calls in final request, returning last tool result as response");
                     if let Some(last_tool_msg) = request
                         .messages
                         .iter()
@@ -285,14 +257,10 @@ impl AgentService {
                     ));
                 } else {
                     // No tool calls, return the final message
-                    println!("[AgentService] No tool calls, returning final message");
+                    debug!("[AgentService] No tool calls, returning final message");
                     return Ok(message.clone());
                 }
             } else {
-                println!(
-                    "[AgentService] ERROR: Response has no choices! Response: {:?}",
-                    response
-                );
                 error!("[AgentService] Response has no choices: {:?}", response);
                 return Err(crate::models::Error::Other(
                     "No response from assistant".to_string(),
@@ -432,7 +400,6 @@ impl AgentService {
                             let mut has_error = false;
                             for tool_call in &accumulated_tool_calls {
                                 let tool_name = &tool_call.function.name;
-                                println!("[AgentService] [Stream] Executing tool: {}", tool_name);
                                 info!("[AgentService] [Stream] Executing tool: {}", tool_name);
 
                                 let _ =
@@ -442,7 +409,6 @@ impl AgentService {
                                     &tool_call.function.arguments,
                                 ) {
                                     Ok(args) => {
-                                        println!("[AgentService] [Stream] Tool {} arguments parsed successfully", tool_name);
                                         debug!("[AgentService] [Stream] Tool {} arguments parsed successfully", tool_name);
 
                                         // Execute the tool in a blocking task to avoid blocking the async runtime
@@ -450,42 +416,35 @@ impl AgentService {
                                         let tool_name_clone = tool_name.clone();
                                         let args_clone = args.clone();
 
-                                        println!("[AgentService] [Stream] Spawning blocking task for tool: {}", tool_name);
                                         info!("[AgentService] [Stream] Spawning blocking task for tool: {}", tool_name);
 
                                         // Add a 60 second timeout to prevent hanging
-                                        println!("[AgentService] [Stream] Starting timeout (60s) for tool: {}", tool_name);
+                                        debug!("[AgentService] [Stream] Starting timeout (60s) for tool: {}", tool_name);
                                         match tokio::time::timeout(
                                             tokio::time::Duration::from_secs(60),
                                             tokio::task::spawn_blocking(move || {
-                                                println!("[AgentService] [Stream] Blocking task started for tool: {}", tool_name_clone);
                                                 debug!("[AgentService] [Stream] Blocking task started for tool: {}", tool_name_clone);
                                                 let result = registry.execute(&tool_name_clone, args_clone);
-                                                println!("[AgentService] [Stream] Blocking task completed for tool: {}", tool_name_clone);
                                                 debug!("[AgentService] [Stream] Blocking task completed for tool: {}", tool_name_clone);
                                                 result
                                             })
                                         ).await {
                                             Ok(Ok(Ok(result))) => {
-                                                println!("[AgentService] [Stream] Tool {} executed successfully (result length: {} chars)", tool_name, result.len());
                                                 info!("[AgentService] [Stream] Tool {} executed successfully", tool_name);
                                                 debug!("[AgentService] [Stream] Tool {} result length: {} characters", tool_name, result.len());
                                                 result
                                             }
                                             Ok(Ok(Err(e))) => {
-                                                println!("[AgentService] [Stream] ERROR: Tool {} execution error: {}", tool_name, e);
                                                 error!("[AgentService] [Stream] Tool {} execution error: {}", tool_name, e);
                                                 has_error = true;
                                                 format!("Error executing tool: {}", e)
                                             }
                                             Ok(Err(e)) => {
-                                                println!("[AgentService] [Stream] ERROR: Tool {} task error: {}", tool_name, e);
                                                 error!("[AgentService] [Stream] Tool {} task error: {}", tool_name, e);
                                                 has_error = true;
                                                 format!("Error in tool execution task: {}", e)
                                             }
                                             Err(_) => {
-                                                println!("[AgentService] [Stream] ERROR: Tool {} execution timed out after 60 seconds", tool_name);
                                                 error!("[AgentService] [Stream] Tool {} execution timed out after 60 seconds", tool_name);
                                                 has_error = true;
                                                 format!("Tool execution timed out after 60 seconds")
@@ -493,7 +452,6 @@ impl AgentService {
                                         }
                                     }
                                     Err(e) => {
-                                        println!("[AgentService] [Stream] ERROR: Failed to parse arguments for tool {}: {}", tool_name, e);
                                         error!("[AgentService] [Stream] Failed to parse arguments for tool {}: {}", tool_name, e);
                                         has_error = true;
                                         format!("Failed to parse tool arguments: {}", e)

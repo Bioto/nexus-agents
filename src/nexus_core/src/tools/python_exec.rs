@@ -10,9 +10,11 @@ use std::sync::{Arc, Mutex};
 
 /// Python execution tool that can execute Python code with access to MCP server files
 /// Uses Docker service to run code in a container with the servers directory mounted
+/// Maintains a persistent container for better performance across multiple executions
 pub struct PythonExec {
     servers_dir: PathBuf,
     docker_service: Arc<Mutex<Option<Arc<DockerService>>>>,
+    container_id: Arc<Mutex<Option<String>>>,
 }
 
 impl PythonExec {
@@ -20,6 +22,7 @@ impl PythonExec {
         Self {
             servers_dir: servers_dir.into(),
             docker_service: Arc::new(Mutex::new(None)),
+            container_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -55,6 +58,120 @@ impl PythonExec {
         *service_guard = Some(service.clone());
         Ok(service)
     }
+
+    /// Get or create the persistent container, using the current async runtime
+    fn get_persistent_container(
+        &self,
+        docker_service: &Arc<DockerService>,
+        mounts: Vec<(String, String)>,
+    ) -> Result<String> {
+        let mut container_guard = self.container_id.lock().map_err(|e| {
+            crate::models::Error::Other(format!("Failed to lock container ID mutex: {}", e))
+        })?;
+
+        if let Some(container_id) = container_guard.as_ref() {
+            return Ok(container_id.clone());
+        }
+
+        // Try to use the current runtime handle
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::models::Error::Other(
+                "Cannot create persistent container: not in an async runtime context".to_string(),
+            )
+        })?;
+
+        // Create persistent container using the current runtime
+        let container_id = handle.block_on(async {
+            docker_service
+                .create_persistent_container(Some(mounts))
+                .await
+                .map_err(|e| {
+                    crate::models::Error::Other(format!(
+                        "Failed to create persistent container: {}. Make sure Docker is running.",
+                        e
+                    ))
+                })
+        })?;
+
+        println!(
+            "[execute_python] Created persistent container: {}",
+            container_id
+        );
+        info!("[execute_python] Created persistent container: {}", container_id);
+
+        *container_guard = Some(container_id.clone());
+        Ok(container_id)
+    }
+
+    /// Clean up the persistent container
+    pub fn cleanup(&self) -> Result<()> {
+        let mut container_guard = self.container_id.lock().map_err(|e| {
+            crate::models::Error::Other(format!("Failed to lock container ID mutex: {}", e))
+        })?;
+
+        if let Some(container_id) = container_guard.take() {
+            let docker_service = self.get_docker_service()?;
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                crate::models::Error::Other(
+                    "Cannot cleanup container: not in an async runtime context".to_string(),
+                )
+            })?;
+
+            handle.block_on(async {
+                docker_service
+                    .remove_container(&container_id, true)
+                    .await
+                    .map_err(|e| {
+                        crate::models::Error::Other(format!(
+                            "Failed to remove persistent container: {}",
+                            e
+                        ))
+                    })
+            })?;
+
+            println!(
+                "[execute_python] Cleaned up persistent container: {}",
+                container_id
+            );
+            info!("[execute_python] Cleaned up persistent container: {}", container_id);
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for PythonExec {
+    /// Clean up the persistent container when PythonExec is dropped
+    /// Errors are logged but not propagated since Drop cannot return errors
+    /// Uses spawn to avoid blocking the current runtime
+    fn drop(&mut self) {
+        if let Ok(mut container_guard) = self.container_id.lock() {
+            if let Some(container_id) = container_guard.take() {
+                // Try to clean up by spawning a background task
+                // This avoids blocking and works even if we're in an async runtime
+                if let Ok(docker_service) = self.get_docker_service() {
+                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                        // Spawn a background task to clean up the container
+                        // This is fire-and-forget - we don't wait for it
+                        // Clone the Arc so the task can own it
+                        let docker_service_clone = docker_service.clone();
+                        let container_id_clone = container_id.clone();
+                        handle.spawn(async move {
+                            let _ = docker_service_clone.remove_container(&container_id_clone, true).await;
+                            debug!("[execute_python] Cleaned up persistent container on drop: {}", container_id_clone);
+                        });
+                    } else {
+                        // Not in async context - can't clean up automatically
+                        eprintln!(
+                            "[execute_python] WARNING: Cannot cleanup container on drop (not in async context). Container ID: {}. Please clean up manually or call cleanup() before dropping.",
+                            container_id
+                        );
+                        debug!("[execute_python] Cannot cleanup container on drop: not in async context. Container ID: {}", container_id);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl ExecutableTool for PythonExec {
@@ -87,7 +204,7 @@ impl ExecutableTool for PythonExec {
             crate::models::Error::Configuration("Missing required parameter: code".to_string())
         })?;
 
-        println!("[execute_python] Code length: {} characters", code.len());
+        println!("[execute_python]s Code length: {} characters", code.len());
         println!(
             "[execute_python] Code preview: {}",
             code.chars().take(200).collect::<String>()
@@ -199,8 +316,27 @@ def import_tool(server_name, tool_name):
             e
         })?;
 
-        // Execute the code in Docker
-        println!("[execute_python] Calling docker_service.execute_python_code_with_mounts()...");
+        // Get or create persistent container (lazy initialization)
+        let mut container_id = self
+            .get_persistent_container(&docker_service, mounts.clone())
+            .map_err(|e| {
+                println!(
+                    "[execute_python] ERROR: Failed to get persistent container: {}",
+                    e
+                );
+                error!("[execute_python] Failed to get persistent container: {}", e);
+                e
+            })?;
+
+        // Execute the code in the persistent container using exec
+        println!(
+            "[execute_python] Executing code in persistent container: {}",
+            container_id
+        );
+        info!(
+            "[execute_python] Executing code in persistent container: {}",
+            container_id
+        );
 
         // Use the current runtime handle to execute async code
         let handle = tokio::runtime::Handle::try_current().map_err(|_| {
@@ -209,17 +345,75 @@ def import_tool(server_name, tool_name):
             )
         })?;
 
-        let (stdout, stderr, exit_code) = handle
-            .block_on(async {
-                docker_service
-                    .execute_python_code_with_mounts(&container_code, Some(mounts))
-                    .await
-            })
-            .map_err(|e| {
-                println!("[execute_python] ERROR: Docker execution failed: {}", e);
-                error!("[execute_python] Docker execution failed: {}", e);
-                crate::models::Error::Other(format!("Docker execution failed: {}", e))
-            })?;
+        let (stdout, stderr, exit_code) = loop {
+            let result = handle
+                .block_on(async {
+                    docker_service
+                        .execute_python_code_in_container(&container_id, &container_code)
+                        .await
+                });
+
+            match result {
+                Ok(output) => break output,
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    // Check if the container doesn't exist or was removed
+                    if error_msg.contains("does not exist") || error_msg.contains("not found") {
+                        println!(
+                            "[execute_python] Container {} was removed, recreating...",
+                            container_id
+                        );
+                        error!(
+                            "[execute_python] Container {} was removed, recreating...",
+                            container_id
+                        );
+
+                        // Clear the stored container ID and recreate
+                        if let Ok(mut container_guard) = self.container_id.lock() {
+                            *container_guard = None;
+                        }
+
+                        // Recreate the container
+                        container_id = self
+                            .get_persistent_container(&docker_service, mounts.clone())
+                            .map_err(|e| {
+                                println!(
+                                    "[execute_python] ERROR: Failed to recreate persistent container: {}",
+                                    e
+                                );
+                                error!(
+                                    "[execute_python] Failed to recreate persistent container: {}",
+                                    e
+                                );
+                                crate::models::Error::Other(format!(
+                                    "Failed to recreate persistent container: {}",
+                                    e
+                                ))
+                            })?;
+
+                        println!(
+                            "[execute_python] Recreated persistent container: {}",
+                            container_id
+                        );
+                        info!(
+                            "[execute_python] Recreated persistent container: {}",
+                            container_id
+                        );
+
+                        // Try again with the new container
+                        continue;
+                    } else {
+                        // Some other error - return it
+                        println!("[execute_python] ERROR: Docker execution failed: {}", e);
+                        error!("[execute_python] Docker execution failed: {}", e);
+                        return Err(crate::models::Error::Other(format!(
+                            "Docker execution failed: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+        };
 
         // Convert to ExecutionResult format
         use nexus_py::ExecutionResult;
