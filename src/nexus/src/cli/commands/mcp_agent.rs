@@ -90,6 +90,81 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
     // Create MCP agent
     let agent = AgentFactory::mcp_agent(&args.servers_dir);
 
+    // TEMPORARILY DISABLED TUI - Using simple console mode for raw logs
+    println!("=== MCP Agent (Console Mode) ===");
+    println!("Agent: {}", agent.name);
+    println!("System Prompt: {}", agent.system_prompt);
+    println!("Tools available: {}", agent.tools.len());
+    for tool in &agent.tools {
+        println!("  - {}: {}", tool.name, tool.description);
+    }
+    println!("\nType your message and press Enter (or 'quit' to exit):\n");
+
+    use nexus_core::models::{ChatCompletionRequest, Message};
+    use nexus_core::services::AgentService;
+    use std::io::{self, BufRead};
+
+    let agent_service = AgentService::new(&client, &agent);
+    let mut messages = vec![Message::system(&agent.system_prompt)];
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let user_input = line.map_err(|e| {
+            nexus_core::models::Error::Other(format!("Failed to read input: {}", e))
+        })?;
+
+        if user_input.trim().is_empty() {
+            continue;
+        }
+
+        if user_input.trim().eq_ignore_ascii_case("quit") || user_input.trim().eq_ignore_ascii_case("exit") {
+            println!("Exiting...");
+            break;
+        }
+
+        println!("\n[User] {}", user_input);
+        messages.push(Message::user(&user_input));
+
+        let mut request = ChatCompletionRequest::new(&model, messages.clone());
+
+        if let Some(temp) = args.temperature {
+            request = request.with_temperature(temp);
+        }
+        if let Some(max) = args.max_tokens {
+            request = request.with_max_tokens(max);
+        }
+        if let Some(top_p) = args.top_p {
+            request = request.with_top_p(top_p);
+        }
+        if let Some(freq) = args.frequency_penalty {
+            request = request.with_frequency_penalty(freq);
+        }
+        if let Some(pres) = args.presence_penalty {
+            request = request.with_presence_penalty(pres);
+        }
+
+        println!("[Agent] Processing...");
+        match agent_service.chat(request).await {
+            Ok(response) => {
+                if let Some(ref content) = response.content {
+                    let text = content.extract_text();
+                    println!("[Agent] {}", text);
+                } else {
+                    println!("[Agent] (No content in response)");
+                }
+                messages.push(response);
+            }
+            Err(e) => {
+                eprintln!("[Error] {}", e);
+            }
+        }
+        println!("\n---\n");
+    }
+
+    Ok(())
+
+    // ORIGINAL TUI CODE (commented out for debugging):
+    /*
     // Use the chat TUI with our custom agent
     use crossterm::terminal;
     use nexus_core::cli::commands::tui::{self, ChatState};
@@ -150,4 +225,5 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
     crossterm::execute!(io::stdout(), terminal::LeaveAlternateScreen).ok();
 
     result
+    */
 }

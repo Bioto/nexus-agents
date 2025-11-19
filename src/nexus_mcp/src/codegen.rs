@@ -607,13 +607,27 @@ impl CodeGenerator {
     }
 
     /// Convert to snake_case
+    /// Converts hyphens and uppercase letters to snake_case format
     fn to_snake_case(&self, s: &str) -> String {
         let mut result = String::new();
+        let mut prev_was_separator = false;
+        
         for (i, c) in s.chars().enumerate() {
-            if c.is_uppercase() && i > 0 {
-                result.push('_');
+            if c == '-' || c == '_' {
+                if !prev_was_separator && i > 0 {
+                    result.push('_');
+                }
+                prev_was_separator = true;
+            } else if c.is_uppercase() {
+                if !prev_was_separator && i > 0 {
+                    result.push('_');
+                }
+                result.push(c.to_lowercase().next().unwrap_or(c));
+                prev_was_separator = false;
+            } else {
+                result.push(c);
+                prev_was_separator = false;
             }
-            result.push(c.to_lowercase().next().unwrap_or(c));
         }
         result
     }

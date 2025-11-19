@@ -36,7 +36,7 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://mcp.context7.com")
 # Custom headers from configuration
 def get_custom_headers() -> Dict[str, str]:
     headers = {}
-    headers["CONTEXT7_API_KEY"] = os.getenv("CONTEXT7_API_KEY", "ctx7sk-10e3ae20-7221-4088-a0fc-019fd769cdc4")
+    headers["CONTEXT7_API_KEY"] = os.getenv("CONTEXT7_API_KEY", "")
     return headers
 
 # Session state for MCP initialization
@@ -203,5 +203,5 @@ Response Format:
 - If no good matches exist, clearly state this and suggest query refinements
 
 For ambiguous queries, request clarification before proceeding with a best-guess match."""
-async def resolve-library-id(input: ResolveLibraryIdInput) -> Dict[str, Any]:
+async def resolve_library_id(input: ResolveLibraryIdInput) -> Dict[str, Any]:
     return await call_mcp_tool("resolve-library-id", input)

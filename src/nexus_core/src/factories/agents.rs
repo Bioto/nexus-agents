@@ -166,10 +166,6 @@ impl AgentFactory {
             .register(Box::new(discovery_tool));
 
         let servers_path_str = servers_path.to_string_lossy();
-        let workspace_root_str = servers_path
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| ".".to_string());
 
         let system_prompt = format!(
             "You are an MCP Agent with access to MCP server tools via Python code execution.\n\n\
@@ -197,51 +193,71 @@ impl AgentFactory {
               # uv: dependencies = [\"requests\"]\n\
             - Standard library modules (like 'asyncio', 'importlib', 'pathlib', etc.) don't need to be listed\n\
             - Always include external packages you import (e.g., requests, httpx, pandas, etc.)\n\n\
-            Example usage:\n\
+            PARAMETER HANDLING - CRITICAL:\n\
+            - ALWAYS check tool parameters using search_mcp_tools BEFORE calling a tool\n\
+            - Each tool function requires an input dictionary with ALL required parameters\n\
+            - Parameter names must match EXACTLY (case-sensitive)\n\
+            - Missing required parameters will cause errors\n\
+            - Use search_mcp_tools with detail='summary' or detail='full' to see parameters\n\
+            \n\
+            Example usage (PREFERRED - using import_tool helper):\n\
             ```python
-            # 
-            # /// script
-            # requires-python = \">=3.10\"
-            # dependencies = [
-            #     \"requests\",
-            #     \"rich\",
-            # ]
-            # ///
-
+            # uv: dependencies = []\n\
+            import asyncio\n\
+            \n\
+            # Use the import_tool helper (recommended)\n\
+            echo_module = import_tool('nexus-mcp-server', 'echo')\n\
+            add_module = import_tool('nexus-mcp-server', 'add')\n\
+            resolve_module = import_tool('context7', 'resolve_library_id')\n\
+            \n\
+            async def main():\n\
+                # Simple tool with one parameter\n\
+                result = await echo_module.echo({{'message': 'Hello'}})\n\
+                print(result)\n\
+                \n\
+                # Tool with multiple parameters\n\
+                result = await add_module.add({{'a': 5, 'b': 3}})\n\
+                print(result)\n\
+                \n\
+                # Tool with required parameter - MUST include all required fields\n\
+                result = await resolve_module.resolve_library_id({{'libraryName': 'django'}})\n\
+                print(result)\n\
+            \n\
+            asyncio.run(main())\n\
+            ```\n\n\
+            Alternative (using importlib directly):\n\
+            ```python
+            # uv: dependencies = []\n\
             import asyncio\n\
             import importlib.util\n\
             from pathlib import Path\n\
             \n\
-            # Workspace root is already in sys.path\n\
-            workspace_root = Path(r\"{}\")\n\
+            # CRITICAL: Use /workspace in Docker container, not host paths\n\
+            workspace_root = Path(\"/workspace\")\n\
             \n\
-            # Load echo tool using importlib (handles hyphens in directory names)\n\
-            echo_path = workspace_root / 'servers' / 'nexus-mcp-server' / 'echo.py'\n\
-            echo_spec = importlib.util.spec_from_file_location('echo', echo_path)\n\
-            echo_module = importlib.util.module_from_spec(echo_spec)\n\
-            echo_spec.loader.exec_module(echo_module)\n\
-            \n\
-            # Load add tool\n\
-            add_path = workspace_root / 'servers' / 'nexus-mcp-server' / 'add.py'\n\
-            add_spec = importlib.util.spec_from_file_location('add', add_path)\n\
-            add_module = importlib.util.module_from_spec(add_spec)\n\
-            add_spec.loader.exec_module(add_module)\n\
+            # Load tools using importlib\n\
+            resolve_path = workspace_root / 'servers' / 'context7' / 'resolve_library_id.py'\n\
+            resolve_spec = importlib.util.spec_from_file_location('resolve_library_id', resolve_path)\n\
+            resolve_module = importlib.util.module_from_spec(resolve_spec)\n\
+            resolve_spec.loader.exec_module(resolve_module)\n\
             \n\
             async def main():\n\
-                # Use echo tool\n\
-                result = await echo_module.echo({{'message': 'Hello'}})\n\
+                # IMPORTANT: Pass ALL required parameters as a dictionary\n\
+                result = await resolve_module.resolve_library_id({{'libraryName': 'django'}})\n\
                 print(result)\n\
-                \n\
-                # Use add tool\n\
-                result = await add_module.add({{'a': 5, 'b': 3}})\n\
-                print(result)\n\n\
+            \n\
             asyncio.run(main())\n\
             ```\n\n\
             IMPORTANT:\n\
+            - PREFER using import_tool(server_name, tool_name) helper - it handles paths correctly\n\
+            - If using importlib directly, ALWAYS use Path(\"/workspace\") as the workspace root, NOT host paths\n\
             - All tool functions are async, so you must use asyncio.run() or await them in an async function\n\
+            - Each tool function takes ONE argument: a dictionary with ALL required parameters\n\
+            - ALWAYS check search_mcp_tools output to see what parameters each tool requires\n\
+            - Parameter names in the dictionary must match the TypedDict field names exactly\n\
             - Each tool file is self-contained with its own MCP client\n\
             - You can explore the servers/ directory to discover available tools\n\
-            - Use importlib.util to load tool files since directory names may contain hyphens\n\
+            - The workspace root is mounted at /workspace in the Docker container\n\
             - The workspace root is already added to sys.path, and import_tool() helper is available\n\
             - ALWAYS include '# uv: dependencies = [...]' at the top of your Python code if you use external packages\n\
             - Use the execute_python tool to run your Python code\n\n\
@@ -264,7 +280,7 @@ impl AgentFactory {
             - After the tool finishes, summarize the code you ran and report the tool's stdout/stderr (or errors) back to the user\n\
             - Never claim to have executed code unless you actually invoked the tool\n\
             - If the tool output already contains the final answer, repeat it plainly for the user",
-            servers_path_str, workspace_root_str
+            servers_path_str
         );
 
         AgentBuilder::new("MCP Agent")

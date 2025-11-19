@@ -17,7 +17,7 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://mcp.context7.com")
 # Custom headers from configuration
 def get_custom_headers() -> Dict[str, str]:
     headers = {}
-    headers["CONTEXT7_API_KEY"] = os.getenv("CONTEXT7_API_KEY", "ctx7sk-10e3ae20-7221-4088-a0fc-019fd769cdc4")
+    headers["CONTEXT7_API_KEY"] = os.getenv("CONTEXT7_API_KEY", "")
     return headers
 
 # Session state for MCP initialization
@@ -167,5 +167,5 @@ class GetLibraryDocsInput(TypedDict):
     topic: Optional[str]
 
 """Fetches up-to-date documentation for a library. You must call 'resolve-library-id' first to obtain the exact Context7-compatible library ID required to use this tool, UNLESS the user explicitly provides a library ID in the format '/org/project' or '/org/project/version' in their query."""
-async def get-library-docs(input: GetLibraryDocsInput) -> Dict[str, Any]:
+async def get_library_docs(input: GetLibraryDocsInput) -> Dict[str, Any]:
     return await call_mcp_tool("get-library-docs", input)

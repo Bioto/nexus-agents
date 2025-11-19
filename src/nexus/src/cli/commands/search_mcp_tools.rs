@@ -68,9 +68,6 @@ pub fn run_search_mcp_tools(args: SearchMcpToolsArgs) -> Result<()> {
         payload.insert("limit".to_string(), Value::Number(limit.into()));
     }
 
-    println!("payload: {:?}", payload);
-    std::process::exit(0);
-
     let response = discovery.execute(Value::Object(payload))?;
     let parsed: Value = serde_json::from_str(&response)
         .map_err(|e| Error::Other(format!("Failed to parse tool discovery response: {}", e)))?;
@@ -121,6 +118,20 @@ fn print_pretty_results(value: &Value) {
             }
             if let Some(summary) = entry.get("summary").and_then(Value::as_str) {
                 println!("   summary: {}", summary);
+            }
+            if let Some(parameters) = entry.get("parameters").and_then(Value::as_object) {
+                println!("   parameters:");
+                for (param_name, param_info) in parameters {
+                    if let Some(param_obj) = param_info.as_object() {
+                        let param_type = param_obj
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown");
+                        println!("     - {}: {}", param_name, param_type);
+                    } else {
+                        println!("     - {}: {}", param_name, param_info);
+                    }
+                }
             }
             if let Some(docstring) = entry.get("docstring").and_then(Value::as_str) {
                 println!("   doc    : {}", first_line(docstring));

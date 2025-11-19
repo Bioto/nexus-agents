@@ -3,10 +3,10 @@ Nexus MCP Server tools
 Generated code - do not edit manually
 """
 
-from .resolve-library-id import resolve-library-id
-from .get-library-docs import get-library-docs
+from .resolve_library_id import resolve_library_id
+from .get_library_docs import get_library_docs
 
 __all__ = [
-    "resolve-library-id",
-    "get-library-docs",
+    "resolve_library_id",
+    "get_library_docs",
 ]
