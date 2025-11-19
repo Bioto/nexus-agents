@@ -134,6 +134,7 @@ impl Default for ChatConfig {
 ///
 /// ```no_run
 /// use nexus_core::{ResponsesClient, NexusApiService, Agent, ChatCompletionRequest, Message};
+/// use nexus_core::tools::ToolRegistry;
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -146,7 +147,7 @@ impl Default for ChatConfig {
 ///         "A calculator agent",
 ///         "You are a helpful calculator",
 ///         vec![],
-///         crate::tools::ToolRegistry::new(),
+///         ToolRegistry::new(),
 ///     );
 ///
 ///     // Agent call (with automatic tool execution)
