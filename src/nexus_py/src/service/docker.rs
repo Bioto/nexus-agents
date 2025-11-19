@@ -407,10 +407,7 @@ impl DockerService {
                 }
                 Err(e) => {
                     // Check if container exists at all
-                    let inspect_result = self
-                        .docker
-                        .inspect_container(container_id, None)
-                        .await;
+                    let inspect_result = self.docker.inspect_container(container_id, None).await;
                     match inspect_result {
                         Ok(_) => {
                             // Container exists but failed to start
@@ -534,7 +531,8 @@ impl DockerService {
         env: Option<HashMap<String, String>>,
         mounts: Option<Vec<(String, String)>>,
     ) -> Result<(String, String, i32), DockerError> {
-        self.run_command_with_mounts_and_cleanup(command, env, mounts, true).await
+        self.run_command_with_mounts_and_cleanup(command, env, mounts, true)
+            .await
     }
 
     /// Run a command in a new container with volume mounts and return the output
@@ -843,7 +841,8 @@ impl DockerService {
         code: &str,
         mounts: Option<Vec<(String, String)>>,
     ) -> Result<(String, String, i32), DockerError> {
-        self.execute_python_code_with_mounts_and_cleanup(code, mounts, true).await
+        self.execute_python_code_with_mounts_and_cleanup(code, mounts, true)
+            .await
     }
 
     /// Execute Python code in a container with volume mounts
@@ -862,7 +861,8 @@ impl DockerService {
             code.to_string(),
         ];
 
-        self.run_command_with_mounts_and_cleanup(command, None, mounts, remove_after).await
+        self.run_command_with_mounts_and_cleanup(command, None, mounts, remove_after)
+            .await
     }
 
     /// Execute Python code in an existing container using exec

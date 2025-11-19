@@ -754,7 +754,9 @@ impl ResponsesClient {
                 } else {
                     error!("[ResponsesClient] Tool message missing 'tool_call_id' field");
                 }
-                warn!("[ResponsesClient] Tool message missing required fields (tool_call_id or name)");
+                warn!(
+                    "[ResponsesClient] Tool message missing required fields (tool_call_id or name)"
+                );
             }
 
             if let Some(content) = &msg.content {

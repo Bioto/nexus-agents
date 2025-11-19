@@ -807,7 +807,7 @@ impl ScreenRecorder {
         let context_decoder = CodecContext::from_parameters(codec_params.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create decoder context: {:?}", e))?;
         let mut decoder = context_decoder.decoder().video()?;
-        
+
         // Get video parameters from codec_params using unsafe FFI
         let (raw_width, raw_height) = unsafe {
             let params_ptr = codec_params.as_ptr();
@@ -832,25 +832,29 @@ impl ScreenRecorder {
         );
 
         let ostream_idx = stream.index();
-        
+
         // Configure the stream parameters directly using unsafe FFI
         // This is the proper way to set up encoding parameters before opening
         unsafe {
             use ffmpeg::ffi::*;
-            let mut stream_ptr = octx.stream_mut(ostream_idx)
+            let mut stream_ptr = octx
+                .stream_mut(ostream_idx)
                 .ok_or_else(|| anyhow::anyhow!("Stream {} not found", ostream_idx))?;
             let params_ptr = stream_ptr.parameters().as_ptr() as *mut AVCodecParameters;
-            
+
             // Set codec parameters on the stream
             (*params_ptr).codec_type = AVMediaType::AVMEDIA_TYPE_VIDEO;
             (*params_ptr).codec_id = codec.id().into();
             (*params_ptr).width = width as i32;
             (*params_ptr).height = height as i32;
             (*params_ptr).format = AVPixelFormat::AV_PIX_FMT_YUV420P as i32;
-            
+
             // Set stream time_base
             let stream_ptr_raw = stream_ptr.as_mut_ptr();
-            (*stream_ptr_raw).time_base = AVRational { num: 1, den: fps as i32 };
+            (*stream_ptr_raw).time_base = AVRational {
+                num: 1,
+                den: fps as i32,
+            };
         }
 
         // Set time_base for proper timestamp handling
@@ -858,7 +862,7 @@ impl ScreenRecorder {
 
         // Write header first - this prepares the output file
         octx.write_header()?;
-        
+
         // Now create and open the encoder with the correct parameters
         let mut encoder_ctx = CodecContext::new_with_codec(codec);
         unsafe {
@@ -867,19 +871,25 @@ impl ScreenRecorder {
             (*ctx_ptr).width = width as i32;
             (*ctx_ptr).height = height as i32;
             (*ctx_ptr).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
-            (*ctx_ptr).time_base = AVRational { num: 1, den: fps as i32 };
-            (*ctx_ptr).framerate = AVRational { num: fps as i32, den: 1 };
+            (*ctx_ptr).time_base = AVRational {
+                num: 1,
+                den: fps as i32,
+            };
+            (*ctx_ptr).framerate = AVRational {
+                num: fps as i32,
+                den: 1,
+            };
             (*ctx_ptr).max_b_frames = 0;
             (*ctx_ptr).gop_size = 1;
             (*ctx_ptr).flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
             (*ctx_ptr).flags2 |= AV_CODEC_FLAG2_FAST;
-            
+
             // Actually open the codec
             if avcodec_open2(ctx_ptr, (*ctx_ptr).codec, std::ptr::null_mut()) < 0 {
                 return Err(anyhow::anyhow!("Failed to open H.264 encoder"));
             }
         }
-        
+
         // Get the encoder interface
         let mut video_encoder = encoder_ctx.encoder().video()?;
 
@@ -936,7 +946,7 @@ impl ScreenRecorder {
         // Only create scaler if we need to convert format or resize
         let needs_scaling =
             input_pixel_format != Pixel::YUV420P || raw_width != width || raw_height != height;
-        
+
         let mut scaler = if needs_scaling {
             Some(
                 Scaler::get(
@@ -963,7 +973,7 @@ impl ScreenRecorder {
         let mut frames_with_packets: std::collections::HashSet<usize> =
             std::collections::HashSet::new(); // Track which frames have produced packets
         let start_time = Instant::now();
-        
+
         // Calculate end_time AFTER all setup is complete, right before the recording loop
         let end_time = config
             .duration_secs
@@ -1008,10 +1018,10 @@ impl ScreenRecorder {
             let capture_start = Instant::now();
 
             // Decode the packet into a frame
-            decoder.send_packet(&pkt).map_err(|e| {
-                anyhow::anyhow!("Failed to send packet to decoder: {:?}", e)
-            })?;
-            
+            decoder
+                .send_packet(&pkt)
+                .map_err(|e| anyhow::anyhow!("Failed to send packet to decoder: {:?}", e))?;
+
             // Try to receive decoded frames (there might be multiple frames per packet or vice versa)
             let mut got_frame = false;
             loop {
@@ -1061,7 +1071,11 @@ impl ScreenRecorder {
             // Encode frame
             let encode_start = Instant::now();
             video_encoder.send_frame(frame_to_encode).map_err(|e| {
-                anyhow::anyhow!("Failed to send frame to encoder (frame {}): {:?}", frame_num, e)
+                anyhow::anyhow!(
+                    "Failed to send frame to encoder (frame {}): {:?}",
+                    frame_num,
+                    e
+                )
             })?;
 
             // Calculate PTS and DTS in stream time_base

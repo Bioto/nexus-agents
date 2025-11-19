@@ -176,9 +176,9 @@ impl McpClient {
             )));
         }
 
-        let result = tools_json
-            .get("result")
-            .ok_or_else(|| McpClientError::ParseError("Missing 'result' in response".to_string()))?;
+        let result = tools_json.get("result").ok_or_else(|| {
+            McpClientError::ParseError("Missing 'result' in response".to_string())
+        })?;
 
         let tools = result
             .get("tools")
@@ -237,4 +237,3 @@ impl McpClient {
         ))
     }
 }
-

@@ -21,10 +21,7 @@ pub struct SchemaConverter;
 
 impl SchemaConverter {
     /// Convert JSON Schema to Python TypedDict
-    pub fn schema_to_typed_dict(
-        schema: &Value,
-        type_name: &str,
-    ) -> Result<String, SchemaError> {
+    pub fn schema_to_typed_dict(schema: &Value, type_name: &str) -> Result<String, SchemaError> {
         // Handle empty schema or missing properties
         let properties = schema.get("properties").and_then(|p| p.as_object());
 
@@ -100,4 +97,3 @@ impl SchemaConverter {
         })
     }
 }
-

@@ -196,9 +196,7 @@ impl AgentService {
                     }
 
                     // After successful tool execution, request a final response
-                    debug!(
-                        "[AgentService] Requesting final response using executed tool results"
-                    );
+                    debug!("[AgentService] Requesting final response using executed tool results");
                     let mut final_request = request.clone();
 
                     // Build a summary of the current tool outputs so the LLM can reference them

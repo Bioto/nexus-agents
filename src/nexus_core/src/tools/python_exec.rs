@@ -97,7 +97,10 @@ impl PythonExec {
             "[execute_python] Created persistent container: {}",
             container_id
         );
-        info!("[execute_python] Created persistent container: {}", container_id);
+        info!(
+            "[execute_python] Created persistent container: {}",
+            container_id
+        );
 
         *container_guard = Some(container_id.clone());
         Ok(container_id)
@@ -133,7 +136,10 @@ impl PythonExec {
                 "[execute_python] Cleaned up persistent container: {}",
                 container_id
             );
-            info!("[execute_python] Cleaned up persistent container: {}", container_id);
+            info!(
+                "[execute_python] Cleaned up persistent container: {}",
+                container_id
+            );
         }
 
         Ok(())
@@ -157,8 +163,13 @@ impl Drop for PythonExec {
                         let docker_service_clone = docker_service.clone();
                         let container_id_clone = container_id.clone();
                         handle.spawn(async move {
-                            let _ = docker_service_clone.remove_container(&container_id_clone, true).await;
-                            debug!("[execute_python] Cleaned up persistent container on drop: {}", container_id_clone);
+                            let _ = docker_service_clone
+                                .remove_container(&container_id_clone, true)
+                                .await;
+                            debug!(
+                                "[execute_python] Cleaned up persistent container on drop: {}",
+                                container_id_clone
+                            );
                         });
                     } else {
                         // Not in async context - can't clean up automatically
@@ -346,12 +357,11 @@ def import_tool(server_name, tool_name):
         })?;
 
         let (stdout, stderr, exit_code) = loop {
-            let result = handle
-                .block_on(async {
-                    docker_service
-                        .execute_python_code_in_container(&container_id, &container_code)
-                        .await
-                });
+            let result = handle.block_on(async {
+                docker_service
+                    .execute_python_code_in_container(&container_id, &container_code)
+                    .await
+            });
 
             match result {
                 Ok(output) => break output,

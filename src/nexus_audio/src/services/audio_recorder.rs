@@ -64,56 +64,58 @@ impl DeviceInfo {
     fn lookup_full_device_name(card_name: &str) -> Option<String> {
         #[cfg(target_os = "linux")]
         {
-        // Try reading from /proc/asound/cards
-        if let Ok(content) = std::fs::read_to_string("/proc/asound/cards") {
-            for line in content.lines() {
-                // Format: " 0 [Quadcast        ]: USB-Audio - HyperX Quadcast"
-                // Look for the card name in brackets
-                if let Some(bracket_start) = line.find('[') {
-                    if let Some(bracket_end) = line[bracket_start + 1..].find(']') {
-                        let card_in_brackets =
-                            line[bracket_start + 1..bracket_start + 1 + bracket_end].trim();
-                        if card_in_brackets == card_name {
-                            // Extract the full name after the dash
-                            if let Some(dash_pos) = line.find(" - ") {
-                                let full_name = line[dash_pos + 3..].trim();
-                                if !full_name.is_empty() {
-                                    return Some(full_name.to_string());
+            // Try reading from /proc/asound/cards
+            if let Ok(content) = std::fs::read_to_string("/proc/asound/cards") {
+                for line in content.lines() {
+                    // Format: " 0 [Quadcast        ]: USB-Audio - HyperX Quadcast"
+                    // Look for the card name in brackets
+                    if let Some(bracket_start) = line.find('[') {
+                        if let Some(bracket_end) = line[bracket_start + 1..].find(']') {
+                            let card_in_brackets =
+                                line[bracket_start + 1..bracket_start + 1 + bracket_end].trim();
+                            if card_in_brackets == card_name {
+                                // Extract the full name after the dash
+                                if let Some(dash_pos) = line.find(" - ") {
+                                    let full_name = line[dash_pos + 3..].trim();
+                                    if !full_name.is_empty() {
+                                        return Some(full_name.to_string());
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Try reading from /sys/class/sound/card*/id and longname
-        if let Ok(entries) = std::fs::read_dir("/sys/class/sound") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir()
-                    && path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .is_some_and(|n| n.starts_with("card"))
-                {
-                    // Check if this card matches
-                    if let Ok(id_content) = std::fs::read_to_string(path.join("id")) {
-                        let id = id_content.trim();
-                        if id == card_name {
-                            // Found matching card, read longname
-                            if let Ok(longname) = std::fs::read_to_string(path.join("longname"))
-                            {
-                                let full_name = longname.trim();
-                                if !full_name.is_empty() {
-                                    return Some(full_name.to_string());
+            // Try reading from /sys/class/sound/card*/id and longname
+            if let Ok(entries) = std::fs::read_dir("/sys/class/sound") {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir()
+                        && path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.starts_with("card"))
+                    {
+                        // Check if this card matches
+                        if let Ok(id_content) = std::fs::read_to_string(path.join("id")) {
+                            let id = id_content.trim();
+                            if id == card_name {
+                                // Found matching card, read longname
+                                if let Ok(longname) = std::fs::read_to_string(path.join("longname"))
+                                {
+                                    let full_name = longname.trim();
+                                    if !full_name.is_empty() {
+                                        return Some(full_name.to_string());
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
+
+            None
         }
         #[cfg(not(target_os = "linux"))]
         {
