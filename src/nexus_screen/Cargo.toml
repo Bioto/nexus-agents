@@ -24,4 +24,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg" }
 image = "0.25"
+tracing = "0.1"  # Added for debug/info logging in recording loop
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.5"
+# For testing FFmpeg mocks, consider mockall if needed
+
+[[bench]]
+name = "screen_recording"
+harness = false
+
+# Note: To enforce Clippy in CI, add to .github/workflows/ci.yml:
+# - name: Run Clippy
+#   run: cargo clippy --all-targets --all-features -- -D warnings
 

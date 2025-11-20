@@ -1,4 +1,5 @@
 use thiserror::Error;
+use ffmpeg_next as ffmpeg;
 
 pub type Result<T> = std::result::Result<T, ScreenError>;
 
@@ -33,8 +34,17 @@ pub enum ScreenError {
     Other(String),
 }
 
+impl From<ffmpeg::Error> for ScreenError {
+    fn from(err: ffmpeg::Error) -> Self {
+        ScreenError::VideoEncoding(err.to_string())
+    }
+}
+
 impl From<anyhow::Error> for ScreenError {
     fn from(err: anyhow::Error) -> Self {
+        if let Some(e) = err.downcast_ref::<ffmpeg::Error>() {
+            return ScreenError::VideoEncoding(e.to_string());
+        }
         ScreenError::Other(err.to_string())
     }
 }

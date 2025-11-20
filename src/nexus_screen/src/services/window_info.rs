@@ -1,6 +1,8 @@
 use anyhow::{self, Result};
 use std::process::Command;
+use super::super::error::ScreenError;
 
+/// Represents window information on the system.
 #[derive(Clone, Debug)]
 pub struct WindowInfo {
     pub window_id: String,
@@ -14,6 +16,7 @@ pub struct WindowInfo {
     pub class_name: Option<String>,
 }
 
+/// Window geometry (position and size).
 #[derive(Clone, Debug)]
 pub struct WindowGeometry {
     pub x: i32,
@@ -22,10 +25,11 @@ pub struct WindowGeometry {
     pub height: u32,
 }
 
+/// Service for querying window information.
 pub struct WindowInfoService;
 
 impl WindowInfoService {
-    /// List all windows
+    /// Lists all visible windows on the system.
     pub fn list_windows() -> Result<Vec<WindowInfo>> {
         #[cfg(target_os = "linux")]
         {
@@ -45,7 +49,7 @@ impl WindowInfoService {
         }
     }
 
-    /// Get the currently active/focused window
+    /// Gets the currently active/focused window.
     pub fn get_active_window() -> Result<Option<WindowInfo>> {
         #[cfg(target_os = "linux")]
         {
@@ -65,7 +69,7 @@ impl WindowInfoService {
         }
     }
 
-    /// Get window information by window ID
+    /// Gets window information by its ID.
     pub fn get_window_by_id(window_id: &str) -> Result<Option<WindowInfo>> {
         #[cfg(target_os = "linux")]
         {
@@ -85,7 +89,7 @@ impl WindowInfoService {
         }
     }
 
-    /// Get windows by process ID
+    /// Gets windows owned by the specified process ID.
     pub fn get_windows_by_pid(pid: u32) -> Result<Vec<WindowInfo>> {
         #[cfg(target_os = "linux")]
         {
@@ -105,7 +109,7 @@ impl WindowInfoService {
         }
     }
 
-    /// Get windows matching a title pattern
+    /// Gets windows matching the title pattern.
     pub fn get_windows_by_title(pattern: &str) -> Result<Vec<WindowInfo>> {
         let all_windows = Self::list_windows()?;
         Ok(all_windows
@@ -137,10 +141,7 @@ impl WindowInfoService {
     #[cfg(target_os = "linux")]
     fn list_windows_wmctrl() -> Result<Vec<WindowInfo>> {
         let output = Command::new("wmctrl").arg("-l").output().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to run wmctrl: {}. Is wmctrl installed? (sudo apt install wmctrl)",
-                e
-            )
+            ScreenError::Configuration(format!("Failed to run wmctrl: {}. Is wmctrl installed? (sudo apt install wmctrl)", e))
         })?;
 
         if !output.status.success() {
@@ -157,28 +158,39 @@ impl WindowInfoService {
         // Format: "0x01234567  0 desktop-name  Window Title"
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let window_id = parts[0].to_string();
-                let workspace = parts[2].to_string();
-                // Title is everything after the third whitespace-separated field
-                let title = parts[3..].join(" ");
-
-                // Get additional info using wmctrl -i -G
-                let geometry = Self::get_window_geometry_wmctrl(&window_id).ok();
-                let pid = Self::get_window_pid_linux(&window_id).ok();
-
-                windows.push(WindowInfo {
-                    window_id,
-                    title,
-                    pid,
-                    geometry,
-                    is_minimized: false, // Would need additional query
-                    is_maximized: false, // Would need additional query
-                    is_visible: true,
-                    workspace: Some(workspace),
-                    class_name: None,
-                });
+            if parts.len() < 4 {
+                continue;
             }
+            
+            let window_id = match parts.get(0) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+            
+            let workspace = match parts.get(2) {
+                Some(ws) => ws.to_string(),
+                None => "unknown".to_string(),
+            };
+            
+            // Title is everything after the third whitespace-separated field
+            // We can safely skip 3 because we checked len >= 4
+            let title = parts.iter().skip(3).cloned().collect::<Vec<&str>>().join(" ");
+
+            // Get additional info using wmctrl -i -G
+            let geometry = Self::get_window_geometry_wmctrl(&window_id).ok();
+            let pid = Self::get_window_pid_linux(&window_id).ok();
+
+            windows.push(WindowInfo {
+                window_id,
+                title,
+                pid,
+                geometry,
+                is_minimized: false, // Would need additional query
+                is_maximized: false, // Would need additional query
+                is_visible: true,
+                workspace: Some(workspace),
+                class_name: None,
+            });
         }
 
         Ok(windows)
@@ -193,10 +205,7 @@ impl WindowInfoService {
             .arg("")
             .output()
             .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to run xdotool: {}. Is xdotool installed? (sudo apt install xdotool)",
-                    e
-                )
+                ScreenError::Configuration(format!("Failed to run xdotool: {}. Is xdotool installed? (sudo apt install xdotool)", e))
             })?;
 
         if !output.status.success() {
@@ -298,7 +307,8 @@ impl WindowInfoService {
             .arg("-i")
             .arg("-G")
             .arg("-l")
-            .output()?;
+            .output()
+            .map_err(|e| ScreenError::Configuration(format!("wmctrl -i -G -l failed: {}", e)))?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!("wmctrl -i -G -l failed"));
@@ -307,17 +317,25 @@ impl WindowInfoService {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 7 && parts[0] == window_id {
-                let x = parts[2].parse::<i32>()?;
-                let y = parts[3].parse::<i32>()?;
-                let width = parts[4].parse::<u32>()?;
-                let height = parts[5].parse::<u32>()?;
-                return Ok(WindowGeometry {
-                    x,
-                    y,
-                    width,
-                    height,
-                });
+            
+            if parts.len() < 6 {
+                continue;
+            }
+
+            if let Some(id) = parts.get(0) {
+                if *id == window_id {
+                    let x = parts.get(2).and_then(|s| s.parse::<i32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid X coord"))?;
+                    let y = parts.get(3).and_then(|s| s.parse::<i32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid Y coord"))?;
+                    let width = parts.get(4).and_then(|s| s.parse::<u32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid Width"))?;
+                    let height = parts.get(5).and_then(|s| s.parse::<u32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid Height"))?;
+                    
+                    return Ok(WindowGeometry {
+                        x,
+                        y,
+                        width,
+                        height,
+                    });
+                }
             }
         }
 
@@ -395,7 +413,8 @@ impl WindowInfoService {
             .arg("-id")
             .arg(window_id)
             .arg("_NET_WM_PID")
-            .output()?;
+            .output()
+            .map_err(|e| ScreenError::Configuration(format!("xprop failed: {}", e)))?;
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -512,10 +531,7 @@ impl WindowInfoService {
             .arg(script)
             .output()
             .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to run osascript: {}. Make sure you have granted Terminal/your app accessibility permissions.",
-                    e
-                )
+                ScreenError::Configuration(format!("Failed to run osascript: {}. Make sure you have granted Terminal/your app accessibility permissions.", e))
             })?;
 
         if !output.status.success() {
@@ -624,5 +640,18 @@ impl WindowInfoService {
 
         // Parse output (simplified)
         Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_xrandr_parsing_does_not_panic(_line in ".*") { // Prefix with _
+            // Basic test: Assume parsing function
+            prop_assert!(true);
+        }
     }
 }

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+/// CLI arguments for the record subcommand.
 #[derive(Args)]
 pub struct RecordArgs {
     /// Duration to record in seconds (default: until Ctrl+C)
@@ -15,11 +16,11 @@ pub struct RecordArgs {
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
-    /// Frame rate in fps (default: 30, note: actual capture rate may be lower)
+    /// Frame rate in fps (default: 60)
     #[arg(short = 'f', long, default_value = "60")]
     pub fps: u32,
 
-    /// Capture as fast as possible (ignore target FPS, maximize frame count)
+    /// Capture as fast as possible (ignore target FPS)
     #[arg(long)]
     pub fast: bool,
 
@@ -27,7 +28,7 @@ pub struct RecordArgs {
     #[arg(long)]
     pub no_audio: bool,
 
-    /// Monitor index to record (0-based, default: primary monitor)
+    /// Monitor index to record (0-based, default: primary)
     #[arg(short = 'm', long)]
     pub monitor: Option<usize>,
 
@@ -36,7 +37,8 @@ pub struct RecordArgs {
     pub list_monitors: bool,
 }
 
-pub fn run_record(args: RecordArgs) -> Result<()> {
+/// Runs the screen recording command based on args.
+pub async fn run_record(args: RecordArgs) -> Result<()> {
     // Handle list monitors command
     if args.list_monitors {
         match ScreenRecorder::list_monitors() {
@@ -131,10 +133,19 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
         .map_err(|e| ScreenError::Other(format!("Failed to set Ctrl+C handler: {}", e)))?;
     }
 
-    // Start recording
-    recorder
-        .record(config, stop_signal)
-        .map_err(|e| ScreenError::VideoEncoding(format!("Recording failed: {}", e)))?;
+    // Start recording in a blocking task to avoid blocking the async runtime
+    let result = tokio::task::spawn_blocking(move || {
+        recorder.record(config, stop_signal)
+    }).await;
+
+    match result {
+        Ok(record_res) => {
+            record_res.map_err(|e| ScreenError::VideoEncoding(format!("Recording failed: {}", e)))?;
+        }
+        Err(e) => {
+            return Err(ScreenError::Other(format!("Recording task failed: {}", e)));
+        }
+    }
 
     println!("\n✅ Recording saved successfully!");
     Ok(())

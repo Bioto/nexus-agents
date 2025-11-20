@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         },
         Commands::Screen { command } => match command {
             ScreenCommands::Screenshot(args) => nexus_screen::run_screenshot(args)?,
-            ScreenCommands::Record(args) => nexus_screen::run_record(args)?,
+            ScreenCommands::Record(args) => nexus_screen::run_record(args).await?,
         },
         Commands::Gui { command } => match command {
             GuiCommands::Show(args) => nexus_gui::run_show(args)?,
