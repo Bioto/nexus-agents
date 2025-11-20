@@ -6,7 +6,7 @@ members = [
     "src/nexus_screen",
     "src/nexus_gui",
     "src/nexus"
-, "src/nexus_sandbox", "src/nexus_mcp"]
+, "src/nexus_sandbox", "src/nexus_mcp", "src/nexus_logger"]
 resolver = "2"
 
 [workspace.dependencies]

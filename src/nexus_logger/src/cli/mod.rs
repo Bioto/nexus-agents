@@ -1,0 +1,26 @@
+mod commands;
+
+use clap::{Parser, Subcommand};
+
+/// Nexus Logger - Logging Interface for AI Agents
+#[derive(Parser)]
+#[command(name = "nexus-logger")]
+#[command(about = "A logging interface for AI agents", long_about = None)]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Log a message
+    Log(commands::log::LogArgs),
+    /// Capture keyboard and mouse input
+    Capture(commands::capture::CaptureArgs),
+}
+
+// Re-export command handlers for convenience
+pub use commands::log::run_log;
+pub use commands::capture::run_capture;
+
