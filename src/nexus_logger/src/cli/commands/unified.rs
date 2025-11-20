@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::services::capture::InputEvent;
 use crate::services::unified_recording::{
-    DefaultEventCallback, EventCallback, UnifiedRecordingConfig,
+    DefaultEventCallback, EventCallback, OverlayLabel, UnifiedRecordingConfig,
     UnifiedRecordingService, ScreenRecordingConfig, InputCaptureConfig,
 };
 use chrono::DateTime;
@@ -60,6 +60,14 @@ pub struct UnifiedArgs {
     /// Enable verbose event callbacks (prints events with video timestamps)
     #[arg(long)]
     pub verbose: bool,
+
+    /// Disable timestamp overlay on video
+    #[arg(long)]
+    pub no_timestamp: bool,
+
+    /// Disable event label overlays on video
+    #[arg(long)]
+    pub no_labels: bool,
 }
 
 /// Runs the unified recording command based on args.
@@ -106,6 +114,8 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         capture_keyboard: !args.no_keyboard,
         capture_mouse: !args.no_mouse,
         capture_mouse_moves: args.mouse_moves,
+        show_timestamp: !args.no_timestamp,
+        show_labels: !args.no_labels,
     };
 
     println!("🎬 Starting unified recording...");
@@ -126,6 +136,8 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     println!("   Mouse: {}", if !args.no_mouse { "✓" } else { "✗" });
     println!("   Mouse moves: {}", if args.mouse_moves { "✓" } else { "✗" });
     println!("   Audio: {}", if !args.no_audio { "✓" } else { "✗" });
+    println!("   Timestamp overlay: {}", if !args.no_timestamp { "✓" } else { "✗" });
+    println!("   Event labels: {}", if !args.no_labels { "✓" } else { "✗" });
     if args.verbose {
         println!("   Verbose callbacks: ✓");
     }
@@ -171,15 +183,26 @@ impl EventCallback for VerboseEventCallback {
         event: &InputEvent,
         video_timestamp: f64,
         _recording_start: DateTime<chrono::Utc>,
-    ) -> bool {
+    ) -> (bool, Option<OverlayLabel>) {
         if let InputEvent::Keyboard { key, pressed, .. } = event {
             let action = if *pressed { "PRESS" } else { "RELEASE" };
             println!(
                 "🎬 [{:8.3}s] KEYBOARD {}: {}",
                 video_timestamp, action, key
             );
+            
+            // Add label for important keys
+            if *pressed && (key == "Enter" || key == "Escape" || key == "Space") {
+                return (true, Some(OverlayLabel {
+                    text: format!("Key: {}", key),
+                    timestamp: video_timestamp,
+                    duration: Some(2.0),
+                    x: None,
+                    y: None,
+                }));
+            }
         }
-        true
+        (true, None)
     }
 
     fn on_mouse_event(
@@ -187,7 +210,7 @@ impl EventCallback for VerboseEventCallback {
         event: &InputEvent,
         video_timestamp: f64,
         _recording_start: DateTime<chrono::Utc>,
-    ) -> bool {
+    ) -> (bool, Option<OverlayLabel>) {
         match event {
             InputEvent::Mouse {
                 event_type,
@@ -198,13 +221,23 @@ impl EventCallback for VerboseEventCallback {
             } => {
                 match event_type.as_str() {
                     "click" => {
+                        let btn_name = button.as_deref().unwrap_or("unknown");
                         println!(
                             "🎬 [{:8.3}s] MOUSE CLICK: {} at ({}, {})",
                             video_timestamp,
-                            button.as_ref().unwrap_or(&"unknown".to_string()),
+                            btn_name,
                             x.unwrap_or(0),
                             y.unwrap_or(0)
                         );
+                        
+                        // Add label for mouse clicks
+                        return (true, Some(OverlayLabel {
+                            text: format!("Click: {}", btn_name),
+                            timestamp: video_timestamp,
+                            duration: Some(1.5),
+                            x: x.map(|x| x as u32),
+                            y: y.map(|y| y as u32),
+                        }));
                     }
                     "release" => {
                         println!(
@@ -231,7 +264,7 @@ impl EventCallback for VerboseEventCallback {
             }
             _ => {}
         }
-        true
+        (true, None)
     }
 }
 

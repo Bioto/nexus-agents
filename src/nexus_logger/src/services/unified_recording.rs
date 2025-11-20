@@ -9,6 +9,21 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+/// Overlay label information
+#[derive(Debug, Clone)]
+pub struct OverlayLabel {
+    /// Label text to display
+    pub text: String,
+    /// Video timestamp when this label should appear (seconds)
+    pub timestamp: f64,
+    /// Duration to show the label (seconds, None = show until next label)
+    pub duration: Option<f64>,
+    /// X position (None = auto)
+    pub x: Option<u32>,
+    /// Y position (None = auto)
+    pub y: Option<u32>,
+}
+
 /// Callback trait for processing events during recording.
 /// Implement this to receive events and timestamp video accordingly.
 pub trait EventCallback: Send + Sync {
@@ -19,13 +34,15 @@ pub trait EventCallback: Send + Sync {
     /// * `video_timestamp` - Current video timestamp in seconds
     /// * `recording_start` - When recording started (for absolute time calculations)
     /// 
-    /// Returns true if the event should be stored, false to skip.
+    /// Returns (should_store, optional_label) where:
+    /// - should_store: true if the event should be stored, false to skip
+    /// - optional_label: Some(label) to add overlay text, None for no overlay
     fn on_keyboard_event(
         &self,
         event: &InputEvent,
         video_timestamp: f64,
         recording_start: DateTime<Utc>,
-    ) -> bool;
+    ) -> (bool, Option<OverlayLabel>);
 
     /// Called when a mouse event is captured.
     /// 
@@ -34,13 +51,15 @@ pub trait EventCallback: Send + Sync {
     /// * `video_timestamp` - Current video timestamp in seconds
     /// * `recording_start` - When recording started (for absolute time calculations)
     /// 
-    /// Returns true if the event should be stored, false to skip.
+    /// Returns (should_store, optional_label) where:
+    /// - should_store: true if the event should be stored, false to skip
+    /// - optional_label: Some(label) to add overlay text, None for no overlay
     fn on_mouse_event(
         &self,
         event: &InputEvent,
         video_timestamp: f64,
         recording_start: DateTime<Utc>,
-    ) -> bool;
+    ) -> (bool, Option<OverlayLabel>);
 }
 
 /// Default callback implementation that accepts all events.
@@ -49,20 +68,45 @@ pub struct DefaultEventCallback;
 impl EventCallback for DefaultEventCallback {
     fn on_keyboard_event(
         &self,
-        _event: &InputEvent,
-        _video_timestamp: f64,
+        event: &InputEvent,
+        video_timestamp: f64,
         _recording_start: DateTime<Utc>,
-    ) -> bool {
-        true
+    ) -> (bool, Option<OverlayLabel>) {
+        // Generate labels for important keys
+        if let InputEvent::Keyboard { key, pressed, .. } = event {
+            if *pressed && (key == "Enter" || key == "Escape" || key == "Space" || key == "Tab") {
+                return (true, Some(OverlayLabel {
+                    text: format!("Key: {}", key),
+                    timestamp: video_timestamp,
+                    duration: Some(2.0),
+                    x: None,
+                    y: None,
+                }));
+            }
+        }
+        (true, None)
     }
 
     fn on_mouse_event(
         &self,
-        _event: &InputEvent,
-        _video_timestamp: f64,
+        event: &InputEvent,
+        video_timestamp: f64,
         _recording_start: DateTime<Utc>,
-    ) -> bool {
-        true
+    ) -> (bool, Option<OverlayLabel>) {
+        // Generate labels for mouse clicks
+        if let InputEvent::Mouse { event_type, button, x, y, .. } = event {
+            if event_type == "click" {
+                let btn_name = button.as_deref().unwrap_or("unknown");
+                return (true, Some(OverlayLabel {
+                    text: format!("Click: {}", btn_name),
+                    timestamp: video_timestamp,
+                    duration: Some(1.5),
+                    x: x.map(|x| x as u32),
+                    y: y.map(|y| y as u32),
+                }));
+            }
+        }
+        (true, None)
     }
 }
 
@@ -81,6 +125,10 @@ pub struct UnifiedRecordingConfig {
     pub capture_mouse: bool,
     /// Whether to capture mouse moves
     pub capture_mouse_moves: bool,
+    /// Whether to add timestamp overlay to video
+    pub show_timestamp: bool,
+    /// Whether to add event labels to video
+    pub show_labels: bool,
 }
 
 /// Screen recording configuration.
@@ -137,6 +185,8 @@ impl Default for UnifiedRecordingConfig {
             capture_keyboard: true,
             capture_mouse: true,
             capture_mouse_moves: false,
+            show_timestamp: true,
+            show_labels: true,
         }
     }
 }
@@ -222,6 +272,10 @@ impl UnifiedRecordingService {
             Self::run_screen_recording_blocking(screen_config, stop_signal_screen)
         });
 
+        // Shared storage for overlay labels
+        let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
+        let overlay_labels_clone = overlay_labels.clone();
+        
         // Process events and call callbacks
         let stop_signal_process = stop_signal.clone();
         let process_handle = tokio::spawn(async move {
@@ -261,7 +315,7 @@ impl UnifiedRecordingService {
                 let video_timestamp = elapsed.as_secs_f64();
 
                 // Call appropriate callback
-                let should_store = match &event {
+                let (should_store, overlay_label) = match &event {
                     InputEvent::Keyboard { .. } => {
                         callback_clone.on_keyboard_event(&event, video_timestamp, recording_start_clone)
                     }
@@ -269,6 +323,11 @@ impl UnifiedRecordingService {
                         callback_clone.on_mouse_event(&event, video_timestamp, recording_start_clone)
                     }
                 };
+
+                // Collect overlay labels if provided
+                if let Some(label) = overlay_label {
+                    overlay_labels_clone.lock().unwrap().push(label);
+                }
 
                 if should_store {
                     // Store in database (errors are logged but don't stop recording)
@@ -328,6 +387,9 @@ impl UnifiedRecordingService {
                 }
             }
 
+            // Labels are stored in the shared Arc<Mutex<Vec<OverlayLabel>>>
+            // They will be applied after screen recording completes
+
             Ok::<(), LoggerError>(())
         });
 
@@ -338,6 +400,8 @@ impl UnifiedRecordingService {
             screen_handle,
             process_handle,
             stop_signal,
+            overlay_labels,
+            config: self.config.clone(),
         })
     }
 
@@ -506,6 +570,133 @@ impl UnifiedRecordingService {
         Ok(())
     }
 
+    /// Apply overlays to video using FFmpeg
+    pub fn apply_video_overlays(
+        video_path: &PathBuf,
+        labels: &[OverlayLabel],
+        show_timestamp: bool,
+        show_labels: bool,
+    ) -> Result<()> {
+        use std::process::Command;
+
+        // Create temporary output file
+        let temp_output = video_path.with_extension("tmp.mp4");
+        
+        // Build FFmpeg filter complex for overlays
+        let mut filter_parts: Vec<String> = Vec::new();
+        
+        // Add timestamp overlay if enabled
+        if show_timestamp {
+            // Draw timestamp in top-left corner
+            // Use pts:hms format - escape colon for FFmpeg filter syntax
+            // Format: HH:MM:SS.mmm
+            filter_parts.push(
+                "drawtext=text='%{pts\\:hms}':fontcolor=white:fontsize=24:x=10:y=10:box=1:boxcolor=black@0.5:boxborderw=2".to_string()
+            );
+        }
+        
+        // Add event labels if enabled
+        if show_labels && !labels.is_empty() {
+            // For each label, create a drawtext filter
+            // Note: FFmpeg filters can be complex, so we'll add labels as they occur
+            // For simplicity, we'll add a single label at a time using enable/disable
+            for (idx, label) in labels.iter().enumerate() {
+                let start_time = label.timestamp;
+                let end_time = label.duration
+                    .map(|d| start_time + d)
+                    .unwrap_or_else(|| {
+                        // Default to 2 seconds if no duration specified
+                        start_time + 2.0
+                    });
+                
+                // Escape text for FFmpeg
+                // FFmpeg drawtext needs text escaped - replace single quotes and colons
+                let escaped_text = label.text
+                    .replace('\\', "\\\\")
+                    .replace('\'', "\\'")
+                    .replace(':', "\\:");
+                
+                // Use proper FFmpeg filter syntax
+                // For multiple drawtext filters, we chain them with commas
+                // Use simpler positioning - bottom center for labels
+                let x_pos = label.x.map(|x| x.to_string())
+                    .unwrap_or_else(|| "(w-tw)/2".to_string()); // Center horizontally
+                let y_pos = label.y.map(|y| y.to_string())
+                    .unwrap_or_else(|| format!("h-th-{}", 30 + (idx * 30))); // Stack from bottom
+                
+                // Build filter string
+                let filter_str = format!(
+                    "drawtext=text='{}':fontcolor=yellow:fontsize=24:x={}:y={}:box=1:boxcolor=black@0.8:boxborderw=3:enable='between(t,{},{})'",
+                    escaped_text, x_pos, y_pos, start_time, end_time
+                );
+                filter_parts.push(filter_str);
+            }
+        }
+        
+        // If no overlays, just return (no processing needed)
+        if filter_parts.is_empty() {
+            return Ok(());
+        }
+        
+        // Combine all filters - chain them properly for multiple drawtext filters
+        // FFmpeg requires chaining with commas for multiple filters on same input
+        let filter_complex = filter_parts.join(",");
+        
+        println!("🎬 Applying FFmpeg overlays...");
+        println!("   Timestamp overlay: {}", if show_timestamp { "✓" } else { "✗" });
+        println!("   Event labels: {} labels", labels.len());
+        if !labels.is_empty() {
+            for (idx, label) in labels.iter().take(5).enumerate() {
+                println!("     {}. '{}' at {:.2}s", idx + 1, label.text, label.timestamp);
+            }
+            if labels.len() > 5 {
+                println!("     ... and {} more", labels.len() - 5);
+            }
+        }
+        
+        // Build FFmpeg command
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-i")
+            .arg(video_path)
+            .arg("-vf")
+            .arg(&filter_complex)
+            .arg("-c:a")
+            .arg("copy") // Copy audio without re-encoding
+            .arg("-y") // Overwrite output
+            .arg(&temp_output)
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        
+        // Execute FFmpeg
+        let output = cmd.output().map_err(|e| {
+            LoggerError::Other(format!("Failed to execute FFmpeg: {}", e))
+        })?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            eprintln!("FFmpeg stderr: {}", stderr);
+            eprintln!("FFmpeg stdout: {}", stdout);
+            eprintln!("FFmpeg filter used: {}", filter_complex);
+            return Err(LoggerError::Other(format!(
+                "FFmpeg failed to apply overlays. Exit code: {}",
+                output.status.code().unwrap_or(-1)
+            )));
+        } else {
+            println!("✅ FFmpeg overlay processing completed");
+        }
+        
+        // Replace original file with processed version
+        std::fs::rename(&temp_output, video_path).map_err(|e| {
+            LoggerError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to replace video file: {}", e),
+            ))
+        })?;
+        
+        Ok(())
+    }
+
     fn write_event_output(
         event: &InputEvent,
         format: &str,
@@ -553,6 +744,8 @@ pub struct RecordingSession {
     screen_handle: tokio::task::JoinHandle<Result<()>>,
     process_handle: tokio::task::JoinHandle<Result<()>>,
     stop_signal: Arc<AtomicBool>,
+    overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
+    config: UnifiedRecordingConfig,
 }
 
 impl RecordingSession {
@@ -573,6 +766,26 @@ impl RecordingSession {
         input_result.map_err(|e| LoggerError::Other(format!("Input capture task failed: {}", e)))??;
         screen_result.map_err(|e| LoggerError::Other(format!("Screen recording task failed: {}", e)))??;
         process_result.map_err(|e| LoggerError::Other(format!("Event processing task failed: {}", e)))??;
+
+        // Now that screen recording is complete, apply overlays
+        let labels = self.overlay_labels.lock().unwrap().clone();
+        println!("📝 Applying overlays: {} labels collected", labels.len());
+        
+        if self.config.show_timestamp || self.config.show_labels {
+            // Wait a moment to ensure file is fully written
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            
+            if let Err(e) = UnifiedRecordingService::apply_video_overlays(
+                &self.config.screen_config.output_path,
+                &labels,
+                self.config.show_timestamp,
+                self.config.show_labels,
+            ) {
+                eprintln!("⚠️  Failed to apply video overlays: {}", e);
+            } else {
+                println!("✅ Overlays applied successfully");
+            }
+        }
 
         Ok(())
     }

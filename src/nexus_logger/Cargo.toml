@@ -20,3 +20,4 @@ ctrlc = "3.4"
 rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 uuid = { workspace = true }
 nexus-screen = { path = "../nexus_screen" }
+tempfile = "3.10"

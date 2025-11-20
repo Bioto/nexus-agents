@@ -14,7 +14,7 @@ pub use error::{Result, LoggerError};
 /// Re-export unified recording service for other developers.
 pub use services::unified_recording::{
     EventCallback, DefaultEventCallback, UnifiedRecordingService, UnifiedRecordingConfig,
-    ScreenRecordingConfig, InputCaptureConfig, RecordingSession,
+    ScreenRecordingConfig, InputCaptureConfig, RecordingSession, OverlayLabel,
 };
 
 /// Re-export input event types.
