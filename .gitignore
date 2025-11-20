@@ -3,3 +3,5 @@
 .env.local
 logs
 **/__models__/**
+
+**/__pycache__/**
