@@ -1,11 +1,12 @@
 # Build stage
-FROM rust:1.83-slim AS builder
+FROM rustlang/rust:nightly AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     ca-certificates \
+    musl-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -13,8 +14,8 @@ WORKDIR /build
 
 # Copy workspace root Cargo.toml (for workspace configuration)
 # This Dockerfile must be built with workspace root as build context:
-# 1. From workspace root: docker build -f src/nexus_py/.docker/Dockerfile -t nexus_py .
-# 2. From nexus_py directory: docker build -f .docker/Dockerfile -t nexus_py ../..
+# 1. From workspace root: docker build -f src/nexus_sandbox/.docker/Dockerfile -t nexus_sandbox .
+# 2. From nexus_sandbox directory: docker build -f .docker/Dockerfile -t nexus_sandbox ../..
 #    (Note: ../.. sets the build context to workspace root)
 COPY Cargo.toml Cargo.lock* ./
 
@@ -28,9 +29,9 @@ COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     rustup target add x86_64-unknown-linux-musl && \
-    cargo build --release --target x86_64-unknown-linux-musl -p nexus_py && \
-    cp /build/target/x86_64-unknown-linux-musl/release/nexus_py /build/nexus_py && \
-    test -f /build/nexus_py || (echo "Binary not found" && find /build/target/x86_64-unknown-linux-musl/release -name "*nexus*" -type f && exit 1)
+    cargo build --release --target x86_64-unknown-linux-musl -p nexus_sandbox && \
+    cp /build/target/x86_64-unknown-linux-musl/release/nexus_sandbox /build/nexus_sandbox && \
+    test -f /build/nexus_sandbox || (echo "Binary not found" && find /build/target/x86_64-unknown-linux-musl/release -name "*nexus*" -type f && exit 1)
 
 # Runtime stage
 FROM alpine:latest
@@ -59,22 +60,22 @@ RUN uv python install ${PYTHON_VERSION} && \
     uv python list
 
 # Copy the binary from builder (copied to non-cached location)
-COPY --from=builder /build/nexus_py /usr/local/bin/nexus_py
+COPY --from=builder /build/nexus_sandbox /usr/local/bin/nexus_sandbox
 
 # Set working directory for Python scripts
 WORKDIR /workspace
 
 # Default entrypoint
-ENTRYPOINT ["nexus_py"]
+ENTRYPOINT ["nexus_sandbox"]
 
 # Example usage:
 # IMPORTANT: The build context must be the workspace root directory!
 # 
 # Option 1 - From workspace root:
-#   docker build -f src/nexus_py/.docker/Dockerfile -t nexus_py .
+#   docker build -f src/nexus_sandbox/.docker/Dockerfile -t nexus_sandbox .
 #
-# Option 2 - From nexus_py directory (../.. sets context to workspace root):
-#   docker build -f .docker/Dockerfile -t nexus_py ../..
+# Option 2 - From nexus_sandbox directory (../.. sets context to workspace root):
+#   docker build -f .docker/Dockerfile -t nexus_sandbox ../..
 # 
-# Run: docker run --rm nexus_py exec-code --code 'print("Hello from container!")'
-# Or: echo 'print("Hello!")' | docker run --rm -i nexus_py exec-code
+# Run: docker run --rm nexus_sandbox exec-code --code 'print("Hello from container!")'
+# Or: echo 'print("Hello!")' | docker run --rm -i nexus_sandbox exec-code

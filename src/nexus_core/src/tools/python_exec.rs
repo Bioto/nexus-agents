@@ -330,7 +330,10 @@ def import_tool(server_name, tool_name):
     spec.loader.exec_module(module)
     return module
 
-{code}
+# Install dependencies from user's code before executing it
+user_code = """{code}"""
+install_uv_dependencies(user_code)
+exec(user_code)
 "#,
             code = code
         );
