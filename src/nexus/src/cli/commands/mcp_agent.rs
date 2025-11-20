@@ -117,7 +117,9 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
             continue;
         }
 
-        if user_input.trim().eq_ignore_ascii_case("quit") || user_input.trim().eq_ignore_ascii_case("exit") {
+        if user_input.trim().eq_ignore_ascii_case("quit")
+            || user_input.trim().eq_ignore_ascii_case("exit")
+        {
             println!("Exiting...");
             break;
         }

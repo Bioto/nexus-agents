@@ -22,7 +22,7 @@ pub enum NexusError {
 
     #[error("Parsing error: {0}")]
     Parse(String),
-    
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -44,4 +44,3 @@ impl From<reqwest::Error> for NexusError {
         NexusError::Http(err.to_string())
     }
 }
-

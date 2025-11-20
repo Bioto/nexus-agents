@@ -19,13 +19,13 @@ pub struct ExecutionResult {
 pub enum PythonExecutionError {
     #[error("uv is not installed or not in PATH. Please install uv first.")]
     UvNotFound,
-    
+
     #[error("Script not found: {0}")]
     ScriptNotFound(String),
-    
+
     #[error("Execution failed: {0}")]
     ExecutionFailed(String),
-    
+
     #[error("IO error: {0}")]
     IoError(String),
 }

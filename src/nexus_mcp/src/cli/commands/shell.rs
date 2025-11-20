@@ -22,7 +22,9 @@ pub fn run_shell(args: ShellArgs) -> Result<(), NexusError> {
         io::stdout().flush().map_err(|e| NexusError::Io(e))?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(|e| NexusError::Io(e))?;
+        io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| NexusError::Io(e))?;
         let input = input.trim();
 
         if input.is_empty() {

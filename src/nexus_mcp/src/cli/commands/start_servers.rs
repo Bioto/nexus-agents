@@ -3,8 +3,7 @@ use crate::error::NexusError;
 use crate::server::NexusMcpServer;
 use clap::Args;
 use rmcp::transport::streamable_http_server::{
-    session::local::LocalSessionManager, tower::StreamableHttpService,
-    StreamableHttpServerConfig,
+    session::local::LocalSessionManager, tower::StreamableHttpService, StreamableHttpServerConfig,
 };
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -42,7 +41,10 @@ async fn start_http_server(
     let name = config.name.clone();
     let name_for_logging = name.clone();
 
-    eprintln!("[{}] Starting HTTP server on {} (path: {})", name, bind_addr, path);
+    eprintln!(
+        "[{}] Starting HTTP server on {} (path: {})",
+        name, bind_addr, path
+    );
 
     let service: StreamableHttpService<NexusMcpServer, LocalSessionManager> =
         StreamableHttpService::new(
@@ -102,9 +104,7 @@ async fn start_stdio_server(
 }
 
 /// Start all servers from configuration
-pub async fn run_start_servers(
-    args: StartServersArgs,
-) -> Result<(), NexusError> {
+pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError> {
     load_dotenv();
     eprintln!("Loading configuration from: {}", args.config.display());
     let config = MultiServerConfig::from_file(&args.config)?;
@@ -180,4 +180,3 @@ pub async fn run_start_servers(
         Ok(())
     }
 }
-

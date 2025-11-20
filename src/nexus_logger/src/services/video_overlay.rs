@@ -30,7 +30,7 @@ pub fn format_timestamp(seconds: f64) -> String {
     let minutes = (total_seconds % 3600) / 60;
     let secs = total_seconds % 60;
     let millis = ((seconds - total_seconds as f64) * 1000.0) as u32;
-    
+
     format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, secs, millis)
 }
 
@@ -59,4 +59,3 @@ pub fn get_current_overlay(
     latest_overlay.timestamp = video_timestamp;
     latest_overlay
 }
-

@@ -37,12 +37,9 @@ impl Database {
         let connection_url = config.connection_url();
         eprintln!("asdConnecting to ClickHouse at: {}", connection_url);
 
-        let service = ClickHouseService::new(config)
-            .await
-            .map_err(|e| LoggerError::Configuration(format!(
-                "Failed to create ClickHouse service: {}",
-                e
-            )))?;
+        let service = ClickHouseService::new(config).await.map_err(|e| {
+            LoggerError::Configuration(format!("Failed to create ClickHouse service: {}", e))
+        })?;
 
         let db = Self {
             service: Arc::new(service),
@@ -58,12 +55,9 @@ impl Database {
         let connection_url = config.connection_url();
         eprintln!("Connecting to ClickHouse at: {}", connection_url);
 
-        let service = ClickHouseService::new(config)
-            .await
-            .map_err(|e| LoggerError::Configuration(format!(
-                "Failed to create ClickHouse service: {}",
-                e
-            )))?;
+        let service = ClickHouseService::new(config).await.map_err(|e| {
+            LoggerError::Configuration(format!("Failed to create ClickHouse service: {}", e))
+        })?;
 
         let db = Self {
             service: Arc::new(service),
@@ -83,8 +77,9 @@ impl Database {
 
         // Create events table with flexible schema for dynamic event types
         // Using JSON for additional metadata to support future event types
-        self.service.execute(
-            "CREATE TABLE IF NOT EXISTS events (
+        self.service
+            .execute(
+                "CREATE TABLE IF NOT EXISTS events (
                 id UUID DEFAULT generateUUIDv4(),
                 session_id String NOT NULL,
                 event_type LowCardinality(String) NOT NULL,
@@ -102,13 +97,15 @@ impl Database {
             ) ENGINE = MergeTree()
             PARTITION BY toYYYYMM(timestamp)
             ORDER BY (session_id, timestamp)
-            SETTINGS index_granularity = 8192"
-        ).await
-        .map_err(|e| LoggerError::Other(format!("Failed to create events table: {}", e)))?;
+            SETTINGS index_granularity = 8192",
+            )
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to create events table: {}", e)))?;
 
         // Create sessions table
-        self.service.execute(
-            "CREATE TABLE IF NOT EXISTS sessions (
+        self.service
+            .execute(
+                "CREATE TABLE IF NOT EXISTS sessions (
                 id String PRIMARY KEY,
                 start_time DateTime64(3, 'UTC') NOT NULL,
                 end_time Nullable(DateTime64(3, 'UTC')),
@@ -121,14 +118,16 @@ impl Database {
                 mouse_moves UInt64 DEFAULT 0,
                 created_at DateTime DEFAULT now()
             ) ENGINE = ReplacingMergeTree(created_at)
-            ORDER BY id"
-        ).await
-        .map_err(|e| LoggerError::Other(format!("Failed to create sessions table: {}", e)))?;
+            ORDER BY id",
+            )
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to create sessions table: {}", e)))?;
 
         // Create screenshots/frames table for storing image references
         // This allows linking clicks to screenshots for analysis over multiple frames
-        self.service.execute(
-            "CREATE TABLE IF NOT EXISTS screenshots (
+        self.service
+            .execute(
+                "CREATE TABLE IF NOT EXISTS screenshots (
                 id UUID DEFAULT generateUUIDv4(),
                 session_id String NOT NULL,
                 timestamp DateTime64(3, 'UTC') NOT NULL,
@@ -143,31 +142,45 @@ impl Database {
             ) ENGINE = MergeTree()
             PARTITION BY toYYYYMM(timestamp)
             ORDER BY (session_id, timestamp, frame_number)
-            SETTINGS index_granularity = 8192"
-        ).await
-        .map_err(|e| LoggerError::Other(format!("Failed to create screenshots table: {}", e)))?;
+            SETTINGS index_granularity = 8192",
+            )
+            .await
+            .map_err(|e| {
+                LoggerError::Other(format!("Failed to create screenshots table: {}", e))
+            })?;
 
         // Create key frequency materialized view for analytics
-        self.service.execute(
-            "CREATE TABLE IF NOT EXISTS key_frequency (
+        self.service
+            .execute(
+                "CREATE TABLE IF NOT EXISTS key_frequency (
                 session_id String NOT NULL,
                 key String NOT NULL,
                 count UInt64 DEFAULT 0
             ) ENGINE = SummingMergeTree()
-            ORDER BY (session_id, key)"
-        ).await
-        .map_err(|e| LoggerError::Other(format!("Failed to create key_frequency table: {}", e)))?;
+            ORDER BY (session_id, key)",
+            )
+            .await
+            .map_err(|e| {
+                LoggerError::Other(format!("Failed to create key_frequency table: {}", e))
+            })?;
 
         // Create mouse button frequency materialized view
-        self.service.execute(
-            "CREATE TABLE IF NOT EXISTS mouse_button_frequency (
+        self.service
+            .execute(
+                "CREATE TABLE IF NOT EXISTS mouse_button_frequency (
                 session_id String NOT NULL,
                 button String NOT NULL,
                 count UInt64 DEFAULT 0
             ) ENGINE = SummingMergeTree()
-            ORDER BY (session_id, button)"
-        ).await
-        .map_err(|e| LoggerError::Other(format!("Failed to create mouse_button_frequency table: {}", e)))?;
+            ORDER BY (session_id, button)",
+            )
+            .await
+            .map_err(|e| {
+                LoggerError::Other(format!(
+                    "Failed to create mouse_button_frequency table: {}",
+                    e
+                ))
+            })?;
 
         *initialized = true;
         Ok(())
@@ -178,11 +191,13 @@ impl Database {
         let start_time = Utc::now();
         let start_time_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-        self.service.insert(&format!(
-            "INSERT INTO sessions (id, start_time) VALUES ('{}', '{}')",
-            session_id, start_time_str
-        )).await
-        .map_err(|e| LoggerError::Other(format!("Failed to create session: {}", e)))?;
+        self.service
+            .insert(&format!(
+                "INSERT INTO sessions (id, start_time) VALUES ('{}', '{}')",
+                session_id, start_time_str
+            ))
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to create session: {}", e)))?;
 
         Ok(())
     }
@@ -208,19 +223,35 @@ impl Database {
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()))
             .unwrap_or_else(|| "{}".to_string());
 
-        let event_subtype_str = event_subtype.map(|s| format!("'{}'", s)).unwrap_or_else(|| "NULL".to_string());
-        let key_str = key.map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string());
-        let button_str = button.map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string());
-        let x_str = x.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
-        let y_str = y.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+        let event_subtype_str = event_subtype
+            .map(|s| format!("'{}'", s))
+            .unwrap_or_else(|| "NULL".to_string());
+        let key_str = key
+            .map(|s| format!("'{}'", s.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let button_str = button
+            .map(|s| format!("'{}'", s.replace('\'', "''")))
+            .unwrap_or_else(|| "NULL".to_string());
+        let x_str = x
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string());
+        let y_str = y
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string());
         let pressed_str = pressed.map(|v| if v { "1" } else { "0" }).unwrap_or("NULL");
-        let timecode_str = timecode.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
-        let screenshot_id_str = screenshot_id.map(|s| format!("'{}'", s)).unwrap_or_else(|| "NULL".to_string());
+        let timecode_str = timecode
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string());
+        let screenshot_id_str = screenshot_id
+            .map(|s| format!("'{}'", s))
+            .unwrap_or_else(|| "NULL".to_string());
 
         // Parse timestamp - support both RFC3339 and other formats
         let timestamp_dt = if let Ok(dt) = DateTime::parse_from_rfc3339(timestamp) {
             dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
-        } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.f") {
+        } else if let Ok(dt) =
+            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.f")
+        {
             format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f"))
         } else {
             // Try to use as-is
@@ -248,7 +279,9 @@ impl Database {
             screenshot_id_str
         );
 
-        self.service.insert(&query).await
+        self.service
+            .insert(&query)
+            .await
             .map_err(|e| LoggerError::Other(format!("Failed to insert event: {}", e)))?;
 
         Ok(())
@@ -274,8 +307,12 @@ impl Database {
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()))
             .unwrap_or_else(|| "{}".to_string());
 
-        let click_x_str = click_x.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
-        let click_y_str = click_y.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+        let click_x_str = click_x
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string());
+        let click_y_str = click_y
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "NULL".to_string());
 
         let query = format!(
             "INSERT INTO screenshots (
@@ -296,7 +333,9 @@ impl Database {
             metadata_str.replace('\'', "''")
         );
 
-        self.service.insert(&query).await
+        self.service
+            .insert(&query)
+            .await
             .map_err(|e| LoggerError::Other(format!("Failed to insert screenshot: {}", e)))?;
 
         Ok(screenshot_id)
@@ -333,7 +372,9 @@ impl Database {
             mouse_moves
         );
 
-        self.service.insert(&query).await
+        self.service
+            .insert(&query)
+            .await
             .map_err(|e| LoggerError::Other(format!("Failed to update session metrics: {}", e)))?;
 
         Ok(())
@@ -347,22 +388,29 @@ impl Database {
             key.replace('\'', "''")
         );
 
-        self.service.insert(&query).await
+        self.service
+            .insert(&query)
+            .await
             .map_err(|e| LoggerError::Other(format!("Failed to update key frequency: {}", e)))?;
 
         Ok(())
     }
 
     /// Update mouse button frequency
-    pub async fn update_mouse_button_frequency(&self, session_id: &str, button: &str) -> Result<()> {
+    pub async fn update_mouse_button_frequency(
+        &self,
+        session_id: &str,
+        button: &str,
+    ) -> Result<()> {
         let query = format!(
             "INSERT INTO mouse_button_frequency (session_id, button, count) VALUES ('{}', '{}', 1)",
             session_id.replace('\'', "''"),
             button.replace('\'', "''")
         );
 
-        self.service.insert(&query).await
-            .map_err(|e| LoggerError::Other(format!("Failed to update mouse button frequency: {}", e)))?;
+        self.service.insert(&query).await.map_err(|e| {
+            LoggerError::Other(format!("Failed to update mouse button frequency: {}", e))
+        })?;
 
         Ok(())
     }
@@ -385,17 +433,21 @@ impl Database {
 
         // For ReplacingMergeTree, we need to insert a new row with updated end_time
         // First get the existing start_time
-        let block = self.service.query(&format!(
-            "SELECT start_time FROM sessions WHERE id = '{}' LIMIT 1",
-            session_id.replace('\'', "''")
-        )).await
-        .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
+        let block = self
+            .service
+            .query(&format!(
+                "SELECT start_time FROM sessions WHERE id = '{}' LIMIT 1",
+                session_id.replace('\'', "''")
+            ))
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
 
         if let Some(row) = block.rows().next() {
             // Insert updated row
-            let start_time: String = row.get("start_time")
+            let start_time: String = row
+                .get("start_time")
                 .map_err(|_| LoggerError::Other("Failed to get start_time".to_string()))?;
-            
+
             let update_query = format!(
                 "INSERT INTO sessions (id, start_time, end_time) VALUES ('{}', '{}', '{}')",
                 session_id.replace('\'', "''"),
@@ -403,7 +455,9 @@ impl Database {
                 end_time_str
             );
 
-            self.service.insert(&update_query).await
+            self.service
+                .insert(&update_query)
+                .await
                 .map_err(|e| LoggerError::Other(format!("Failed to end session: {}", e)))?;
         }
 
@@ -413,42 +467,57 @@ impl Database {
     /// Get session metrics
     pub async fn get_session_metrics(&self, session_id: &str) -> Result<Metrics> {
         // Get session data
-        let block = self.service.query(&format!(
-            "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
+        let block = self
+            .service
+            .query(&format!(
+                "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
                     mouse_events, mouse_clicks, mouse_releases, mouse_moves
              FROM sessions
              WHERE id = '{}'
              ORDER BY created_at DESC
              LIMIT 1",
-            session_id.replace('\'', "''")
-        )).await
-        .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
+                session_id.replace('\'', "''")
+            ))
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
 
         if block.row_count() == 0 {
-            return Err(LoggerError::Other(format!("Session {} not found", session_id)));
+            return Err(LoggerError::Other(format!(
+                "Session {} not found",
+                session_id
+            )));
         }
 
         // Parse session data using rows iterator
         let mut rows = block.rows();
-        let row = rows.next()
+        let row = rows
+            .next()
             .ok_or_else(|| LoggerError::Other("No session data found".to_string()))?;
 
-        let start_time_str: String = row.get("start_time")
+        let start_time_str: String = row
+            .get("start_time")
             .map_err(|_| LoggerError::Other("Failed to get start_time".to_string()))?;
         let end_time_opt: Option<String> = row.get("end_time").ok();
-        let keyboard_events: u64 = row.get("keyboard_events")
+        let keyboard_events: u64 = row
+            .get("keyboard_events")
             .map_err(|_| LoggerError::Other("Failed to get keyboard_events".to_string()))?;
-        let keyboard_presses: u64 = row.get("keyboard_presses")
+        let keyboard_presses: u64 = row
+            .get("keyboard_presses")
             .map_err(|_| LoggerError::Other("Failed to get keyboard_presses".to_string()))?;
-        let keyboard_releases: u64 = row.get("keyboard_releases")
+        let keyboard_releases: u64 = row
+            .get("keyboard_releases")
             .map_err(|_| LoggerError::Other("Failed to get keyboard_releases".to_string()))?;
-        let mouse_events: u64 = row.get("mouse_events")
+        let mouse_events: u64 = row
+            .get("mouse_events")
             .map_err(|_| LoggerError::Other("Failed to get mouse_events".to_string()))?;
-        let mouse_clicks: u64 = row.get("mouse_clicks")
+        let mouse_clicks: u64 = row
+            .get("mouse_clicks")
             .map_err(|_| LoggerError::Other("Failed to get mouse_clicks".to_string()))?;
-        let mouse_releases: u64 = row.get("mouse_releases")
+        let mouse_releases: u64 = row
+            .get("mouse_releases")
             .map_err(|_| LoggerError::Other("Failed to get mouse_releases".to_string()))?;
-        let mouse_moves: u64 = row.get("mouse_moves")
+        let mouse_moves: u64 = row
+            .get("mouse_moves")
             .map_err(|_| LoggerError::Other("Failed to get mouse_moves".to_string()))?;
 
         let start_time = match DateTime::parse_from_rfc3339(&start_time_str) {
@@ -460,51 +529,57 @@ impl Database {
             }
         };
 
-        let end_time = end_time_opt.and_then(|s| {
-            match DateTime::parse_from_rfc3339(&s) {
-                Ok(dt) => Some(dt.with_timezone(&Utc)),
-                Err(_) => {
-                    chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-                        .ok()
-                        .map(|ndt| ndt.and_utc())
-                }
-            }
+        let end_time = end_time_opt.and_then(|s| match DateTime::parse_from_rfc3339(&s) {
+            Ok(dt) => Some(dt.with_timezone(&Utc)),
+            Err(_) => chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                .ok()
+                .map(|ndt| ndt.and_utc()),
         });
 
         // Get key frequency
-        let key_block = self.service.query(&format!(
-            "SELECT key, sum(count) as total
+        let key_block = self
+            .service
+            .query(&format!(
+                "SELECT key, sum(count) as total
              FROM key_frequency
              WHERE session_id = '{}'
              GROUP BY key",
-            session_id.replace('\'', "''")
-        )).await
-        .map_err(|e| LoggerError::Other(format!("Failed to query key frequency: {}", e)))?;
+                session_id.replace('\'', "''")
+            ))
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to query key frequency: {}", e)))?;
 
         let mut key_frequency = HashMap::new();
         for row in key_block.rows() {
-            let key: String = row.get("key")
+            let key: String = row
+                .get("key")
                 .map_err(|_| LoggerError::Other("Failed to get key".to_string()))?;
-            let count: u64 = row.get("total")
+            let count: u64 = row
+                .get("total")
                 .map_err(|_| LoggerError::Other("Failed to get count".to_string()))?;
             key_frequency.insert(key, count);
         }
 
         // Get mouse button frequency
-        let button_block = self.service.query(&format!(
-            "SELECT button, sum(count) as total
+        let button_block = self
+            .service
+            .query(&format!(
+                "SELECT button, sum(count) as total
              FROM mouse_button_frequency
              WHERE session_id = '{}'
              GROUP BY button",
-            session_id.replace('\'', "''")
-        )).await
-        .map_err(|e| LoggerError::Other(format!("Failed to query button frequency: {}", e)))?;
+                session_id.replace('\'', "''")
+            ))
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to query button frequency: {}", e)))?;
 
         let mut mouse_button_frequency = HashMap::new();
         for row in button_block.rows() {
-            let button: String = row.get("button")
+            let button: String = row
+                .get("button")
                 .map_err(|_| LoggerError::Other("Failed to get button".to_string()))?;
-            let count: u64 = row.get("total")
+            let count: u64 = row
+                .get("total")
                 .map_err(|_| LoggerError::Other("Failed to get count".to_string()))?;
             mouse_button_frequency.insert(button, count);
         }
@@ -546,8 +621,10 @@ impl Database {
         time_window_seconds: f64,
     ) -> Result<Vec<(String, String, u64)>> {
         // Find screenshots within time window of clicks at this location
-        let block = self.service.query(&format!(
-            "SELECT s.id, s.file_path, s.frame_number
+        let block = self
+            .service
+            .query(&format!(
+                "SELECT s.id, s.file_path, s.frame_number
              FROM screenshots s
              INNER JOIN events e ON s.session_id = e.session_id
              WHERE s.session_id = '{}'
@@ -557,20 +634,24 @@ impl Database {
                AND e.event_subtype = 'click'
                AND abs(toUnixTimestamp(s.timestamp) - toUnixTimestamp(e.timestamp)) <= {}
              ORDER BY s.timestamp",
-            session_id.replace('\'', "''"),
-            click_x,
-            click_y,
-            time_window_seconds
-        )).await
-        .map_err(|e| LoggerError::Other(format!("Failed to query screenshots: {}", e)))?;
+                session_id.replace('\'', "''"),
+                click_x,
+                click_y,
+                time_window_seconds
+            ))
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to query screenshots: {}", e)))?;
 
         let mut results = Vec::new();
         for row in block.rows() {
-            let id: String = row.get("id")
+            let id: String = row
+                .get("id")
                 .map_err(|_| LoggerError::Other("Failed to get screenshot id".to_string()))?;
-            let file_path: String = row.get("file_path")
+            let file_path: String = row
+                .get("file_path")
                 .map_err(|_| LoggerError::Other("Failed to get file_path".to_string()))?;
-            let frame_number: u64 = row.get("frame_number")
+            let frame_number: u64 = row
+                .get("frame_number")
                 .map_err(|_| LoggerError::Other("Failed to get frame_number".to_string()))?;
             results.push((id, file_path, frame_number));
         }

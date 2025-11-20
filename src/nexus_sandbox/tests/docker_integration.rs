@@ -7,7 +7,7 @@ use tokio::time::timeout;
 async fn test_docker_service_connection() {
     let config = DockerConfig::default();
     let service_result = DockerService::new(config).await;
-    
+
     match service_result {
         Ok(service) => {
             // Connection successful
@@ -40,7 +40,7 @@ async fn test_docker_execution_flow() {
     // Simple execution test
     let code = "print('Hello from integration test')";
     let result = timeout(Duration::from_secs(30), service.execute_python_code(code)).await;
-    
+
     match result {
         Ok(Ok((stdout, stderr, exit_code))) => {
             assert_eq!(exit_code, 0);
@@ -55,4 +55,3 @@ async fn test_docker_execution_flow() {
         }
     }
 }
-

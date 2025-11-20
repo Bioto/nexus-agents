@@ -1,6 +1,5 @@
 /// Screen capture and recording library for AI agents.
 /// Provides CLI interfaces, services for screen/window info, and TUI support.
-
 pub mod cli;
 pub mod error;
 pub mod services;

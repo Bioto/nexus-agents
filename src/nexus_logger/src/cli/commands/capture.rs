@@ -61,7 +61,10 @@ pub async fn run_capture(args: CaptureArgs) -> Result<()> {
     println!("🎯 Starting input capture...");
     println!("   Keyboard: {}", if args.keyboard { "✓" } else { "✗" });
     println!("   Mouse: {}", if args.mouse { "✓" } else { "✗" });
-    println!("   Mouse moves: {}", if args.mouse_moves { "✓" } else { "✗" });
+    println!(
+        "   Mouse moves: {}",
+        if args.mouse_moves { "✓" } else { "✗" }
+    );
     println!("   Format: {}", format);
     if let Some(ref output) = args.output {
         println!("   Output: {}", output.display());
@@ -81,9 +84,9 @@ pub async fn run_capture(args: CaptureArgs) -> Result<()> {
         args.output,
         args.metrics_interval,
         running,
-    ).await?;
+    )
+    .await?;
 
     println!("\n✅ Capture stopped.");
     Ok(())
 }
-

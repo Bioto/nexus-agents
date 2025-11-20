@@ -1,16 +1,20 @@
 use crate::error::Result;
 use crate::services::capture::InputEvent;
 use crate::services::unified_recording::{
-    DefaultEventCallback, EventCallback, OverlayLabel, UnifiedRecordingConfig,
-    UnifiedRecordingService, ScreenRecordingConfig, InputCaptureConfig,
+    DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel, ScreenRecordingConfig,
+    UnifiedRecordingConfig, UnifiedRecordingService,
 };
 use chrono::DateTime;
 use clap::Args;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::sync::mpsc;
-use tray_icon::{TrayIconBuilder, TrayIconEvent, Icon, menu::{Menu, MenuItem}};
+#[cfg(not(target_os = "linux"))]
+use tray_icon::TrayIconEvent;
+use tray_icon::{
+    menu::{Menu, MenuItem},
+    Icon, TrayIconBuilder,
+};
 
 #[cfg(target_os = "linux")]
 use gtk::glib;
@@ -139,10 +143,19 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     }
     println!("   Keyboard: {}", if !args.no_keyboard { "✓" } else { "✗" });
     println!("   Mouse: {}", if !args.no_mouse { "✓" } else { "✗" });
-    println!("   Mouse moves: {}", if args.mouse_moves { "✓" } else { "✗" });
+    println!(
+        "   Mouse moves: {}",
+        if args.mouse_moves { "✓" } else { "✗" }
+    );
     println!("   Audio: {}", if !args.no_audio { "✓" } else { "✗" });
-    println!("   Timestamp overlay: {}", if !args.no_timestamp { "✓" } else { "✗" });
-    println!("   Event labels: {}", if !args.no_labels { "✓" } else { "✗" });
+    println!(
+        "   Timestamp overlay: {}",
+        if !args.no_timestamp { "✓" } else { "✗" }
+    );
+    println!(
+        "   Event labels: {}",
+        if !args.no_labels { "✓" } else { "✗" }
+    );
     if args.verbose {
         println!("   Verbose callbacks: ✓");
     }
@@ -163,10 +176,10 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     // Create tray icon
     // Use std::sync::Mutex for blocking context (tray event handler)
     let session_for_tray = Arc::new(std::sync::Mutex::new(Some(session)));
-    
+
     // Create icon (simple red circle for recording indicator)
     let icon = create_recording_icon()?;
-    
+
     // On Linux, we need to initialize GTK and run the event loop
     #[cfg(target_os = "linux")]
     {
@@ -179,17 +192,17 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 eprintln!("⚠️  Failed to initialize GTK - tray icon may not appear");
                 return;
             }
-            
+
             // On Linux, click events don't work - we MUST use a menu
             // Create a menu for the tray icon
             let menu = Menu::new();
             let stop_item = MenuItem::new("Stop Recording", true, None);
             let stop_id = stop_item.id().clone(); // Clone ID before appending
             menu.append(&stop_item).unwrap();
-            
+
             // Keep stop_item alive (menu borrows it)
             let _stop_item = stop_item;
-            
+
             // Create tray icon with menu
             let tray_icon = match TrayIconBuilder::new()
                 .with_icon(icon)
@@ -201,13 +214,13 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     eprintln!("✅ Tray icon created successfully with menu");
                     eprintln!("ℹ️  Right-click the tray icon and select 'Stop Recording' to stop");
                     icon
-                },
+                }
                 Err(e) => {
                     eprintln!("⚠️  Failed to create tray icon: {}", e);
                     return;
                 }
             };
-            
+
             // Spawn thread to poll for menu events (this is how clicks work on Linux)
             let session_clone = session_clone_gtk.clone();
             let running_clone = running_gtk.clone();
@@ -242,7 +255,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     }
                 }
             });
-            
+
             // Keep the tray icon alive by keeping GTK running
             // Run GTK event loop until stopped
             let running_loop = running_gtk.clone();
@@ -254,15 +267,15 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     glib::ControlFlow::Continue
                 }
             });
-            
+
             // Keep reference to tray icon
             let _tray_icon = tray_icon;
-            
+
             // Run GTK main loop
             gtk::main();
         });
     }
-    
+
     #[cfg(not(target_os = "linux"))]
     {
         // For non-Linux platforms, create tray icon directly
@@ -270,7 +283,9 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             .with_icon(icon)
             .with_tooltip("Nexus Logger - Recording in progress")
             .build()
-            .map_err(|e| crate::error::LoggerError::Other(format!("Failed to create tray icon: {}", e)))?;
+            .map_err(|e| {
+                crate::error::LoggerError::Other(format!("Failed to create tray icon: {}", e))
+            })?;
 
         // Set up event handler
         let session_clone = session_for_tray.clone();
@@ -330,8 +345,11 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     // We need to move the session out, so we'll use a blocking call
     let session = tokio::task::spawn_blocking(move || {
         session_for_tray.lock().ok().and_then(|mut g| g.take())
-    }).await.ok().flatten();
-    
+    })
+    .await
+    .ok()
+    .flatten();
+
     if let Some(s) = session {
         s.wait().await?;
     }
@@ -357,20 +375,20 @@ impl EventCallback for VerboseEventCallback {
     ) -> (bool, Option<OverlayLabel>) {
         if let InputEvent::Keyboard { key, pressed, .. } = event {
             let action = if *pressed { "PRESS" } else { "RELEASE" };
-            println!(
-                "🎬 [{:8.3}s] KEYBOARD {}: {}",
-                video_timestamp, action, key
-            );
-            
+            println!("🎬 [{:8.3}s] KEYBOARD {}: {}", video_timestamp, action, key);
+
             // Add label for important keys
             if *pressed && (key == "Enter" || key == "Escape" || key == "Space") {
-                return (true, Some(OverlayLabel {
-                    text: format!("Key: {}", key),
-                    timestamp: video_timestamp,
-                    duration: Some(2.0),
-                    x: None,
-                    y: None,
-                }));
+                return (
+                    true,
+                    Some(OverlayLabel {
+                        text: format!("Key: {}", key),
+                        timestamp: video_timestamp,
+                        duration: Some(2.0),
+                        x: None,
+                        y: None,
+                    }),
+                );
             }
         }
         (true, None)
@@ -400,15 +418,18 @@ impl EventCallback for VerboseEventCallback {
                             x.unwrap_or(0),
                             y.unwrap_or(0)
                         );
-                        
+
                         // Add label for mouse clicks
-                        return (true, Some(OverlayLabel {
-                            text: format!("Click: {}", btn_name),
-                            timestamp: video_timestamp,
-                            duration: Some(1.5),
-                            x: x.map(|x| x as u32),
-                            y: y.map(|y| y as u32),
-                        }));
+                        return (
+                            true,
+                            Some(OverlayLabel {
+                                text: format!("Click: {}", btn_name),
+                                timestamp: video_timestamp,
+                                duration: Some(1.5),
+                                x: x.map(|x| x as u32),
+                                y: y.map(|y| y as u32),
+                            }),
+                        );
                     }
                     "release" => {
                         println!(
@@ -442,20 +463,20 @@ impl EventCallback for VerboseEventCallback {
 /// Creates a simple recording icon (red circle).
 fn create_recording_icon() -> Result<Icon> {
     use image::{ImageBuffer, Rgba};
-    
+
     // Create a simple red circle icon (16x16 pixels)
     let size = 16;
     let mut img = ImageBuffer::<Rgba<u8>, Vec<u8>>::new(size, size);
-    
+
     let center = (size / 2) as f32;
     let radius = (size / 2 - 2) as f32;
-    
+
     for y in 0..size {
         for x in 0..size {
             let dx = (x as f32) - center;
             let dy = (y as f32) - center;
             let distance = (dx * dx + dy * dy).sqrt();
-            
+
             if distance <= radius {
                 // Red color for recording indicator
                 img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
@@ -465,8 +486,7 @@ fn create_recording_icon() -> Result<Icon> {
             }
         }
     }
-    
+
     Icon::from_rgba(img.into_raw(), size, size)
         .map_err(|e| crate::error::LoggerError::Other(format!("Failed to create icon: {}", e)))
 }
-

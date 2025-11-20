@@ -4,8 +4,7 @@ use ffmpeg::{
     codec,
     codec::context::Context as CodecContext,
     device::input,
-    encoder,
-    format,
+    encoder, format,
     format::Pixel,
     frame::Video,
     media::Type,
@@ -85,7 +84,10 @@ impl ScreenRecorder {
     pub fn new_with_config(config: RecordingConfig) -> Result<Self> {
         // Initialize FFmpeg early to catch missing libs
         ffmpeg::init().map_err(|e| {
-            ScreenError::Configuration(format!("FFmpeg initialization failed: {}. Ensure FFmpeg libraries are installed.", e))
+            ScreenError::Configuration(format!(
+                "FFmpeg initialization failed: {}. Ensure FFmpeg libraries are installed.",
+                e
+            ))
         })?;
 
         // For now, we'll get dimensions when we start recording
@@ -176,15 +178,18 @@ impl ScreenRecorder {
         let output = Command::new("xrandr")
             .arg("--listmonitors")
             .output()
-            .map_err(|e| ScreenError::Configuration(format!("Failed to run xrandr: {}. Is xrandr installed?", e)))?;
+            .map_err(|e| {
+                ScreenError::Configuration(format!(
+                    "Failed to run xrandr: {}. Is xrandr installed?",
+                    e
+                ))
+            })?;
 
         if !output.status.success() {
-            return Err(ScreenError::Configuration(
-                format!(
-                    "xrandr command failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                )
-            ));
+            return Err(ScreenError::Configuration(format!(
+                "xrandr command failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -294,7 +299,9 @@ impl ScreenRecorder {
             let output = Command::new("xrandr")
                 .arg("--query")
                 .output()
-                .map_err(|e| ScreenError::Configuration(format!("Failed to run xrandr --query: {}", e)))?;
+                .map_err(|e| {
+                    ScreenError::Configuration(format!("Failed to run xrandr --query: {}", e))
+                })?;
 
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -449,13 +456,11 @@ impl ScreenRecorder {
             }
             Err(e) => {
                 // If ffmpeg command fails, return error with helpful message
-                return Err(ScreenError::Configuration(
-                    format!(
-                        "Failed to enumerate monitors using FFmpeg: {}. \
+                return Err(ScreenError::Configuration(format!(
+                    "Failed to enumerate monitors using FFmpeg: {}. \
                     Make sure ffmpeg is installed and has avfoundation support.",
-                        e
-                    )
-                ));
+                    e
+                )));
             }
         }
 
@@ -646,8 +651,9 @@ impl ScreenRecorder {
             dict.set(key, value);
         }
 
-        let ctx = format::open_with(&input_url, &input_format, dict)
-            .map_err(|e| ScreenError::VideoEncoding(format!("Failed to open input '{}': {:?}", input_url, e)))?;
+        let ctx = format::open_with(&input_url, &input_format, dict).map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to open input '{}': {:?}", input_url, e))
+        })?;
 
         let mut ictx = match ctx {
             format::Context::Input(ictx) => ictx,
@@ -663,10 +669,12 @@ impl ScreenRecorder {
         // Get decoder using parameters (cross-platform compatible)
         // Use Context::from_parameters() as per ffmpeg-next API
         let codec_params = input_stream.parameters();
-        let context_decoder = CodecContext::from_parameters(codec_params.clone())
-            .map_err(|e| ScreenError::VideoEncoding(format!("Failed to create decoder context: {:?}", e)))?;
-        let mut decoder = context_decoder.decoder().video()
-            .map_err(|e| ScreenError::VideoEncoding(format!("Failed to get video decoder: {:?}", e)))?;
+        let context_decoder = CodecContext::from_parameters(codec_params.clone()).map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to create decoder context: {:?}", e))
+        })?;
+        let mut decoder = context_decoder.decoder().video().map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to get video decoder: {:?}", e))
+        })?;
 
         // Get video parameters from codec_params using unsafe FFI
         let (width, height, input_pixel_format) = unsafe {
@@ -710,14 +718,19 @@ impl ScreenRecorder {
                         continue;
                     }
                     Err(e) => {
-                        return Err(ScreenError::VideoEncoding(format!("Failed to decode frame: {:?}", e)));
+                        return Err(ScreenError::VideoEncoding(format!(
+                            "Failed to decode frame: {:?}",
+                            e
+                        )));
                     }
                 }
             }
         }
 
         if !got_frame {
-            return Err(ScreenError::ScreenCapture("Failed to capture frame from screen".into()));
+            return Err(ScreenError::ScreenCapture(
+                "Failed to capture frame from screen".into(),
+            ));
         }
 
         // Convert to RGB24
@@ -745,8 +758,9 @@ impl ScreenRecorder {
         }
 
         // Save image
-        img.save(output_path)
-            .map_err(|e| ScreenError::VideoEncoding(format!("Failed to save image to {}: {}", output_path, e)))?;
+        img.save(output_path).map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to save image to {}: {}", output_path, e))
+        })?;
 
         Ok(())
     }
@@ -755,71 +769,85 @@ impl ScreenRecorder {
         monitor_index: Option<usize>,
         window_info: Option<&WindowInfo>,
         fps: u32,
-    ) -> Result<(format::context::Input, ffmpeg::decoder::Video, u32, u32, Pixel)> {
-         // Setup FFmpeg input for screen capture
-         let (input_format_name, input_url, input_options) =
-             Self::get_input_format_and_url(monitor_index, window_info, fps)?;
-         
-         println!(
-             "Using input format: {}, URL: {}",
-             input_format_name, input_url
-         );
-         if !input_options.is_empty() {
-             println!("Input options: {:?}", input_options);
-         }
- 
-         // Find the input format using device iterator
-         let input_format = input::video()
-             .find(|f| f.name() == input_format_name) // Fixed: Use name() instead of enum match to avoid private Format
-             .ok_or_else(|| ScreenError::Configuration(format!("Input format '{}' not found. Make sure FFmpeg supports this format.", input_format_name)))?;
- 
-         // Convert options to Dictionary
-         let mut dict = Dictionary::new();
-         for (key, value) in &input_options {
-             dict.set(key, value);
-         }
- 
-         // Use format::open_with() to pass options (framerate, video_size, etc.)
-         let ctx = format::open_with(&input_url, &input_format, dict).map_err(|e| {
-             ScreenError::VideoEncoding(format!(
-                 "Failed to open input '{}' with format '{}': {:?}",
-                 input_url,
-                 input_format_name,
-                 e
-             ))
-         })?;
- 
-         // Extract input context from the format context
-         let ictx = match ctx {
-             format::Context::Input(ictx) => ictx,
-             _ => {
-                 return Err(ScreenError::VideoEncoding("Expected input context, got output context".into()))
-             }
-         };
- 
-         let input_stream = ictx
-             .streams()
-             .best(Type::Video)
-             .ok_or_else(|| ScreenError::VideoEncoding("No video stream found in input".into()))?;
-         
-         // Get decoder using parameters (cross-platform compatible)
-         // Use Context::from_parameters() as per ffmpeg-next API
-         let codec_params = input_stream.parameters();
-         let context_decoder = CodecContext::from_parameters(codec_params.clone())
-             .map_err(|e| ScreenError::VideoEncoding(format!("Failed to create decoder context: {:?}", e)))?;
-         let decoder = context_decoder.decoder().video()
-             .map_err(|e| ScreenError::VideoEncoding(format!("Failed to get video decoder: {:?}", e)))?;
- 
-         // Get video parameters from codec_params using unsafe FFI
-         let (raw_width, raw_height, pix_fmt) = unsafe {
-             let params_ptr = codec_params.as_ptr();
-             let width = (*params_ptr).width as u32;
-             let height = (*params_ptr).height as u32;
-             let pix_fmt = std::mem::transmute::<i32, ffmpeg::ffi::AVPixelFormat>((*params_ptr).format);
-             (width, height, Pixel::from(pix_fmt))
-         };
-         
-         Ok((ictx, decoder, raw_width, raw_height, pix_fmt))
+    ) -> Result<(
+        format::context::Input,
+        ffmpeg::decoder::Video,
+        u32,
+        u32,
+        Pixel,
+    )> {
+        // Setup FFmpeg input for screen capture
+        let (input_format_name, input_url, input_options) =
+            Self::get_input_format_and_url(monitor_index, window_info, fps)?;
+
+        println!(
+            "Using input format: {}, URL: {}",
+            input_format_name, input_url
+        );
+        if !input_options.is_empty() {
+            println!("Input options: {:?}", input_options);
+        }
+
+        // Find the input format using device iterator
+        let input_format = input::video()
+            .find(|f| f.name() == input_format_name) // Fixed: Use name() instead of enum match to avoid private Format
+            .ok_or_else(|| {
+                ScreenError::Configuration(format!(
+                    "Input format '{}' not found. Make sure FFmpeg supports this format.",
+                    input_format_name
+                ))
+            })?;
+
+        // Convert options to Dictionary
+        let mut dict = Dictionary::new();
+        for (key, value) in &input_options {
+            dict.set(key, value);
+        }
+
+        // Use format::open_with() to pass options (framerate, video_size, etc.)
+        let ctx = format::open_with(&input_url, &input_format, dict).map_err(|e| {
+            ScreenError::VideoEncoding(format!(
+                "Failed to open input '{}' with format '{}': {:?}",
+                input_url, input_format_name, e
+            ))
+        })?;
+
+        // Extract input context from the format context
+        let ictx = match ctx {
+            format::Context::Input(ictx) => ictx,
+            _ => {
+                return Err(ScreenError::VideoEncoding(
+                    "Expected input context, got output context".into(),
+                ))
+            }
+        };
+
+        let input_stream = ictx
+            .streams()
+            .best(Type::Video)
+            .ok_or_else(|| ScreenError::VideoEncoding("No video stream found in input".into()))?;
+
+        // Get decoder using parameters (cross-platform compatible)
+        // Use Context::from_parameters() as per ffmpeg-next API
+        let codec_params = input_stream.parameters();
+        let context_decoder = CodecContext::from_parameters(codec_params.clone()).map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to create decoder context: {:?}", e))
+        })?;
+        let decoder = context_decoder.decoder().video().map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to get video decoder: {:?}", e))
+        })?;
+
+        // Get video parameters from codec_params using unsafe FFI
+        let (raw_width, raw_height, pix_fmt) = unsafe {
+            let params_ptr = codec_params.as_ptr();
+            let width = (*params_ptr).width as u32;
+            let height = (*params_ptr).height as u32;
+            let pix_fmt =
+                std::mem::transmute::<i32, ffmpeg::ffi::AVPixelFormat>((*params_ptr).format);
+            (width, height, Pixel::from(pix_fmt))
+        };
+
+        Ok((ictx, decoder, raw_width, raw_height, pix_fmt))
     }
 
     /// Configures the stream parameters using unsafe FFI.
@@ -869,21 +897,34 @@ impl ScreenRecorder {
         };
 
         // Setup Input
-        let (mut ictx, mut decoder, raw_width, raw_height, input_pixel_format) = 
+        let (mut ictx, mut decoder, raw_width, raw_height, input_pixel_format) =
             Self::setup_input(config.monitor_index, window_info.as_ref(), fps)?;
 
         // Calculate dimensions (ensure even)
-        let width = if raw_width % 2 == 0 { raw_width } else { raw_width + 1 };
-        let height = if raw_height % 2 == 0 { raw_height } else { raw_height + 1 };
-        
+        let width = if raw_width % 2 == 0 {
+            raw_width
+        } else {
+            raw_width + 1
+        };
+        let height = if raw_height % 2 == 0 {
+            raw_height
+        } else {
+            raw_height + 1
+        };
+
         println!(
             "Screen dimensions: {}x{} (padded to {}x{})",
             raw_width, raw_height, width, height
         );
 
         // Setup Output
-        let mut octx = format::output(&config.output_path)
-            .map_err(|e| ScreenError::VideoEncoding(format!("Failed to setup output {}: {}", config.output_path.display(), e)))?;
+        let mut octx = format::output(&config.output_path).map_err(|e| {
+            ScreenError::VideoEncoding(format!(
+                "Failed to setup output {}: {}",
+                config.output_path.display(),
+                e
+            ))
+        })?;
         let codec = encoder::find(codec::Id::H264)
             .ok_or_else(|| anyhow::anyhow!("No H.264 encoder available"))?;
         let mut stream = octx.add_stream(codec)?;
@@ -897,7 +938,10 @@ impl ScreenRecorder {
             width,
             height,
             AVPixelFormat::AV_PIX_FMT_YUV420P,
-            AVRational { num: 1, den: fps as i32 },
+            AVRational {
+                num: 1,
+                den: fps as i32,
+            },
         )?;
 
         // Set time_base for proper timestamp handling
@@ -913,15 +957,23 @@ impl ScreenRecorder {
             (*ctx_ptr).width = width as i32;
             (*ctx_ptr).height = height as i32;
             (*ctx_ptr).pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
-            (*ctx_ptr).time_base = AVRational { num: 1, den: fps as i32 };
-            (*ctx_ptr).framerate = AVRational { num: fps as i32, den: 1 };
+            (*ctx_ptr).time_base = AVRational {
+                num: 1,
+                den: fps as i32,
+            };
+            (*ctx_ptr).framerate = AVRational {
+                num: fps as i32,
+                den: 1,
+            };
             (*ctx_ptr).max_b_frames = 0;
             (*ctx_ptr).gop_size = 1;
             (*ctx_ptr).flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
             (*ctx_ptr).flags2 |= AV_CODEC_FLAG2_FAST;
 
             if avcodec_open2(ctx_ptr, (*ctx_ptr).codec, std::ptr::null_mut()) < 0 {
-                return Err(ScreenError::VideoEncoding("Failed to open H.264 encoder".into()));
+                return Err(ScreenError::VideoEncoding(
+                    "Failed to open H.264 encoder".into(),
+                ));
             }
         }
         let mut video_encoder = encoder_ctx.encoder().video()?;
@@ -938,8 +990,9 @@ impl ScreenRecorder {
         // Setup Scaler
         let mut input_frame = Video::new(input_pixel_format, raw_width, raw_height);
         let mut scaled_frame = Video::new(Pixel::YUV420P, width, height);
-        let needs_scaling = input_pixel_format != Pixel::YUV420P || raw_width != width || raw_height != height;
-        
+        let needs_scaling =
+            input_pixel_format != Pixel::YUV420P || raw_width != width || raw_height != height;
+
         let mut scaler = if needs_scaling {
             let s = Scaler::get(
                 input_pixel_format,
@@ -949,7 +1002,8 @@ impl ScreenRecorder {
                 width,
                 height,
                 Flags::BILINEAR,
-            ).map_err(|e| ScreenError::VideoEncoding(format!("Scaler init failed: {}", e)))?;
+            )
+            .map_err(|e| ScreenError::VideoEncoding(format!("Scaler init failed: {}", e)))?;
             Some(s)
         } else {
             None
@@ -957,16 +1011,18 @@ impl ScreenRecorder {
 
         let mut frame_num: i64 = 0;
         let start_time = Instant::now();
-        let end_time = config.duration_secs.map(|secs| start_time + Duration::from_secs(secs));
-        
+        let end_time = config
+            .duration_secs
+            .map(|secs| start_time + Duration::from_secs(secs));
+
         // Reusable packet for flush
-        let mut flush_packets: Vec<Packet> = Vec::with_capacity(20); 
+        let mut flush_packets: Vec<Packet> = Vec::with_capacity(20);
 
         // Loop
         let input_stream_index = ictx.streams().best(Type::Video).unwrap().index();
 
         for (stream, pkt) in ictx.packets() {
-             let loop_start = Instant::now();
+            let loop_start = Instant::now();
 
             // Check stop conditions
             if let Some(et) = &end_time {
@@ -985,17 +1041,29 @@ impl ScreenRecorder {
             }
 
             let capture_start = Instant::now();
-            decoder.send_packet(&pkt).map_err(|e| ScreenError::VideoEncoding(format!("Send packet error: {:?}", e)))?;
+            decoder
+                .send_packet(&pkt)
+                .map_err(|e| ScreenError::VideoEncoding(format!("Send packet error: {:?}", e)))?;
 
             let mut got_frame = false;
             loop {
                 match decoder.receive_frame(&mut input_frame) {
-                    Ok(()) => { got_frame = true; break; }
+                    Ok(()) => {
+                        got_frame = true;
+                        break;
+                    }
                     Err(ffmpeg::Error::Other { errno: -11 }) => break, // EAGAIN
-                    Err(e) => return Err(ScreenError::VideoEncoding(format!("Decode frame error: {:?}", e))),
+                    Err(e) => {
+                        return Err(ScreenError::VideoEncoding(format!(
+                            "Decode frame error: {:?}",
+                            e
+                        )))
+                    }
                 }
             }
-            if !got_frame { continue; }
+            if !got_frame {
+                continue;
+            }
 
             let capture_elapsed = capture_start.elapsed();
             let scale_start = Instant::now();
@@ -1011,10 +1079,15 @@ impl ScreenRecorder {
             }
             let scale_elapsed = scale_start.elapsed();
 
-            let frame_to_encode = if needs_scaling { &scaled_frame } else { &input_frame };
+            let frame_to_encode = if needs_scaling {
+                &scaled_frame
+            } else {
+                &input_frame
+            };
 
             let encode_start = Instant::now();
-            video_encoder.send_frame(frame_to_encode)
+            video_encoder
+                .send_frame(frame_to_encode)
                 .map_err(|e| ScreenError::VideoEncoding(format!("Send frame error: {:?}", e)))?;
 
             // Update PTS tracker
@@ -1054,18 +1127,18 @@ impl ScreenRecorder {
                 let mut flush_packet = Packet::empty();
                 while let Ok(()) = video_encoder.receive_packet(&mut flush_packet) {
                     flush_packet.set_stream(ostream_idx);
-                    
+
                     let final_stream_dts = if let Some(last) = ts_tracker.last_dts {
                         last + ts_tracker.dts_increment
                     } else {
                         stream_frame_pts
                     };
                     let final_stream_pts = stream_frame_pts.max(final_stream_dts);
-                    
+
                     flush_packet.set_pts(Some(final_stream_pts));
                     flush_packet.set_dts(Some(final_stream_dts));
                     ts_tracker.commit_dts(final_stream_dts);
-                    
+
                     flush_packet.write_interleaved(&mut octx)?;
                 }
             }
@@ -1080,47 +1153,49 @@ impl ScreenRecorder {
         }
 
         info!("Capturing finished. Captured {} frames.", frame_num);
-        
+
         // Flush encoder
         video_encoder.send_eof()?;
-        
+
         flush_packets.clear();
         let mut packet = Packet::empty();
         while video_encoder.receive_packet(&mut packet).is_ok() {
-             flush_packets.push(packet);
-             packet = Packet::empty();
+            flush_packets.push(packet);
+            packet = Packet::empty();
         }
 
         // Calculate actual DTS increment for flush
         let actual_duration_secs = start_time.elapsed().as_secs_f64();
         let actual_dts_increment = if frame_num > 1 {
-            let total_duration_in_stream_tb = (actual_duration_secs * stream_time_base.denominator() as f64) / stream_time_base.numerator() as f64;
+            let total_duration_in_stream_tb = (actual_duration_secs
+                * stream_time_base.denominator() as f64)
+                / stream_time_base.numerator() as f64;
             (total_duration_in_stream_tb / (frame_num - 1) as f64) as i64
         } else {
             ts_tracker.dts_increment
         };
 
         for (idx, mut flush_packet) in flush_packets.into_iter().enumerate() {
-             flush_packet.set_stream(ostream_idx);
-             // Simplified flush logic using actual increment
-             // This mimics the original logic but cleaner
-             
-             let assigned_frame_idx = idx; // Simplification
-             let frame_based_pts = (assigned_frame_idx as i64) * actual_dts_increment;
-             
-             // Check last written DTS
-             let last_dts = ts_tracker.last_dts.unwrap_or(0);
-             let min_dts = last_dts + actual_dts_increment;
-             let final_stream_dts = frame_based_pts.max(min_dts);
-             let final_stream_pts = final_stream_dts; // PTS >= DTS
-             
-             flush_packet.set_pts(Some(final_stream_pts));
-             flush_packet.set_dts(Some(final_stream_dts));
-             ts_tracker.commit_dts(final_stream_dts);
-             
-             flush_packet.write_interleaved(&mut octx)?;
+            flush_packet.set_stream(ostream_idx);
+            // Simplified flush logic using actual increment
+            // This mimics the original logic but cleaner
+
+            let assigned_frame_idx = idx; // Simplification
+            let frame_based_pts = (assigned_frame_idx as i64) * actual_dts_increment;
+
+            // Check last written DTS
+            let last_dts = ts_tracker.last_dts.unwrap_or(0);
+            let min_dts = last_dts + actual_dts_increment;
+            let final_stream_dts = frame_based_pts.max(min_dts);
+            let final_stream_pts = final_stream_dts; // PTS >= DTS
+
+            flush_packet.set_pts(Some(final_stream_pts));
+            flush_packet.set_dts(Some(final_stream_dts));
+            ts_tracker.commit_dts(final_stream_dts);
+
+            flush_packet.write_interleaved(&mut octx)?;
         }
-        
+
         octx.write_trailer()?;
         Ok(())
     }
@@ -1145,12 +1220,12 @@ impl TimestampTracker {
         let dts_increment = (stream_time_base.denominator() as i64
             * encoder_time_base.numerator() as i64)
             / (stream_time_base.numerator() as i64 * encoder_time_base.denominator() as i64);
-            
+
         println!(
             "DEBUG: dts_increment = {} (1 frame in stream time_base)",
             dts_increment
         );
-            
+
         Self {
             stream_time_base,
             encoder_time_base,
@@ -1169,14 +1244,15 @@ impl TimestampTracker {
         let num = encoder_ts
             * self.encoder_time_base.numerator() as i64
             * self.stream_time_base.denominator() as i64;
-        let den = self.encoder_time_base.denominator() as i64 * self.stream_time_base.numerator() as i64;
+        let den =
+            self.encoder_time_base.denominator() as i64 * self.stream_time_base.numerator() as i64;
         num / den
     }
 
     /// Updates the PTS for a given frame number.
     fn update_pts(&mut self, frame_num: i64) -> i64 {
         let stream_frame_pts_raw = self.convert_to_stream_ts(frame_num);
-        
+
         let offset = if let Some(offset) = self.pts_offset {
             offset
         } else {
@@ -1184,17 +1260,17 @@ impl TimestampTracker {
             println!("DEBUG: Calculated PTS offset = {}", stream_frame_pts_raw);
             stream_frame_pts_raw
         };
-        
+
         let pts = stream_frame_pts_raw - offset;
-        
+
         self.frame_pts_map.push(pts);
         self.last_frame_pts = pts;
-        
+
         if self.first_frame_pts.is_none() && frame_num == 0 {
             self.first_frame_pts = Some(pts);
             println!("DEBUG: First frame PTS (frame 0) = {}", pts);
         }
-        
+
         pts
     }
 
@@ -1207,7 +1283,7 @@ impl TimestampTracker {
         };
         dts
     }
-    
+
     /// Commits a DTS value.
     fn commit_dts(&mut self, dts: i64) {
         self.last_dts = Some(dts);

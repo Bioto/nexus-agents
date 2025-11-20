@@ -17,13 +17,21 @@ pub async fn generate_external_server_tools(
             let server_name = server.name.clone();
             let headers = server.headers.clone();
 
-            eprintln!("Generating tools for external server: {} ({})", server_name, server_url);
+            eprintln!(
+                "Generating tools for external server: {} ({})",
+                server_name, server_url
+            );
 
             let generator = CodeGenerator::with_config(server_url, &server_name, headers);
             generator
                 .generate_code_files(output_path)
                 .await
-                .map_err(|e| NexusError::Server(format!("Failed to generate code for {}: {}", server_name, e)))?;
+                .map_err(|e| {
+                    NexusError::Server(format!(
+                        "Failed to generate code for {}: {}",
+                        server_name, e
+                    ))
+                })?;
 
             eprintln!("Successfully generated tools for {}", server_name);
         }
@@ -31,4 +39,3 @@ pub async fn generate_external_server_tools(
 
     Ok(())
 }
-

@@ -134,13 +134,12 @@ pub async fn run_record(args: RecordArgs) -> Result<()> {
     }
 
     // Start recording in a blocking task to avoid blocking the async runtime
-    let result = tokio::task::spawn_blocking(move || {
-        recorder.record(config, stop_signal)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || recorder.record(config, stop_signal)).await;
 
     match result {
         Ok(record_res) => {
-            record_res.map_err(|e| ScreenError::VideoEncoding(format!("Recording failed: {}", e)))?;
+            record_res
+                .map_err(|e| ScreenError::VideoEncoding(format!("Recording failed: {}", e)))?;
         }
         Err(e) => {
             return Err(ScreenError::Other(format!("Recording task failed: {}", e)));

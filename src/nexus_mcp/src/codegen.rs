@@ -52,14 +52,12 @@ impl CodeGenerator {
 
         // Create server directory (e.g., servers/context7)
         let server_dir = output_dir.join(&self.server_name);
-        std::fs::create_dir_all(&server_dir)
-            .map_err(|e| NexusError::Io(e))?;
+        std::fs::create_dir_all(&server_dir).map_err(|e| NexusError::Io(e))?;
 
         // Generate shared MCP client
         let client_code = self.generate_mcp_client_code()?;
         let client_path = output_dir.join("_mcp_client.py");
-        std::fs::write(&client_path, client_code)
-            .map_err(|e| NexusError::Io(e))?;
+        std::fs::write(&client_path, client_code).map_err(|e| NexusError::Io(e))?;
 
         // Generate individual tool files
         let mut tool_exports = Vec::new();
@@ -69,9 +67,7 @@ impl CodeGenerator {
             let file_name = format!("{}.py", function_name);
             let file_path = server_dir.join(&file_name);
 
-            std::fs::write(&file_path, tool_code).map_err(|e| {
-                NexusError::Io(e)
-            })?;
+            std::fs::write(&file_path, tool_code).map_err(|e| NexusError::Io(e))?;
 
             tool_exports.push((function_name, tool.name.clone()));
         }
@@ -79,15 +75,12 @@ impl CodeGenerator {
         // Generate index.py that re-exports all tools
         let index_code = self.generate_index_code(&tool_exports)?;
         let index_path = server_dir.join("index.py");
-        std::fs::write(&index_path, index_code)
-            .map_err(|e| NexusError::Io(e))?;
+        std::fs::write(&index_path, index_code).map_err(|e| NexusError::Io(e))?;
 
         // Generate __init__.py
         let init_code = self.generate_init_code(&tool_exports)?;
         let init_path = server_dir.join("__init__.py");
-        std::fs::write(&init_path, init_code).map_err(|e| {
-            NexusError::Io(e)
-        })?;
+        std::fs::write(&init_path, init_code).map_err(|e| NexusError::Io(e))?;
 
         Ok(())
     }
@@ -240,7 +233,9 @@ impl CodeGenerator {
         code.push_str("            if line.startswith('data: '):\n");
         code.push_str("                result = json.loads(line[6:])  # Skip 'data: '\n");
         code.push_str("                if \"error\" in result:\n");
-        code.push_str("                    raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str(
+            "                    raise Exception(f\"MCP tool error: {result['error']}\")\n",
+        );
         code.push_str("                return result.get(\"result\", {})\n");
         code.push_str("        # Fallback: try to parse as JSON directly\n");
         code.push_str("        try:\n");
@@ -281,7 +276,7 @@ impl CodeGenerator {
             "MCP_SERVER_URL = os.getenv(\"MCP_SERVER_URL\", \"{}\")\n\n",
             base_url
         ));
-        
+
         // Generate custom headers from environment variables if configured
         if let Some(ref headers) = self.headers {
             code.push_str("# Custom headers from configuration\n");
@@ -424,13 +419,17 @@ impl CodeGenerator {
         code.push_str("                if line.startswith('data: '):\n");
         code.push_str("                    result = json.loads(line[6:])  # Skip 'data: '\n");
         code.push_str("                    if \"error\" in result:\n");
-        code.push_str("                        raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str(
+            "                        raise Exception(f\"MCP tool error: {result['error']}\")\n",
+        );
         code.push_str("                    return result.get(\"result\", {})\n");
         code.push_str("            # Fallback: try to parse as JSON directly\n");
         code.push_str("            try:\n");
         code.push_str("                result = response.json()\n");
         code.push_str("                if \"error\" in result:\n");
-        code.push_str("                    raise Exception(f\"MCP tool error: {result['error']}\")\n");
+        code.push_str(
+            "                    raise Exception(f\"MCP tool error: {result['error']}\")\n",
+        );
         code.push_str("                return result.get(\"result\", {})\n");
         code.push_str("            except:\n");
         code.push_str("                raise Exception(f\"Failed to parse MCP response: {response_text[:200]}\")\n");
@@ -455,7 +454,8 @@ impl CodeGenerator {
             let input_type = SchemaConverter::schema_to_typed_dict(
                 &tool.input_schema,
                 &format!("{}Input", self.to_pascal_case(&tool.name)),
-            ).map_err(|e| NexusError::Parse(e.to_string()))?;
+            )
+            .map_err(|e| NexusError::Parse(e.to_string()))?;
             code.push_str(&input_type);
             code.push_str("\n\n");
         }
@@ -493,10 +493,7 @@ impl CodeGenerator {
     }
 
     /// Generate index.py that re-exports all tools
-    fn generate_index_code(
-        &self,
-        tool_exports: &[(String, String)],
-    ) -> Result<String, NexusError> {
+    fn generate_index_code(&self, tool_exports: &[(String, String)]) -> Result<String, NexusError> {
         let mut code = String::new();
 
         code.push_str("\"\"\"\n");
@@ -523,10 +520,7 @@ impl CodeGenerator {
     }
 
     /// Generate __init__.py
-    fn generate_init_code(
-        &self,
-        tool_exports: &[(String, String)],
-    ) -> Result<String, NexusError> {
+    fn generate_init_code(&self, tool_exports: &[(String, String)]) -> Result<String, NexusError> {
         let mut code = String::new();
 
         code.push_str("\"\"\"\n");
@@ -574,7 +568,7 @@ impl CodeGenerator {
     fn to_snake_case(&self, s: &str) -> String {
         let mut result = String::new();
         let mut prev_was_separator = false;
-        
+
         for (i, c) in s.chars().enumerate() {
             if c == '-' || c == '_' {
                 if !prev_was_separator && i > 0 {

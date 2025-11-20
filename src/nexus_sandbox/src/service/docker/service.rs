@@ -37,21 +37,27 @@ impl DockerService {
         let docker = if let Ok(docker_host) = env::var("DOCKER_HOST") {
             // Use DOCKER_HOST if set
             debug!("Connecting to Docker via DOCKER_HOST: {}", docker_host);
-            Docker::connect_with_socket(&docker_host, DOCKER_CONNECT_TIMEOUT_SECS, bollard::API_DEFAULT_VERSION).map_err(
-                |e| {
-                    DockerError::ConnectionFailed(format!(
-                        "Failed to connect to Docker daemon at {}: {}",
-                        docker_host, e
-                    ))
-                },
-            )?
+            Docker::connect_with_socket(
+                &docker_host,
+                DOCKER_CONNECT_TIMEOUT_SECS,
+                bollard::API_DEFAULT_VERSION,
+            )
+            .map_err(|e| {
+                DockerError::ConnectionFailed(format!(
+                    "Failed to connect to Docker daemon at {}: {}",
+                    docker_host, e
+                ))
+            })?
         } else if let Ok(home) = env::var("HOME") {
             // Try Colima sockets (new location first, then old)
             let colima_socket_new = format!("{}/.config/colima/default/docker.sock", home);
             let colima_socket_old = format!("{}/.colima/default/docker.sock", home);
 
             if Path::new(&colima_socket_new).exists() {
-                debug!("Connecting to Docker via Colima socket (new): {}", colima_socket_new);
+                debug!(
+                    "Connecting to Docker via Colima socket (new): {}",
+                    colima_socket_new
+                );
                 Docker::connect_with_socket(
                     &format!("unix://{}", colima_socket_new),
                     DOCKER_CONNECT_TIMEOUT_SECS,
@@ -64,7 +70,10 @@ impl DockerService {
                     ))
                 })?
             } else if Path::new(&colima_socket_old).exists() {
-                debug!("Connecting to Docker via Colima socket (old): {}", colima_socket_old);
+                debug!(
+                    "Connecting to Docker via Colima socket (old): {}",
+                    colima_socket_old
+                );
                 Docker::connect_with_socket(
                     &format!("unix://{}", colima_socket_old),
                     DOCKER_CONNECT_TIMEOUT_SECS,
@@ -166,8 +175,12 @@ impl DockerService {
                     });
 
                     if !exists {
-                        warn!("Image '{}' not found in {} listed images", image_name, images.len());
-                        
+                        warn!(
+                            "Image '{}' not found in {} listed images",
+                            image_name,
+                            images.len()
+                        );
+
                         // Last resort: try to inspect by ID or try creating a container
                         // Sometimes images exist but aren't in list_images
                         debug!("Attempting direct container creation test...");
@@ -381,7 +394,8 @@ impl DockerService {
         container_id: &str,
         command: Vec<String>,
     ) -> Result<(String, String, i32), DockerError> {
-        self.exec_in_container_with_env(container_id, command, None).await
+        self.exec_in_container_with_env(container_id, command, None)
+            .await
     }
 
     pub async fn exec_in_container_with_env(
@@ -825,7 +839,8 @@ impl DockerService {
         container_id: &str,
         code: &str,
     ) -> Result<(String, String, i32), DockerError> {
-        self.execute_python_code_in_container_with_env(container_id, code, None).await
+        self.execute_python_code_in_container_with_env(container_id, code, None)
+            .await
     }
 
     /// Execute Python code in an existing container using exec with environment variables
@@ -846,7 +861,8 @@ impl DockerService {
             code.to_string(),
         ];
 
-        self.exec_in_container_with_env(container_id, command, env).await
+        self.exec_in_container_with_env(container_id, command, env)
+            .await
     }
 
     /// Create a long-running container that can be reused for multiple Python executions

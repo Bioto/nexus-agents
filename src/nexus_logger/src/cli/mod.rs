@@ -23,7 +23,6 @@ pub enum Commands {
 }
 
 // Re-export command handlers for convenience
-pub use commands::log::run_log;
 pub use commands::capture::run_capture;
+pub use commands::log::run_log;
 pub use commands::unified::run_unified;
-

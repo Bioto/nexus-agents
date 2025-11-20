@@ -7,7 +7,10 @@ mod tests {
         let config = DockerConfig::default();
         assert_eq!(config.image_name, "nexus_sandbox");
         assert_eq!(config.image_tag, "latest");
-        assert_eq!(config.dockerfile_path, "src/nexus_sandbox/.docker/Dockerfile");
+        assert_eq!(
+            config.dockerfile_path,
+            "src/nexus_sandbox/.docker/Dockerfile"
+        );
         assert_eq!(config.build_context, ".");
     }
 
@@ -41,13 +44,19 @@ mod tests {
             image_name: "invalid name".to_string(),
             ..Default::default()
         };
-        assert!(matches!(config.validate(), Err(DockerError::InvalidConfig(_))));
+        assert!(matches!(
+            config.validate(),
+            Err(DockerError::InvalidConfig(_))
+        ));
 
         let config = DockerConfig {
             image_name: "!invalid".to_string(),
             ..Default::default()
         };
-        assert!(matches!(config.validate(), Err(DockerError::InvalidConfig(_))));
+        assert!(matches!(
+            config.validate(),
+            Err(DockerError::InvalidConfig(_))
+        ));
     }
 
     #[test]
@@ -56,13 +65,18 @@ mod tests {
             image_tag: "invalid tag".to_string(),
             ..Default::default()
         };
-        assert!(matches!(config.validate(), Err(DockerError::InvalidConfig(_))));
+        assert!(matches!(
+            config.validate(),
+            Err(DockerError::InvalidConfig(_))
+        ));
 
         let config = DockerConfig {
             image_tag: "/invalid".to_string(),
             ..Default::default()
         };
-        assert!(matches!(config.validate(), Err(DockerError::InvalidConfig(_))));
+        assert!(matches!(
+            config.validate(),
+            Err(DockerError::InvalidConfig(_))
+        ));
     }
 }
-

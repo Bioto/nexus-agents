@@ -2,8 +2,8 @@ use chrono;
 use clap::Parser;
 use nexus_screen::{Cli, Commands, Result};
 use simplelog::{
-    ColorChoice, CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger,
-    SharedLogger,
+    ColorChoice, CombinedLogger, Config, LevelFilter, SharedLogger, TermLogger, TerminalMode,
+    WriteLogger,
 };
 use std::env;
 use std::fs::File;

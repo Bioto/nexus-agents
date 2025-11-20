@@ -1,8 +1,8 @@
 use crate::service::docker::{DockerConfig, DockerService};
+use chrono::{DateTime, Utc};
 use clap::Args;
 use std::io::{self, Read};
 use std::time::{SystemTime, UNIX_EPOCH};
-use chrono::{DateTime, Utc};
 use tracing::{error, info};
 
 /// Escape XML special characters
@@ -16,8 +16,7 @@ fn escape_xml(s: &str) -> String {
 
 /// Format a Unix timestamp to a readable datetime string
 fn format_timestamp(secs: u64) -> String {
-    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0)
-        .unwrap_or_else(Utc::now);
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0).unwrap_or_else(Utc::now);
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
@@ -68,8 +67,14 @@ pub async fn run_docker_exec(args: DockerExecArgs) -> Result<(), Box<dyn std::er
     let config = DockerConfig {
         image_name: image_name.to_string(),
         image_tag: image_tag.to_string(),
-        dockerfile_path: args.dockerfile.clone().unwrap_or_else(|| "src/nexus_sandbox/.docker/Dockerfile".to_string()),
-        build_context: args.build_context.clone().unwrap_or_else(|| ".".to_string()),
+        dockerfile_path: args
+            .dockerfile
+            .clone()
+            .unwrap_or_else(|| "src/nexus_sandbox/.docker/Dockerfile".to_string()),
+        build_context: args
+            .build_context
+            .clone()
+            .unwrap_or_else(|| ".".to_string()),
     };
 
     // Create Docker service
@@ -162,6 +167,9 @@ mod tests {
         assert_eq!(escape_xml("a & b"), "a &amp; b");
         assert_eq!(escape_xml("\"quotes\""), "&quot;quotes&quot;");
         assert_eq!(escape_xml("'single quotes'"), "&apos;single quotes&apos;");
-        assert_eq!(escape_xml("<tag>content</tag>"), "&lt;tag&gt;content&lt;/tag&gt;");
+        assert_eq!(
+            escape_xml("<tag>content</tag>"),
+            "&lt;tag&gt;content&lt;/tag&gt;"
+        );
     }
 }

@@ -24,4 +24,14 @@ impl From<anyhow::Error> for LoggerError {
     }
 }
 
+impl From<nexus_core::models::Error> for LoggerError {
+    fn from(err: nexus_core::models::Error) -> Self {
+        LoggerError::Other(err.to_string())
+    }
+}
 
+impl From<nexus_screen::ScreenError> for LoggerError {
+    fn from(err: nexus_screen::ScreenError) -> Self {
+        LoggerError::Other(err.to_string())
+    }
+}

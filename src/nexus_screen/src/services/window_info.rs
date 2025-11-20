@@ -1,6 +1,6 @@
+use super::super::error::ScreenError;
 use anyhow::{self, Result};
 use std::process::Command;
-use super::super::error::ScreenError;
 
 /// Represents window information on the system.
 #[derive(Clone, Debug)]
@@ -141,7 +141,10 @@ impl WindowInfoService {
     #[cfg(target_os = "linux")]
     fn list_windows_wmctrl() -> Result<Vec<WindowInfo>> {
         let output = Command::new("wmctrl").arg("-l").output().map_err(|e| {
-            ScreenError::Configuration(format!("Failed to run wmctrl: {}. Is wmctrl installed? (sudo apt install wmctrl)", e))
+            ScreenError::Configuration(format!(
+                "Failed to run wmctrl: {}. Is wmctrl installed? (sudo apt install wmctrl)",
+                e
+            ))
         })?;
 
         if !output.status.success() {
@@ -161,20 +164,25 @@ impl WindowInfoService {
             if parts.len() < 4 {
                 continue;
             }
-            
+
             let window_id = match parts.get(0) {
                 Some(id) => id.to_string(),
                 None => continue,
             };
-            
+
             let workspace = match parts.get(2) {
                 Some(ws) => ws.to_string(),
                 None => "unknown".to_string(),
             };
-            
+
             // Title is everything after the third whitespace-separated field
             // We can safely skip 3 because we checked len >= 4
-            let title = parts.iter().skip(3).cloned().collect::<Vec<&str>>().join(" ");
+            let title = parts
+                .iter()
+                .skip(3)
+                .cloned()
+                .collect::<Vec<&str>>()
+                .join(" ");
 
             // Get additional info using wmctrl -i -G
             let geometry = Self::get_window_geometry_wmctrl(&window_id).ok();
@@ -205,7 +213,10 @@ impl WindowInfoService {
             .arg("")
             .output()
             .map_err(|e| {
-                ScreenError::Configuration(format!("Failed to run xdotool: {}. Is xdotool installed? (sudo apt install xdotool)", e))
+                ScreenError::Configuration(format!(
+                    "Failed to run xdotool: {}. Is xdotool installed? (sudo apt install xdotool)",
+                    e
+                ))
             })?;
 
         if !output.status.success() {
@@ -317,18 +328,30 @@ impl WindowInfoService {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            
+
             if parts.len() < 6 {
                 continue;
             }
 
             if let Some(id) = parts.get(0) {
                 if *id == window_id {
-                    let x = parts.get(2).and_then(|s| s.parse::<i32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid X coord"))?;
-                    let y = parts.get(3).and_then(|s| s.parse::<i32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid Y coord"))?;
-                    let width = parts.get(4).and_then(|s| s.parse::<u32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid Width"))?;
-                    let height = parts.get(5).and_then(|s| s.parse::<u32>().ok()).ok_or_else(|| anyhow::anyhow!("Invalid Height"))?;
-                    
+                    let x = parts
+                        .get(2)
+                        .and_then(|s| s.parse::<i32>().ok())
+                        .ok_or_else(|| anyhow::anyhow!("Invalid X coord"))?;
+                    let y = parts
+                        .get(3)
+                        .and_then(|s| s.parse::<i32>().ok())
+                        .ok_or_else(|| anyhow::anyhow!("Invalid Y coord"))?;
+                    let width = parts
+                        .get(4)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .ok_or_else(|| anyhow::anyhow!("Invalid Width"))?;
+                    let height = parts
+                        .get(5)
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .ok_or_else(|| anyhow::anyhow!("Invalid Height"))?;
+
                     return Ok(WindowGeometry {
                         x,
                         y,

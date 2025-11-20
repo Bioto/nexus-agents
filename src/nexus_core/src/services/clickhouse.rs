@@ -74,8 +74,7 @@ impl ClickHouseConfig {
     pub fn from_env() -> Self {
         crate::load_env();
         Self {
-            host: std::env::var("CLICKHOUSE_HOST")
-                .unwrap_or_else(|_| "localhost".to_string()),
+            host: std::env::var("CLICKHOUSE_HOST").unwrap_or_else(|_| "localhost".to_string()),
             port: std::env::var("CLICKHOUSE_PORT")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -93,7 +92,7 @@ impl ClickHouseConfig {
     }
 
     /// Build the connection URL
-    /// 
+    ///
     /// clickhouse-rs uses tcp:// protocol for native connections
     /// Format: tcp://[username:password@]host:port[/database]
     /// Note: username without password is not supported, so we only include auth if password is set
@@ -104,17 +103,20 @@ impl ClickHouseConfig {
         } else {
             &self.host
         };
-        
+
         // Build URL with authentication only if both username and password are provided
         // clickhouse-rs doesn't support username@host format without password
         let url = if !self.username.is_empty() && !self.password.is_empty() {
             // Both username and password
-            format!("tcp://{}:{}@{}:{}", self.username, self.password, host, self.port)
+            format!(
+                "tcp://{}:{}@{}:{}",
+                self.username, self.password, host, self.port
+            )
         } else {
             // No authentication (username without password is not supported)
             format!("tcp://{}:{}", host, self.port)
         };
-        
+
         // Add database if provided and not empty
         if !self.database.is_empty() {
             format!("{}/{}", url, self.database)
@@ -197,14 +199,14 @@ impl ClickHouseService {
     /// Returns an error if the connection pool cannot be created
     pub async fn new(config: ClickHouseConfig) -> Result<Self> {
         let url = config.connection_url();
-        
+
         // Validate URL is not empty
         if url.is_empty() {
             return Err(crate::models::Error::Other(
-                "ClickHouse connection URL is empty".to_string()
+                "ClickHouse connection URL is empty".to_string(),
             ));
         }
-        
+
         let pool = Pool::new(url.clone());
 
         Ok(Self {
@@ -248,21 +250,13 @@ impl ClickHouseService {
     /// # }
     /// ```
     pub async fn insert(&self, query: &str) -> Result<u64> {
-        let mut client = self.pool
-            .get_handle()
-            .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to get ClickHouse connection: {}",
-                e
-            )))?;
+        let mut client = self.pool.get_handle().await.map_err(|e| {
+            crate::models::Error::Other(format!("Failed to get ClickHouse connection: {}", e))
+        })?;
 
-        client
-            .execute(query)
-            .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to execute INSERT query: {}",
-                e
-            )))?;
+        client.execute(query).await.map_err(|e| {
+            crate::models::Error::Other(format!("Failed to execute INSERT query: {}", e))
+        })?;
 
         // ClickHouse execute returns the number of rows affected
         // For INSERT queries, this is typically 0 or 1
@@ -295,21 +289,14 @@ impl ClickHouseService {
     where
         B: AsRef<Block> + Send,
     {
-        let mut client = self.pool
-            .get_handle()
-            .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to get ClickHouse connection: {}",
-                e
-            )))?;
+        let mut client = self.pool.get_handle().await.map_err(|e| {
+            crate::models::Error::Other(format!("Failed to get ClickHouse connection: {}", e))
+        })?;
 
         client
             .insert(table, block)
             .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to insert block: {}",
-                e
-            )))?;
+            .map_err(|e| crate::models::Error::Other(format!("Failed to insert block: {}", e)))?;
 
         Ok(1)
     }
@@ -337,22 +324,14 @@ impl ClickHouseService {
     /// # }
     /// ```
     pub async fn query(&self, query: &str) -> Result<Block<Complex>> {
-        let mut client = self.pool
-            .get_handle()
-            .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to get ClickHouse connection: {}",
-                e
-            )))?;
+        let mut client = self.pool.get_handle().await.map_err(|e| {
+            crate::models::Error::Other(format!("Failed to get ClickHouse connection: {}", e))
+        })?;
 
-        let block = client
-            .query(query)
-            .fetch_all()
-            .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to execute query: {}",
-                e
-            )))?;
+        let block =
+            client.query(query).fetch_all().await.map_err(|e| {
+                crate::models::Error::Other(format!("Failed to execute query: {}", e))
+            })?;
 
         Ok(block)
     }
@@ -377,21 +356,14 @@ impl ClickHouseService {
     /// # }
     /// ```
     pub async fn execute(&self, query: &str) -> Result<u64> {
-        let mut client = self.pool
-            .get_handle()
-            .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to get ClickHouse connection: {}",
-                e
-            )))?;
+        let mut client = self.pool.get_handle().await.map_err(|e| {
+            crate::models::Error::Other(format!("Failed to get ClickHouse connection: {}", e))
+        })?;
 
         client
             .execute(query)
             .await
-            .map_err(|e| crate::models::Error::Other(format!(
-                "Failed to execute query: {}",
-                e
-            )))?;
+            .map_err(|e| crate::models::Error::Other(format!("Failed to execute query: {}", e)))?;
 
         Ok(0)
     }
@@ -489,4 +461,3 @@ mod tests {
         }
     }
 }
-

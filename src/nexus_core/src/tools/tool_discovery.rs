@@ -308,20 +308,23 @@ fn extract_parameters(contents: &str) -> Option<Value> {
     // Pattern: class SomeNameInput(TypedDict):
     let class_marker = "class ";
     let typed_dict_marker = "(TypedDict)";
-    
+
     let class_start = contents.find(class_marker)?;
-    let class_line_start = contents[..class_start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let class_line_start = contents[..class_start]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
     let class_line_end = contents[class_start..]
         .find('\n')
         .map(|i| class_start + i)
         .unwrap_or(contents.len());
     let class_line = &contents[class_line_start..class_line_end];
-    
+
     // Check if it's a TypedDict
     if !class_line.contains(typed_dict_marker) {
         return None;
     }
-    
+
     // Extract class name (everything between "class " and "(")
     let class_name_start = class_start + class_marker.len();
     let class_name_end = class_line[class_name_start - class_line_start..]
@@ -329,29 +332,29 @@ fn extract_parameters(contents: &str) -> Option<Value> {
         .map(|i| class_name_start + i)
         .unwrap_or(class_line_end);
     let _class_name = &contents[class_name_start..class_name_end].trim();
-    
+
     // Find the class body (indented lines after the class definition)
     let body_start = class_line_end + 1;
     let body = &contents[body_start..];
-    
+
     let mut parameters = serde_json::Map::new();
     let mut in_class_body = false;
     let mut expected_indent: Option<usize> = None;
-    
+
     for line in body.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-        
+
         let indent = line.len() - line.trim_start().len();
-        
+
         // First non-empty line after class definition sets the expected indent
         if expected_indent.is_none() && !trimmed.starts_with('#') {
             expected_indent = Some(indent);
             in_class_body = true;
         }
-        
+
         // Stop if we hit a line with less or equal indentation (end of class)
         if in_class_body {
             if let Some(expected) = expected_indent {
@@ -360,19 +363,19 @@ fn extract_parameters(contents: &str) -> Option<Value> {
                 }
             }
         }
-        
+
         // Parse field definitions: "field_name: type" or "field_name: Optional[type]"
         if in_class_body && trimmed.contains(':') && !trimmed.starts_with('#') {
             let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
             if parts.len() == 2 {
                 let field_name = parts[0].trim();
                 let field_type = parts[1].trim();
-                
+
                 // Skip if it looks like a comment or docstring
                 if field_name.is_empty() || field_type.is_empty() {
                     continue;
                 }
-                
+
                 // Determine if it's optional
                 let is_optional = field_type.contains("Optional");
                 let param_type = if is_optional {
@@ -380,7 +383,7 @@ fn extract_parameters(contents: &str) -> Option<Value> {
                 } else {
                     "string (required)"
                 };
-                
+
                 parameters.insert(
                     field_name.to_string(),
                     json!({
@@ -391,7 +394,7 @@ fn extract_parameters(contents: &str) -> Option<Value> {
             }
         }
     }
-    
+
     if parameters.is_empty() {
         None
     } else {

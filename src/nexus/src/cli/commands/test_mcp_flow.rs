@@ -200,45 +200,54 @@ fn extract_dependency_directive(path: &Path) -> Option<String> {
 /// Generate default test payload from TypedDict definition in Python file
 fn generate_default_payload(path: &Path) -> Option<Value> {
     let contents = fs::read_to_string(path).ok()?;
-    
+
     // Look for TypedDict class definition (e.g., "class AddInput(TypedDict):")
     let mut in_typed_dict = false;
     let mut payload = serde_json::Map::new();
-    
+
     for line in contents.lines() {
         let trimmed = line.trim();
-        
+
         // Check if this is a TypedDict class definition
         if trimmed.starts_with("class ") && trimmed.contains("TypedDict") {
             in_typed_dict = true;
             continue;
         }
-        
+
         // If we're in a TypedDict, look for field definitions
         if in_typed_dict {
             // Stop if we hit a blank line (after first field) or docstring or function definition
             if trimmed.is_empty() && !payload.is_empty() {
                 break;
             }
-            if trimmed.starts_with("\"\"\"") || trimmed.starts_with("async def") || trimmed.starts_with("def ") {
+            if trimmed.starts_with("\"\"\"")
+                || trimmed.starts_with("async def")
+                || trimmed.starts_with("def ")
+            {
                 break;
             }
-            
+
             // Skip comments
             if trimmed.starts_with('#') {
                 continue;
             }
-            
+
             // Parse field definition: "field_name: type"
             if let Some(colon_pos) = trimmed.find(':') {
                 let field_name = trimmed[..colon_pos].trim();
                 let field_type = trimmed[colon_pos + 1..].trim();
-                
+
                 // Skip if field name is empty or contains invalid characters
-                if field_name.is_empty() || !field_name.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
+                if field_name.is_empty()
+                    || !field_name
+                        .chars()
+                        .next()
+                        .map(|c| c.is_alphabetic())
+                        .unwrap_or(false)
+                {
                     continue;
                 }
-                
+
                 // Generate default value based on type
                 let default_value = match field_type {
                     t if t.contains("float") || t.contains("int") || t.contains("number") => {
@@ -256,12 +265,12 @@ fn generate_default_payload(path: &Path) -> Option<Value> {
                     }
                     _ => Value::String("test".to_string()), // Default fallback
                 };
-                
+
                 payload.insert(field_name.to_string(), default_value);
             }
         }
     }
-    
+
     if payload.is_empty() {
         None
     } else {

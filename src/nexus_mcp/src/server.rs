@@ -10,8 +10,8 @@ use rmcp::{
     prompt, prompt_router, schemars, tool, tool_router, ErrorData as McpError,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Arc;
 
 /// MCP Server with tools, resources, and prompts for testing
 #[derive(Clone)]

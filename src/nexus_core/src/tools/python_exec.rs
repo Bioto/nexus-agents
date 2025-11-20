@@ -178,9 +178,7 @@ finally:
                     .execute_python_code_in_container_with_env(container_id, &check_code, None)
                     .await
             })
-            .map_err(|e| {
-                crate::models::Error::Other(format!("Failed to run ruff check: {}", e))
-            })?;
+            .map_err(|e| crate::models::Error::Other(format!("Failed to run ruff check: {}", e)))?;
 
         if exit_code != 0 {
             // Ruff found issues or had an error
@@ -333,7 +331,10 @@ impl ExecutableTool for PythonExec {
         // Mount the workspace root into the container at /workspace
         let workspace_root_str = workspace_root.to_string_lossy().to_string();
         // Mount as read-only (:ro) to prevent the sandboxed code from modifying the workspace
-        let mounts = vec![(format!("{}:ro", workspace_root_str), "/workspace".to_string())];
+        let mounts = vec![(
+            format!("{}:ro", workspace_root_str),
+            "/workspace".to_string(),
+        )];
 
         // Update the code to use /workspace instead of the host path
         // Note: Using raw string with proper indentation - the indentation after \n\ is preserved
@@ -430,40 +431,35 @@ exec(user_code)
 
         // Get MCP_SERVER_URL from environment and convert for Docker networking
         // If it's localhost/127.0.0.1/0.0.0.0/172.17.0.1, use host.docker.internal instead
-        let mcp_server_url = std::env::var("MCP_SERVER_URL")
-            .ok()
-            .map(|url| {
-                // Convert localhost/Docker bridge addresses to host.docker.internal for Docker networking
-                let docker_url = if url.starts_with("http://127.0.0.1:")
-                    || url.starts_with("http://0.0.0.0:")
-                    || url.starts_with("http://localhost:")
-                    || url.starts_with("http://172.17.0.1:")
-                {
-                    // Extract port and path from URL
-                    let parts: Vec<&str> = url.split(':').collect();
-                    if parts.len() >= 3 {
-                        let port_and_path = parts[2];
-                        let (port, path) = if let Some(slash_idx) = port_and_path.find('/') {
-                            (
-                                &port_and_path[..slash_idx],
-                                &port_and_path[slash_idx..],
-                            )
-                        } else {
-                            (port_and_path, "")
-                        };
-                        format!("http://host.docker.internal:{}{}", port, path)
+        let mcp_server_url = std::env::var("MCP_SERVER_URL").ok().map(|url| {
+            // Convert localhost/Docker bridge addresses to host.docker.internal for Docker networking
+            let docker_url = if url.starts_with("http://127.0.0.1:")
+                || url.starts_with("http://0.0.0.0:")
+                || url.starts_with("http://localhost:")
+                || url.starts_with("http://172.17.0.1:")
+            {
+                // Extract port and path from URL
+                let parts: Vec<&str> = url.split(':').collect();
+                if parts.len() >= 3 {
+                    let port_and_path = parts[2];
+                    let (port, path) = if let Some(slash_idx) = port_and_path.find('/') {
+                        (&port_and_path[..slash_idx], &port_and_path[slash_idx..])
                     } else {
-                        // Fallback if URL parsing fails
-                        url.replace("127.0.0.1", "host.docker.internal")
-                            .replace("0.0.0.0", "host.docker.internal")
-                            .replace("localhost", "host.docker.internal")
-                            .replace("172.17.0.1", "host.docker.internal")
-                    }
+                        (port_and_path, "")
+                    };
+                    format!("http://host.docker.internal:{}{}", port, path)
                 } else {
-                    url
-                };
-                docker_url
-            });
+                    // Fallback if URL parsing fails
+                    url.replace("127.0.0.1", "host.docker.internal")
+                        .replace("0.0.0.0", "host.docker.internal")
+                        .replace("localhost", "host.docker.internal")
+                        .replace("172.17.0.1", "host.docker.internal")
+                }
+            } else {
+                url
+            };
+            docker_url
+        });
 
         // Build environment variables for Docker exec
         let env_vars = mcp_server_url.map(|url| vec![format!("MCP_SERVER_URL={}", url)]);

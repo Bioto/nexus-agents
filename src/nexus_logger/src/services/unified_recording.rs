@@ -1,5 +1,6 @@
 use crate::error::{LoggerError, Result};
 use crate::services::capture::InputEvent;
+use crate::services::click_context::{ClickContextEvent, ClickContextHandle, ClickContextService};
 use crate::services::database::Database;
 use chrono::{DateTime, Local, Utc};
 use std::path::PathBuf;
@@ -28,12 +29,12 @@ pub struct OverlayLabel {
 /// Implement this to receive events and timestamp video accordingly.
 pub trait EventCallback: Send + Sync {
     /// Called when a keyboard event is captured.
-    /// 
+    ///
     /// # Arguments
     /// * `event` - The keyboard event
     /// * `video_timestamp` - Current video timestamp in seconds
     /// * `recording_start` - When recording started (for absolute time calculations)
-    /// 
+    ///
     /// Returns (should_store, optional_label) where:
     /// - should_store: true if the event should be stored, false to skip
     /// - optional_label: Some(label) to add overlay text, None for no overlay
@@ -45,12 +46,12 @@ pub trait EventCallback: Send + Sync {
     ) -> (bool, Option<OverlayLabel>);
 
     /// Called when a mouse event is captured.
-    /// 
+    ///
     /// # Arguments
     /// * `event` - The mouse event
     /// * `video_timestamp` - Current video timestamp in seconds
     /// * `recording_start` - When recording started (for absolute time calculations)
-    /// 
+    ///
     /// Returns (should_store, optional_label) where:
     /// - should_store: true if the event should be stored, false to skip
     /// - optional_label: Some(label) to add overlay text, None for no overlay
@@ -75,13 +76,16 @@ impl EventCallback for DefaultEventCallback {
         // Generate labels for important keys
         if let InputEvent::Keyboard { key, pressed, .. } = event {
             if *pressed && (key == "Enter" || key == "Escape" || key == "Space" || key == "Tab") {
-                return (true, Some(OverlayLabel {
-                    text: format!("Key: {}", key),
-                    timestamp: video_timestamp,
-                    duration: Some(2.0),
-                    x: None,
-                    y: None,
-                }));
+                return (
+                    true,
+                    Some(OverlayLabel {
+                        text: format!("Key: {}", key),
+                        timestamp: video_timestamp,
+                        duration: Some(2.0),
+                        x: None,
+                        y: None,
+                    }),
+                );
             }
         }
         (true, None)
@@ -94,16 +98,26 @@ impl EventCallback for DefaultEventCallback {
         _recording_start: DateTime<Utc>,
     ) -> (bool, Option<OverlayLabel>) {
         // Generate labels for mouse clicks
-        if let InputEvent::Mouse { event_type, button, x, y, .. } = event {
+        if let InputEvent::Mouse {
+            event_type,
+            button,
+            x,
+            y,
+            ..
+        } = event
+        {
             if event_type == "click" {
                 let btn_name = button.as_deref().unwrap_or("unknown");
-                return (true, Some(OverlayLabel {
-                    text: format!("Click: {}", btn_name),
-                    timestamp: video_timestamp,
-                    duration: Some(1.5),
-                    x: x.map(|x| x as u32),
-                    y: y.map(|y| y as u32),
-                }));
+                return (
+                    true,
+                    Some(OverlayLabel {
+                        text: format!("Click: {}", btn_name),
+                        timestamp: video_timestamp,
+                        duration: Some(1.5),
+                        x: x.map(|x| x as u32),
+                        y: y.map(|y| y as u32),
+                    }),
+                );
             }
         }
         (true, None)
@@ -218,28 +232,26 @@ impl UnifiedRecordingService {
     }
 
     /// Start unified recording (screen + input).
-    /// 
+    ///
     /// This method:
     /// 1. Starts screen recording in a background task
     /// 2. Starts input capture in a background task
     /// 3. Synchronizes timestamps between video and events
     /// 4. Calls the callback for each event
     /// 5. Stores events in the database
-    /// 
+    ///
     /// Returns when recording is stopped (via stop_signal or duration limit).
-    pub async fn start_recording(
-        &self,
-        stop_signal: Arc<AtomicBool>,
-    ) -> Result<RecordingSession> {
+    pub async fn start_recording(&self, stop_signal: Arc<AtomicBool>) -> Result<RecordingSession> {
         let session_id = Uuid::new_v4().to_string();
         let recording_start = Utc::now();
-        
+
         // Initialize database
         let db = Database::new().await?;
         db.create_session(&session_id).await?;
 
         // Channel for events from input capture
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(InputEvent, Instant)>();
+        let click_context = ClickContextService::maybe_start();
 
         // Start input capture in background
         let input_config = self.config.input_config.clone();
@@ -252,6 +264,8 @@ impl UnifiedRecordingService {
         let recording_start_clone = recording_start;
         let stop_signal_input = stop_signal.clone();
 
+        let click_context_for_input = click_context.clone();
+        let session_id_for_input = session_id.clone();
         let input_handle = tokio::task::spawn_blocking(move || {
             Self::run_input_capture_blocking(
                 capture_keyboard,
@@ -260,6 +274,8 @@ impl UnifiedRecordingService {
                 input_config,
                 event_tx,
                 stop_signal_input,
+                click_context_for_input,
+                session_id_for_input,
             )
         });
 
@@ -275,7 +291,7 @@ impl UnifiedRecordingService {
         // Shared storage for overlay labels
         let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
         let overlay_labels_clone = overlay_labels.clone();
-        
+
         // Process events and call callbacks
         let stop_signal_process = stop_signal.clone();
         let process_handle = tokio::spawn(async move {
@@ -288,10 +304,8 @@ impl UnifiedRecordingService {
                 }
 
                 // Try to receive event with timeout to allow periodic stop signal checks
-                let event_result = tokio::time::timeout(
-                    Duration::from_millis(100),
-                    event_rx.recv(),
-                ).await;
+                let event_result =
+                    tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await;
 
                 let (event, event_time) = match event_result {
                     Ok(Some(event)) => event,
@@ -316,12 +330,16 @@ impl UnifiedRecordingService {
 
                 // Call appropriate callback
                 let (should_store, overlay_label) = match &event {
-                    InputEvent::Keyboard { .. } => {
-                        callback_clone.on_keyboard_event(&event, video_timestamp, recording_start_clone)
-                    }
-                    InputEvent::Mouse { .. } => {
-                        callback_clone.on_mouse_event(&event, video_timestamp, recording_start_clone)
-                    }
+                    InputEvent::Keyboard { .. } => callback_clone.on_keyboard_event(
+                        &event,
+                        video_timestamp,
+                        recording_start_clone,
+                    ),
+                    InputEvent::Mouse { .. } => callback_clone.on_mouse_event(
+                        &event,
+                        video_timestamp,
+                        recording_start_clone,
+                    ),
                 };
 
                 // Collect overlay labels if provided
@@ -340,25 +358,38 @@ impl UnifiedRecordingService {
                             let timestamp_for_event = timestamp.clone();
                             let pressed_for_event = *pressed;
                             tokio::spawn(async move {
-                                if let Err(e) = db_for_event.insert_event(
-                                    &session_id_for_event,
-                                    "keyboard",
-                                    Some(if pressed_for_event { "press" } else { "release" }),
-                                    Some(&key_for_event),
-                                    None,
-                                    None,
-                                    None,
-                                    Some(pressed_for_event),
-                                    &timestamp_for_event,
-                                    None, // timecode
-                                    None, // metadata
-                                    None, // screenshot_id
-                                ).await {
-                                    eprintln!("⚠️  Failed to store keyboard event in database: {}", e);
+                                if let Err(e) = db_for_event
+                                    .insert_event(
+                                        &session_id_for_event,
+                                        "keyboard",
+                                        Some(if pressed_for_event {
+                                            "press"
+                                        } else {
+                                            "release"
+                                        }),
+                                        Some(&key_for_event),
+                                        None,
+                                        None,
+                                        None,
+                                        Some(pressed_for_event),
+                                        &timestamp_for_event,
+                                        None, // timecode
+                                        None, // metadata
+                                        None, // screenshot_id
+                                    )
+                                    .await
+                                {
+                                    eprintln!(
+                                        "⚠️  Failed to store keyboard event in database: {}",
+                                        e
+                                    );
                                 }
 
                                 if pressed_for_event {
-                                    if let Err(e) = db_for_event.update_key_frequency(&session_id_for_event, &key_for_event).await {
+                                    if let Err(e) = db_for_event
+                                        .update_key_frequency(&session_id_for_event, &key_for_event)
+                                        .await
+                                    {
                                         eprintln!("⚠️  Failed to update key frequency: {}", e);
                                     }
                                 }
@@ -379,27 +410,39 @@ impl UnifiedRecordingService {
                             let y_for_event = *y;
                             let timestamp_for_event = timestamp.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = db_for_event.insert_event(
-                                    &session_id_for_event,
-                                    "mouse",
-                                    Some(&event_type_for_event),
-                                    None,
-                                    button_for_event.as_deref(),
-                                    x_for_event,
-                                    y_for_event,
-                                    None,
-                                    &timestamp_for_event,
-                                    None, // timecode
-                                    None, // metadata
-                                    None, // screenshot_id
-                                ).await {
+                                if let Err(e) = db_for_event
+                                    .insert_event(
+                                        &session_id_for_event,
+                                        "mouse",
+                                        Some(&event_type_for_event),
+                                        None,
+                                        button_for_event.as_deref(),
+                                        x_for_event,
+                                        y_for_event,
+                                        None,
+                                        &timestamp_for_event,
+                                        None, // timecode
+                                        None, // metadata
+                                        None, // screenshot_id
+                                    )
+                                    .await
+                                {
                                     eprintln!("⚠️  Failed to store mouse event in database: {}", e);
                                 }
 
                                 if event_type_for_event == "click" {
                                     if let Some(ref btn) = button_for_event {
-                                        if let Err(e) = db_for_event.update_mouse_button_frequency(&session_id_for_event, btn).await {
-                                            eprintln!("⚠️  Failed to update mouse button frequency: {}", e);
+                                        if let Err(e) = db_for_event
+                                            .update_mouse_button_frequency(
+                                                &session_id_for_event,
+                                                btn,
+                                            )
+                                            .await
+                                        {
+                                            eprintln!(
+                                                "⚠️  Failed to update mouse button frequency: {}",
+                                                e
+                                            );
                                         }
                                     }
                                 }
@@ -434,6 +477,8 @@ impl UnifiedRecordingService {
         input_config: InputCaptureConfig,
         event_tx: mpsc::UnboundedSender<(InputEvent, Instant)>,
         stop_signal: Arc<AtomicBool>,
+        click_context: Option<ClickContextHandle>,
+        session_id: String,
     ) -> Result<()> {
         use device_query::{DeviceQuery, DeviceState, Keycode};
         use std::collections::HashSet;
@@ -445,25 +490,27 @@ impl UnifiedRecordingService {
         let mut last_mouse_pos: Option<(i32, i32)> = None;
 
         // Open output file if specified
-        let mut file_handle: Option<std::fs::File> = if let Some(ref path) = input_config.output_file {
-            Some(
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .map_err(|e| {
-                        LoggerError::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Failed to open output file: {}", e),
-                        ))
-                    })?,
-            )
-        } else {
-            None
-        };
+        let mut file_handle: Option<std::fs::File> =
+            if let Some(ref path) = input_config.output_file {
+                Some(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .map_err(|e| {
+                            LoggerError::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to open output file: {}", e),
+                            ))
+                        })?,
+                )
+            } else {
+                None
+            };
 
         while !stop_signal.load(Ordering::SeqCst) {
-            let timestamp = chrono::Local::now().to_rfc3339();
+            let timestamp_utc = chrono::Utc::now();
+            let timestamp = timestamp_utc.with_timezone(&chrono::Local).to_rfc3339();
             let event_time = Instant::now();
 
             // Capture keyboard events
@@ -503,7 +550,9 @@ impl UnifiedRecordingService {
             if capture_mouse {
                 let mouse = device_state.get_mouse();
                 let current_pos = (mouse.coords.0, mouse.coords.1);
-                let pos_changed = last_mouse_pos.map(|last| last != current_pos).unwrap_or(true);
+                let pos_changed = last_mouse_pos
+                    .map(|last| last != current_pos)
+                    .unwrap_or(true);
                 last_mouse_pos = Some(current_pos);
 
                 let button_names = ["Left", "Right", "Middle", "X1", "X2"];
@@ -526,6 +575,14 @@ impl UnifiedRecordingService {
                         };
                         Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
                         let _ = event_tx.send((event, event_time));
+                        Self::notify_click_context(
+                            &click_context,
+                            &session_id,
+                            timestamp_utc,
+                            Some(button_name.clone()),
+                            Some(mouse.coords.0),
+                            Some(mouse.coords.1),
+                        );
                     } else if !pressed && was_pressed {
                         let event = InputEvent::Mouse {
                             event_type: "release".to_string(),
@@ -560,6 +617,25 @@ impl UnifiedRecordingService {
         Ok(())
     }
 
+    fn notify_click_context(
+        handle: &Option<ClickContextHandle>,
+        session_id: &str,
+        timestamp: DateTime<Utc>,
+        button: Option<String>,
+        x: Option<i32>,
+        y: Option<i32>,
+    ) {
+        if let Some(ctx) = handle {
+            ctx.trigger(ClickContextEvent::new(
+                Some(session_id.to_string()),
+                timestamp,
+                button,
+                x,
+                y,
+            ));
+        }
+    }
+
     fn run_screen_recording_blocking(
         config: ScreenRecordingConfig,
         stop_signal: Arc<AtomicBool>,
@@ -579,15 +655,14 @@ impl UnifiedRecordingService {
         };
 
         // Create recorder
-        let recorder = ScreenRecorder::new_with_config(recording_config.clone())
-            .map_err(|e| {
-                LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
-            })?;
+        let recorder = ScreenRecorder::new_with_config(recording_config.clone()).map_err(|e| {
+            LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
+        })?;
 
         // Start recording (this is blocking)
-        recorder.record(recording_config, stop_signal).map_err(|e| {
-            LoggerError::Other(format!("Screen recording failed: {}", e))
-        })?;
+        recorder
+            .record(recording_config, stop_signal)
+            .map_err(|e| LoggerError::Other(format!("Screen recording failed: {}", e)))?;
 
         Ok(())
     }
@@ -603,10 +678,10 @@ impl UnifiedRecordingService {
 
         // Create temporary output file
         let temp_output = video_path.with_extension("tmp.mp4");
-        
+
         // Build FFmpeg filter complex for overlays
         let mut filter_parts: Vec<String> = Vec::new();
-        
+
         // Add timestamp overlay if enabled
         if show_timestamp {
             // Draw timestamp in top-left corner
@@ -616,7 +691,7 @@ impl UnifiedRecordingService {
                 "drawtext=text='%{pts\\:hms}':fontcolor=white:fontsize=24:x=10:y=10:box=1:boxcolor=black@0.5:boxborderw=2".to_string()
             );
         }
-        
+
         // Add event labels if enabled
         if show_labels && !labels.is_empty() {
             // For each label, create a drawtext filter
@@ -624,28 +699,31 @@ impl UnifiedRecordingService {
             // For simplicity, we'll add a single label at a time using enable/disable
             for (idx, label) in labels.iter().enumerate() {
                 let start_time = label.timestamp;
-                let end_time = label.duration
-                    .map(|d| start_time + d)
-                    .unwrap_or_else(|| {
-                        // Default to 2 seconds if no duration specified
-                        start_time + 2.0
-                    });
-                
+                let end_time = label.duration.map(|d| start_time + d).unwrap_or_else(|| {
+                    // Default to 2 seconds if no duration specified
+                    start_time + 2.0
+                });
+
                 // Escape text for FFmpeg
                 // FFmpeg drawtext needs text escaped - replace single quotes and colons
-                let escaped_text = label.text
+                let escaped_text = label
+                    .text
                     .replace('\\', "\\\\")
                     .replace('\'', "\\'")
                     .replace(':', "\\:");
-                
+
                 // Use proper FFmpeg filter syntax
                 // For multiple drawtext filters, we chain them with commas
                 // Use simpler positioning - bottom center for labels
-                let x_pos = label.x.map(|x| x.to_string())
+                let x_pos = label
+                    .x
+                    .map(|x| x.to_string())
                     .unwrap_or_else(|| "(w-tw)/2".to_string()); // Center horizontally
-                let y_pos = label.y.map(|y| y.to_string())
+                let y_pos = label
+                    .y
+                    .map(|y| y.to_string())
                     .unwrap_or_else(|| format!("h-th-{}", 30 + (idx * 30))); // Stack from bottom
-                
+
                 // Build filter string
                 let filter_str = format!(
                     "drawtext=text='{}':fontcolor=yellow:fontsize=24:x={}:y={}:box=1:boxcolor=black@0.8:boxborderw=3:enable='between(t,{},{})'",
@@ -654,28 +732,36 @@ impl UnifiedRecordingService {
                 filter_parts.push(filter_str);
             }
         }
-        
+
         // If no overlays, just return (no processing needed)
         if filter_parts.is_empty() {
             return Ok(());
         }
-        
+
         // Combine all filters - chain them properly for multiple drawtext filters
         // FFmpeg requires chaining with commas for multiple filters on same input
         let filter_complex = filter_parts.join(",");
-        
+
         println!("🎬 Applying FFmpeg overlays...");
-        println!("   Timestamp overlay: {}", if show_timestamp { "✓" } else { "✗" });
+        println!(
+            "   Timestamp overlay: {}",
+            if show_timestamp { "✓" } else { "✗" }
+        );
         println!("   Event labels: {} labels", labels.len());
         if !labels.is_empty() {
             for (idx, label) in labels.iter().take(5).enumerate() {
-                println!("     {}. '{}' at {:.2}s", idx + 1, label.text, label.timestamp);
+                println!(
+                    "     {}. '{}' at {:.2}s",
+                    idx + 1,
+                    label.text,
+                    label.timestamp
+                );
             }
             if labels.len() > 5 {
                 println!("     ... and {} more", labels.len() - 5);
             }
         }
-        
+
         // Build FFmpeg command
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-i")
@@ -688,12 +774,12 @@ impl UnifiedRecordingService {
             .arg(&temp_output)
             .stderr(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped());
-        
+
         // Execute FFmpeg
-        let output = cmd.output().map_err(|e| {
-            LoggerError::Other(format!("Failed to execute FFmpeg: {}", e))
-        })?;
-        
+        let output = cmd
+            .output()
+            .map_err(|e| LoggerError::Other(format!("Failed to execute FFmpeg: {}", e)))?;
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -707,7 +793,7 @@ impl UnifiedRecordingService {
         } else {
             println!("✅ FFmpeg overlay processing completed");
         }
-        
+
         // Replace original file with processed version
         std::fs::rename(&temp_output, video_path).map_err(|e| {
             LoggerError::Io(std::io::Error::new(
@@ -715,7 +801,7 @@ impl UnifiedRecordingService {
                 format!("Failed to replace video file: {}", e),
             ))
         })?;
-        
+
         Ok(())
     }
 
@@ -727,9 +813,8 @@ impl UnifiedRecordingService {
         use std::io::Write;
 
         let output = match format {
-            "json" => serde_json::to_string(event).map_err(|e| {
-                LoggerError::Other(format!("Failed to serialize event: {}", e))
-            })?,
+            "json" => serde_json::to_string(event)
+                .map_err(|e| LoggerError::Other(format!("Failed to serialize event: {}", e)))?,
             "text" => event.to_text(),
             "both" => {
                 format!(
@@ -785,18 +870,21 @@ impl RecordingSession {
         let screen_result = self.screen_handle.await;
         let process_result = self.process_handle.await;
 
-        input_result.map_err(|e| LoggerError::Other(format!("Input capture task failed: {}", e)))??;
-        screen_result.map_err(|e| LoggerError::Other(format!("Screen recording task failed: {}", e)))??;
-        process_result.map_err(|e| LoggerError::Other(format!("Event processing task failed: {}", e)))??;
+        input_result
+            .map_err(|e| LoggerError::Other(format!("Input capture task failed: {}", e)))??;
+        screen_result
+            .map_err(|e| LoggerError::Other(format!("Screen recording task failed: {}", e)))??;
+        process_result
+            .map_err(|e| LoggerError::Other(format!("Event processing task failed: {}", e)))??;
 
         // Now that screen recording is complete, apply overlays
         let labels = self.overlay_labels.lock().unwrap().clone();
         println!("📝 Applying overlays: {} labels collected", labels.len());
-        
+
         if self.config.show_timestamp || self.config.show_labels {
             // Wait a moment to ensure file is fully written
             tokio::time::sleep(Duration::from_millis(500)).await;
-            
+
             if let Err(e) = UnifiedRecordingService::apply_video_overlays(
                 &self.config.screen_config.output_path,
                 &labels,
@@ -822,4 +910,3 @@ impl RecordingSession {
         self.recording_start
     }
 }
-

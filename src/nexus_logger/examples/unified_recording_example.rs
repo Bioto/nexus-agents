@@ -7,8 +7,8 @@
 //! 4. Start and stop recording
 
 use nexus_logger::{
-    EventCallback, InputEvent, UnifiedRecordingConfig, UnifiedRecordingService,
-    ScreenRecordingConfig, InputCaptureConfig,
+    EventCallback, InputCaptureConfig, InputEvent, ScreenRecordingConfig, UnifiedRecordingConfig,
+    UnifiedRecordingService,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,7 +51,10 @@ impl EventCallback for VideoTimestampCallback {
         video_timestamp: f64,
         _recording_start: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        if let InputEvent::Mouse { event_type, button, .. } = event {
+        if let InputEvent::Mouse {
+            event_type, button, ..
+        } = event
+        {
             if event_type == "click" {
                 println!(
                     "🎬 Video timestamp {}s: Mouse {} clicked",
@@ -123,4 +126,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

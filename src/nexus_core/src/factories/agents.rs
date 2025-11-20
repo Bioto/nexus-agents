@@ -114,13 +114,13 @@ impl AgentFactory {
     /// This will also generate Python tool files for any external MCP servers configured in mcp-servers.toml
     pub fn mcp_agent(servers_dir: impl Into<PathBuf>) -> Agent {
         let servers_path: PathBuf = servers_dir.into();
-        
+
         // Generate code for external servers from config if it exists
         let config_path = servers_path
             .parent()
             .map(|p| p.join("mcp-servers.toml"))
             .or_else(|| Some(std::path::PathBuf::from("mcp-servers.toml")));
-        
+
         if let Some(config_path) = config_path {
             if config_path.exists() {
                 // Use tokio runtime to run async code generation
@@ -146,7 +146,7 @@ impl AgentFactory {
                             .build()
                             .expect("Failed to create tokio runtime")
                     });
-                    
+
                     if let Err(e) = rt.block_on(nexus_mcp::generate_external_server_tools(
                         &config_path,
                         &servers_path,
@@ -156,7 +156,7 @@ impl AgentFactory {
                 }
             }
         }
-        
+
         let python_exec = PythonExec::new(&servers_path);
         let discovery_tool = ToolDiscovery::new(&servers_path);
         let execute_definition = python_exec.definition();

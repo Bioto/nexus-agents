@@ -43,9 +43,7 @@ pub async fn run_generate_code(args: GenerateCodeArgs) -> Result<(), NexusError>
 
     // Generate code files in directory structure
     let generator = CodeGenerator::new(&args.server_url);
-    generator
-        .generate_code_files(&args.output)
-        .await?;
+    generator.generate_code_files(&args.output).await?;
 
     println!(
         "Successfully generated code API in directory {}",

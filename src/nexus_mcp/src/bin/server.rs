@@ -3,8 +3,7 @@ use nexus_mcp::server::NexusMcpServer;
 use rmcp::serve_server;
 use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::{
-    session::local::LocalSessionManager, tower::StreamableHttpService,
-    StreamableHttpServerConfig,
+    session::local::LocalSessionManager, tower::StreamableHttpService, StreamableHttpServerConfig,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;

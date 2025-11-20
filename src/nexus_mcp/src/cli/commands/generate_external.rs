@@ -15,9 +15,7 @@ pub struct GenerateExternalArgs {
     pub output: PathBuf,
 }
 
-pub async fn run_generate_external(
-    args: GenerateExternalArgs,
-) -> Result<(), NexusError> {
+pub async fn run_generate_external(args: GenerateExternalArgs) -> Result<(), NexusError> {
     println!("Generating Python code API for external MCP servers...");
     println!("Config file: {}", args.config.display());
     println!("Output directory: {}", args.output.display());
@@ -30,5 +28,3 @@ pub async fn run_generate_external(
     );
     Ok(())
 }
-
-

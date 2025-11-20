@@ -15,8 +15,9 @@ pub struct LogArgs {
 
 /// Runs the log command based on args.
 pub fn run_log(args: LogArgs) -> Result<()> {
-    let message = args.message.unwrap_or_else(|| "No message provided".to_string());
+    let message = args
+        .message
+        .unwrap_or_else(|| "No message provided".to_string());
     println!("[{}] {}", args.level.to_uppercase(), message);
     Ok(())
 }
-

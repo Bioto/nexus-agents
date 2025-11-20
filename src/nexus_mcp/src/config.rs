@@ -72,12 +72,14 @@ impl ServerConfig {
                         self.name
                     )));
                 }
-                
+
                 if self.url.is_none() {
                     // Local server - validate bind address
                     self.parse_bind_addr()?;
                     if self.path.is_empty() {
-                        return Err(NexusError::Config("Path cannot be empty for HTTP transport".to_string()));
+                        return Err(NexusError::Config(
+                            "Path cannot be empty for HTTP transport".to_string(),
+                        ));
                     }
                 } else {
                     // External server - validate URL
@@ -97,7 +99,7 @@ impl ServerConfig {
             ))),
         }
     }
-    
+
     /// Check if this is an external server (has URL)
     pub fn is_external(&self) -> bool {
         self.url.is_some()
@@ -144,12 +146,12 @@ impl MultiServerConfig {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| NexusError::Config(format!("Failed to read config file: {}", e)))?;
         let mut config: MultiServerConfig = toml::from_str(&contents)?;
-        
+
         // Expand environment variables in headers
         for server in &mut config.servers {
             server.expand_env_vars();
         }
-        
+
         config.validate()?;
         Ok(config)
     }
@@ -157,14 +159,19 @@ impl MultiServerConfig {
     /// Validate all server configurations
     pub fn validate(&self) -> Result<(), NexusError> {
         if self.servers.is_empty() {
-            return Err(NexusError::Config("At least one server configuration is required".to_string()));
+            return Err(NexusError::Config(
+                "At least one server configuration is required".to_string(),
+            ));
         }
 
         // Check for duplicate names
         let mut names = std::collections::HashSet::new();
         for server in &self.servers {
             if names.contains(&server.name) {
-                return Err(NexusError::Config(format!("Duplicate server name: {}", server.name)));
+                return Err(NexusError::Config(format!(
+                    "Duplicate server name: {}",
+                    server.name
+                )));
             }
             names.insert(&server.name);
             server.validate()?;
@@ -188,4 +195,3 @@ impl MultiServerConfig {
         Ok(())
     }
 }
-

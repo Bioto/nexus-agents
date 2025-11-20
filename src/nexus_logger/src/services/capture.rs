@@ -1,6 +1,7 @@
 use crate::error::{LoggerError, Result};
+use crate::services::click_context::{ClickContextEvent, ClickContextHandle, ClickContextService};
 use crate::services::database::Database;
-use chrono::Local;
+use chrono::{Local, Utc};
 use device_query::{DeviceQuery, DeviceState, Keycode};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -43,22 +44,20 @@ impl InputEvent {
                 x,
                 y,
                 timestamp: _,
-            } => {
-                match event_type.as_str() {
-                    "click" => {
-                        format!(
-                            "[MOUSE] CLICK: {} at ({}, {})",
-                            button.as_ref().unwrap_or(&"unknown".to_string()),
-                            x.unwrap_or(0),
-                            y.unwrap_or(0)
-                        )
-                    }
-                    "move" => {
-                        format!("[MOUSE] MOVE: ({}, {})", x.unwrap_or(0), y.unwrap_or(0))
-                    }
-                    _ => format!("[MOUSE] {}: {:?}", event_type, button),
+            } => match event_type.as_str() {
+                "click" => {
+                    format!(
+                        "[MOUSE] CLICK: {} at ({}, {})",
+                        button.as_ref().unwrap_or(&"unknown".to_string()),
+                        x.unwrap_or(0),
+                        y.unwrap_or(0)
+                    )
                 }
-            }
+                "move" => {
+                    format!("[MOUSE] MOVE: ({}, {})", x.unwrap_or(0), y.unwrap_or(0))
+                }
+                _ => format!("[MOUSE] {}: {:?}", event_type, button),
+            },
         }
     }
 }
@@ -76,6 +75,8 @@ pub async fn run_capture_service(
     let db = Database::new().await?;
     let session_id = Uuid::new_v4().to_string();
     db.create_session(&session_id).await?;
+
+    let click_context = ClickContextService::maybe_start();
 
     let device_state = DeviceState::new();
     let mut last_keys: Vec<Keycode> = vec![];
@@ -127,25 +128,33 @@ pub async fn run_capture_service(
     let db_handle = tokio::spawn(async move {
         while let Some((event, session_id)) = db_rx.recv().await {
             match &event {
-                InputEvent::Keyboard { key, pressed, timestamp } => {
-                    let _ = db_clone_for_handle.insert_event(
-                        &session_id,
-                        "keyboard",
-                        Some(if *pressed { "press" } else { "release" }),
-                        Some(key),
-                        None,
-                        None,
-                        None,
-                        Some(*pressed),
-                        timestamp,
-                        None, // timecode
-                        None, // metadata
-                        None, // screenshot_id
-                    ).await;
+                InputEvent::Keyboard {
+                    key,
+                    pressed,
+                    timestamp,
+                } => {
+                    let _ = db_clone_for_handle
+                        .insert_event(
+                            &session_id,
+                            "keyboard",
+                            Some(if *pressed { "press" } else { "release" }),
+                            Some(key),
+                            None,
+                            None,
+                            None,
+                            Some(*pressed),
+                            timestamp,
+                            None, // timecode
+                            None, // metadata
+                            None, // screenshot_id
+                        )
+                        .await;
 
                     // Update key frequency
                     if *pressed {
-                        let _ = db_clone_for_handle.update_key_frequency(&session_id, key).await;
+                        let _ = db_clone_for_handle
+                            .update_key_frequency(&session_id, key)
+                            .await;
                     }
                 }
                 InputEvent::Mouse {
@@ -155,25 +164,29 @@ pub async fn run_capture_service(
                     y,
                     timestamp,
                 } => {
-                    let _ = db_clone_for_handle.insert_event(
-                        &session_id,
-                        "mouse",
-                        Some(event_type),
-                        None,
-                        button.as_deref(),
-                        *x,
-                        *y,
-                        None,
-                        timestamp,
-                        None, // timecode
-                        None, // metadata
-                        None, // screenshot_id
-                    ).await;
+                    let _ = db_clone_for_handle
+                        .insert_event(
+                            &session_id,
+                            "mouse",
+                            Some(event_type),
+                            None,
+                            button.as_deref(),
+                            *x,
+                            *y,
+                            None,
+                            timestamp,
+                            None, // timecode
+                            None, // metadata
+                            None, // screenshot_id
+                        )
+                        .await;
 
                     // Update button frequency for clicks
                     if event_type == "click" {
                         if let Some(ref btn) = button {
-                            let _ = db_clone_for_handle.update_mouse_button_frequency(&session_id, btn).await;
+                            let _ = db_clone_for_handle
+                                .update_mouse_button_frequency(&session_id, btn)
+                                .await;
                         }
                     }
                 }
@@ -185,11 +198,8 @@ pub async fn run_capture_service(
         // Send event to async database handler
         let _ = db_tx.send((event.clone(), session_id.clone()));
         let output = match format.as_str() {
-            "json" => {
-                serde_json::to_string(event).map_err(|e| {
-                    LoggerError::Other(format!("Failed to serialize event: {}", e))
-                })?
-            }
+            "json" => serde_json::to_string(event)
+                .map_err(|e| LoggerError::Other(format!("Failed to serialize event: {}", e)))?,
             "text" => event.to_text(),
             "both" => {
                 format!(
@@ -218,7 +228,8 @@ pub async fn run_capture_service(
 
     // Main capture loop
     while running.load(Ordering::SeqCst) {
-        let timestamp = Local::now().to_rfc3339();
+        let timestamp_utc = Utc::now();
+        let timestamp = timestamp_utc.with_timezone(&Local).to_rfc3339();
 
         // Capture keyboard events
         if capture_keyboard {
@@ -237,7 +248,7 @@ pub async fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
-                    
+
                     // Update metrics
                     metrics.keyboard_events += 1;
                     metrics.keyboard_presses += 1;
@@ -254,7 +265,7 @@ pub async fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
-                    
+
                     // Update metrics
                     metrics.keyboard_events += 1;
                     metrics.keyboard_releases += 1;
@@ -268,7 +279,9 @@ pub async fn run_capture_service(
         if capture_mouse {
             let mouse = device_state.get_mouse();
             let current_pos = (mouse.coords.0, mouse.coords.1);
-            let pos_changed = last_mouse_pos.map(|last| last != current_pos).unwrap_or(true);
+            let pos_changed = last_mouse_pos
+                .map(|last| last != current_pos)
+                .unwrap_or(true);
             last_mouse_pos = Some(current_pos);
 
             // Button names for indices: 0=Left, 1=Right, 2=Middle, etc.
@@ -293,11 +306,22 @@ pub async fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
-                    
+                    trigger_click_context(
+                        &click_context,
+                        &session_id,
+                        timestamp_utc,
+                        Some(button_name.clone()),
+                        Some(mouse.coords.0),
+                        Some(mouse.coords.1),
+                    );
+
                     // Update metrics
                     metrics.mouse_events += 1;
                     metrics.mouse_clicks += 1;
-                    *metrics.mouse_button_frequency.entry(button_name.clone()).or_insert(0) += 1;
+                    *metrics
+                        .mouse_button_frequency
+                        .entry(button_name.clone())
+                        .or_insert(0) += 1;
                 } else if !pressed && was_pressed {
                     // Button release
                     let event = InputEvent::Mouse {
@@ -308,7 +332,7 @@ pub async fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
-                    
+
                     // Update metrics
                     metrics.mouse_events += 1;
                     metrics.mouse_releases += 1;
@@ -325,7 +349,7 @@ pub async fn run_capture_service(
                     timestamp: timestamp.clone(),
                 };
                 write_output(&event)?;
-                
+
                 // Update metrics
                 metrics.mouse_events += 1;
                 metrics.mouse_moves += 1;
@@ -348,10 +372,9 @@ pub async fn run_capture_service(
             metrics.mouse_moves,
         );
         tokio::spawn(async move {
-            let _ = db_clone_for_metrics.update_session_metrics(
-                &session_id_for_metrics,
-                ke, kp, kr, me, mc, mr, mm,
-            ).await;
+            let _ = db_clone_for_metrics
+                .update_session_metrics(&session_id_for_metrics, ke, kp, kr, me, mc, mr, mm)
+                .await;
         });
 
         // Display metrics summary periodically
@@ -367,7 +390,10 @@ pub async fn run_capture_service(
             } else {
                 0.0
             };
-            println!("\n📊 Metrics: {} events, {:.2} events/sec", total_events, events_per_second);
+            println!(
+                "\n📊 Metrics: {} events, {:.2} events/sec",
+                total_events, events_per_second
+            );
             metrics.last_metrics_display = Instant::now();
         }
 
@@ -377,21 +403,23 @@ pub async fn run_capture_service(
 
     // Close the database channel
     drop(db_tx);
-    
+
     // Wait for database operations to complete
     let _ = db_handle.await;
 
     // Final metrics update and display
-    db_clone_for_final.update_session_metrics(
-        &session_id,
-        metrics.keyboard_events,
-        metrics.keyboard_presses,
-        metrics.keyboard_releases,
-        metrics.mouse_events,
-        metrics.mouse_clicks,
-        metrics.mouse_releases,
-        metrics.mouse_moves,
-    ).await?;
+    db_clone_for_final
+        .update_session_metrics(
+            &session_id,
+            metrics.keyboard_events,
+            metrics.keyboard_presses,
+            metrics.keyboard_releases,
+            metrics.mouse_events,
+            metrics.mouse_clicks,
+            metrics.mouse_releases,
+            metrics.mouse_moves,
+        )
+        .await?;
     db_clone_for_final.end_session(&session_id).await?;
 
     // Display final summary
@@ -399,6 +427,25 @@ pub async fn run_capture_service(
     display_metrics_summary(&metrics, &db_clone_for_final, &session_id).await?;
 
     Ok(())
+}
+
+fn trigger_click_context(
+    handle: &Option<ClickContextHandle>,
+    session_id: &str,
+    timestamp: chrono::DateTime<Utc>,
+    button: Option<String>,
+    x: Option<i32>,
+    y: Option<i32>,
+) {
+    if let Some(ctx) = handle {
+        ctx.trigger(ClickContextEvent::new(
+            Some(session_id.to_string()),
+            timestamp,
+            button,
+            x,
+            y,
+        ));
+    }
 }
 
 struct MetricsTracker {
@@ -443,7 +490,7 @@ async fn display_metrics_summary(
     println!("║   Clicks: {:>43} ║", metrics.mouse_clicks);
     println!("║   Releases: {:>40} ║", metrics.mouse_releases);
     println!("║   Moves: {:>44} ║", metrics.mouse_moves);
-    
+
     // Top keys
     if !metrics.key_frequency.is_empty() {
         println!("╠════════════════════════════════════════════════════════╣");
@@ -465,7 +512,7 @@ async fn display_metrics_summary(
             println!("║   {:30} {:>10} ║", button, count);
         }
     }
-    
+
     println!("╚════════════════════════════════════════════════════════╝");
 
     Ok(())
@@ -476,7 +523,7 @@ fn format_duration(duration: std::time::Duration) -> String {
     let hours = secs / 3600;
     let minutes = (secs % 3600) / 60;
     let seconds = secs % 60;
-    
+
     if hours > 0 {
         format!("{}h {}m {}s", hours, minutes, seconds)
     } else if minutes > 0 {
@@ -485,4 +532,3 @@ fn format_duration(duration: std::time::Duration) -> String {
         format!("{}s", seconds)
     }
 }
-

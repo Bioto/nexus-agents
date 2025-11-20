@@ -67,20 +67,20 @@ impl McpClient {
             .post(&url)
             .header("Accept", "application/json, text/event-stream")
             .header("Content-Type", "application/json");
-        
+
         // Add custom headers
         for (key, value) in &self.headers {
             init_request_builder = init_request_builder.header(key, value);
         }
-        
-        let init_response = init_request_builder
-            .json(&init_request)
-            .send()
-            .await?;
+
+        let init_response = init_request_builder.json(&init_request).send().await?;
 
         if !init_response.status().is_success() {
             let status = init_response.status();
-            let error_text = init_response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
+            let error_text = init_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unable to read error response".to_string());
             return Err(NexusError::Http(format!(
                 "MCP server returned error during initialization: {} - {}",
                 status, error_text
@@ -95,17 +95,24 @@ impl McpClient {
             .map(|s| s.to_string());
 
         // Parse SSE format response
-        let init_text = init_response.text().await.map_err(|e| NexusError::Http(e.to_string()))?;
+        let init_text = init_response
+            .text()
+            .await
+            .map_err(|e| NexusError::Http(e.to_string()))?;
 
         // If response is empty or doesn't match SSE format, try to parse as JSON directly
         let init_json = if init_text.trim().is_empty() {
             return Err(NexusError::Parse(
-                "Empty response from MCP server. Check authentication headers.".to_string()
+                "Empty response from MCP server. Check authentication headers.".to_string(),
             ));
         } else if init_text.trim().starts_with('{') {
             // Direct JSON response
             serde_json::from_str(&init_text).map_err(|e| {
-                NexusError::Parse(format!("Failed to parse JSON response: {} - Response: {}", e, &init_text[..init_text.len().min(500)]))
+                NexusError::Parse(format!(
+                    "Failed to parse JSON response: {} - Response: {}",
+                    e,
+                    &init_text[..init_text.len().min(500)]
+                ))
             })?
         } else {
             // Try SSE format
@@ -170,10 +177,7 @@ impl McpClient {
             tools_request_builder = tools_request_builder.header("mcp-session-id", sid);
         }
 
-        let tools_response = tools_request_builder
-            .json(&tools_request)
-            .send()
-            .await?;
+        let tools_response = tools_request_builder.json(&tools_request).send().await?;
 
         if !tools_response.status().is_success() {
             return Err(NexusError::Http(format!(
@@ -183,28 +187,26 @@ impl McpClient {
         }
 
         // Parse SSE format response
-        let tools_text = tools_response.text().await.map_err(|e| NexusError::Http(e.to_string()))?;
+        let tools_text = tools_response
+            .text()
+            .await
+            .map_err(|e| NexusError::Http(e.to_string()))?;
 
         let tools_json = self.parse_sse_response(&tools_text)?;
 
         // Handle JSON-RPC response
         if let Some(error) = tools_json.get("error") {
-            return Err(NexusError::Server(format!(
-                "MCP server error: {}",
-                error
-            )));
+            return Err(NexusError::Server(format!("MCP server error: {}", error)));
         }
 
-        let result = tools_json.get("result").ok_or_else(|| {
-            NexusError::Parse("Missing 'result' in response".to_string())
-        })?;
+        let result = tools_json
+            .get("result")
+            .ok_or_else(|| NexusError::Parse("Missing 'result' in response".to_string()))?;
 
         let tools = result
             .get("tools")
             .and_then(|t| t.as_array())
-            .ok_or_else(|| {
-                NexusError::Parse("Missing 'tools' array in result".to_string())
-            })?;
+            .ok_or_else(|| NexusError::Parse("Missing 'tools' array in result".to_string()))?;
 
         let mut tool_defs = Vec::new();
         for tool in tools {
@@ -248,9 +250,9 @@ impl McpClient {
         if let Ok(json) = serde_json::from_str::<Value>(text.trim()) {
             return Ok(json);
         }
-        
+
         let mut json_data = String::new();
-        
+
         // Try SSE format
         for line in text.lines() {
             let line = line.trim();
@@ -258,29 +260,30 @@ impl McpClient {
                 json_data.push_str(data);
             }
         }
-        
+
         if !json_data.is_empty() {
             // Try to parse the accumulated data
-             if let Ok(json) = serde_json::from_str::<Value>(&json_data) {
+            if let Ok(json) = serde_json::from_str::<Value>(&json_data) {
                 return Ok(json);
             }
-            
+
             // If that failed, maybe it was multiple independent JSON objects?
             // Try to parse the last one found
-             for line in text.lines().rev() {
+            for line in text.lines().rev() {
                 let line = line.trim();
                 if let Some(data) = line.strip_prefix("data: ") {
-                     if let Ok(json) = serde_json::from_str::<Value>(data) {
+                    if let Ok(json) = serde_json::from_str::<Value>(data) {
                         return Ok(json);
                     }
                 }
-             }
-             
-             return Err(NexusError::Parse(format!(
-                 "Failed to parse SSE JSON data: {}", json_data
-             )));
+            }
+
+            return Err(NexusError::Parse(format!(
+                "Failed to parse SSE JSON data: {}",
+                json_data
+            )));
         }
-        
+
         // If neither worked, return error with response preview
         let preview = if text.len() > 500 {
             format!("{}...", &text[..500])

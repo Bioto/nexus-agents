@@ -1,7 +1,7 @@
 use crate::load_env;
 use crate::models::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Error, Result,
-    ResponseFormat,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Error, ResponseFormat,
+    Result,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -994,7 +994,7 @@ impl ResponsesClient {
             if !request_body["text"].is_object() {
                 request_body["text"] = serde_json::json!({});
             }
-            
+
             let format_value = match response_format {
                 ResponseFormat::JsonObject => {
                     // For json_object, Responses API requires a name field
@@ -1007,7 +1007,7 @@ impl ResponsesClient {
                     // For json_schema, extract name, schema, and optional strict from the wrapper
                     let mut schema_value = serde_json::to_value(&json_schema.schema)
                         .map_err(|e| Error::Other(format!("Failed to serialize schema: {}", e)))?;
-                    
+
                     // Responses API requires additionalProperties to be explicitly set to false
                     // Always set it to false as required by the API
                     if let Some(schema_obj) = schema_value.as_object_mut() {
@@ -1016,22 +1016,22 @@ impl ResponsesClient {
                             serde_json::Value::Bool(false),
                         );
                     }
-                    
+
                     let mut format_obj = serde_json::json!({
                         "type": "json_schema",
                         "name": json_schema.name,
                         "schema": schema_value
                     });
-                    
+
                     // Add strict if present
                     if let Some(strict) = json_schema.strict {
                         format_obj["strict"] = serde_json::Value::Bool(strict);
                     }
-                    
+
                     format_obj
                 }
             };
-            
+
             request_body["text"]["format"] = format_value;
         }
 
