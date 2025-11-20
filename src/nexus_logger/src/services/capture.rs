@@ -1,13 +1,16 @@
 use crate::error::{LoggerError, Result};
+use crate::services::database::Database;
 use chrono::Local;
 use device_query::{DeviceQuery, DeviceState, Keycode};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum InputEvent {
@@ -28,7 +31,7 @@ pub enum InputEvent {
 }
 
 impl InputEvent {
-    fn to_text(&self) -> String {
+    pub fn to_text(&self) -> String {
         match self {
             InputEvent::Keyboard { key, pressed, .. } => {
                 let action = if *pressed { "PRESS" } else { "RELEASE" };
@@ -66,14 +69,36 @@ pub fn run_capture_service(
     capture_mouse_moves: bool,
     format: String,
     output_file: Option<PathBuf>,
+    database_path: PathBuf,
+    metrics_interval: u64,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
+    // Initialize database
+    let db = Database::new(&database_path)?;
+    let session_id = Uuid::new_v4().to_string();
+    db.create_session(&session_id)?;
+
     let device_state = DeviceState::new();
     let mut last_keys: Vec<Keycode> = vec![];
     let mut last_mouse_buttons: Vec<bool> = vec![];
 
     // Track last mouse position for move detection
     let mut last_mouse_pos: Option<(i32, i32)> = None;
+
+    // Metrics tracking
+    let mut metrics = MetricsTracker {
+        keyboard_events: 0,
+        keyboard_presses: 0,
+        keyboard_releases: 0,
+        mouse_events: 0,
+        mouse_clicks: 0,
+        mouse_releases: 0,
+        mouse_moves: 0,
+        key_frequency: HashMap::new(),
+        mouse_button_frequency: HashMap::new(),
+        start_time: Instant::now(),
+        last_metrics_display: Instant::now(),
+    };
 
     // Open output file if specified
     let mut file_handle: Option<std::fs::File> = if let Some(ref path) = output_file {
@@ -94,6 +119,53 @@ pub fn run_capture_service(
     };
 
     let mut write_output = |event: &InputEvent| -> Result<()> {
+        // Store event in database
+        match event {
+            InputEvent::Keyboard { key, pressed, timestamp } => {
+                db.insert_event(
+                    &session_id,
+                    "keyboard",
+                    Some(if *pressed { "press" } else { "release" }),
+                    Some(key),
+                    None,
+                    None,
+                    None,
+                    Some(*pressed),
+                    timestamp,
+                )?;
+
+                // Update key frequency
+                if *pressed {
+                    db.update_key_frequency(&session_id, key)?;
+                }
+            }
+            InputEvent::Mouse {
+                event_type,
+                button,
+                x,
+                y,
+                timestamp,
+            } => {
+                db.insert_event(
+                    &session_id,
+                    "mouse",
+                    Some(event_type),
+                    None,
+                    button.as_deref(),
+                    *x,
+                    *y,
+                    None,
+                    timestamp,
+                )?;
+
+                // Update button frequency for clicks
+                if event_type == "click" {
+                    if let Some(ref btn) = button {
+                        db.update_mouse_button_frequency(&session_id, btn)?;
+                    }
+                }
+            }
+        }
         let output = match format.as_str() {
             "json" => {
                 serde_json::to_string(event).map_err(|e| {
@@ -140,12 +212,18 @@ pub fn run_capture_service(
             // Detect key presses (new keys not in last_keys)
             for key in &keys {
                 if !last_keys_set.contains(key) {
+                    let key_str = format!("{:?}", key);
                     let event = InputEvent::Keyboard {
-                        key: format!("{:?}", key),
+                        key: key_str.clone(),
                         pressed: true,
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
+                    
+                    // Update metrics
+                    metrics.keyboard_events += 1;
+                    metrics.keyboard_presses += 1;
+                    *metrics.key_frequency.entry(key_str).or_insert(0) += 1;
                 }
             }
 
@@ -158,6 +236,10 @@ pub fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
+                    
+                    // Update metrics
+                    metrics.keyboard_events += 1;
+                    metrics.keyboard_releases += 1;
                 }
             }
 
@@ -193,6 +275,11 @@ pub fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
+                    
+                    // Update metrics
+                    metrics.mouse_events += 1;
+                    metrics.mouse_clicks += 1;
+                    *metrics.mouse_button_frequency.entry(button_name.clone()).or_insert(0) += 1;
                 } else if !pressed && was_pressed {
                     // Button release
                     let event = InputEvent::Mouse {
@@ -203,6 +290,10 @@ pub fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
+                    
+                    // Update metrics
+                    metrics.mouse_events += 1;
+                    metrics.mouse_releases += 1;
                 }
             }
 
@@ -216,16 +307,142 @@ pub fn run_capture_service(
                     timestamp: timestamp.clone(),
                 };
                 write_output(&event)?;
+                
+                // Update metrics
+                metrics.mouse_events += 1;
+                metrics.mouse_moves += 1;
             }
 
             // Update last mouse buttons
             last_mouse_buttons = mouse.button_pressed.clone();
         }
 
+        // Update database metrics periodically
+        db.update_session_metrics(
+            &session_id,
+            metrics.keyboard_events,
+            metrics.keyboard_presses,
+            metrics.keyboard_releases,
+            metrics.mouse_events,
+            metrics.mouse_clicks,
+            metrics.mouse_releases,
+            metrics.mouse_moves,
+        )?;
+
+        // Display metrics summary periodically
+        if metrics_interval > 0
+            && metrics.last_metrics_display.elapsed().as_secs() >= metrics_interval
+        {
+            display_metrics_summary(&metrics, &db, &session_id)?;
+            metrics.last_metrics_display = Instant::now();
+        }
+
         // Small delay to avoid excessive CPU usage
         std::thread::sleep(Duration::from_millis(10));
     }
 
+    // Final metrics update and display
+    db.update_session_metrics(
+        &session_id,
+        metrics.keyboard_events,
+        metrics.keyboard_presses,
+        metrics.keyboard_releases,
+        metrics.mouse_events,
+        metrics.mouse_clicks,
+        metrics.mouse_releases,
+        metrics.mouse_moves,
+    )?;
+    db.end_session(&session_id)?;
+
+    // Display final summary
+    println!("\n📊 Final Session Summary:");
+    display_metrics_summary(&metrics, &db, &session_id)?;
+
     Ok(())
+}
+
+struct MetricsTracker {
+    keyboard_events: u64,
+    keyboard_presses: u64,
+    keyboard_releases: u64,
+    mouse_events: u64,
+    mouse_clicks: u64,
+    mouse_releases: u64,
+    mouse_moves: u64,
+    key_frequency: HashMap<String, u64>,
+    mouse_button_frequency: HashMap<String, u64>,
+    start_time: Instant,
+    last_metrics_display: Instant,
+}
+
+fn display_metrics_summary(
+    metrics: &MetricsTracker,
+    _db: &Database,
+    _session_id: &str,
+) -> Result<()> {
+    let duration = metrics.start_time.elapsed();
+    let total_events = metrics.keyboard_events + metrics.mouse_events;
+    let events_per_second = if duration.as_secs() > 0 {
+        total_events as f64 / duration.as_secs() as f64
+    } else {
+        0.0
+    };
+
+    println!("\n╔════════════════════════════════════════════════════════╗");
+    println!("║              📊 Metrics Summary                        ║");
+    println!("╠════════════════════════════════════════════════════════╣");
+    println!("║ Duration: {:>42} ║", format_duration(duration));
+    println!("║ Total Events: {:>38} ║", total_events);
+    println!("║ Events/sec: {:>40.2} ║", events_per_second);
+    println!("╠════════════════════════════════════════════════════════╣");
+    println!("║ Keyboard Events: {:>35} ║", metrics.keyboard_events);
+    println!("║   Presses: {:>42} ║", metrics.keyboard_presses);
+    println!("║   Releases: {:>40} ║", metrics.keyboard_releases);
+    println!("╠════════════════════════════════════════════════════════╣");
+    println!("║ Mouse Events: {:>38} ║", metrics.mouse_events);
+    println!("║   Clicks: {:>43} ║", metrics.mouse_clicks);
+    println!("║   Releases: {:>40} ║", metrics.mouse_releases);
+    println!("║   Moves: {:>44} ║", metrics.mouse_moves);
+    
+    // Top keys
+    if !metrics.key_frequency.is_empty() {
+        println!("╠════════════════════════════════════════════════════════╣");
+        println!("║ Top 5 Keys:                                            ║");
+        let mut sorted_keys: Vec<_> = metrics.key_frequency.iter().collect();
+        sorted_keys.sort_by(|a, b| b.1.cmp(a.1));
+        for (i, (key, count)) in sorted_keys.iter().take(5).enumerate() {
+            println!("║   {}. {:30} {:>10} ║", i + 1, key, count);
+        }
+    }
+
+    // Top mouse buttons
+    if !metrics.mouse_button_frequency.is_empty() {
+        println!("╠════════════════════════════════════════════════════════╣");
+        println!("║ Mouse Button Clicks:                                   ║");
+        let mut sorted_buttons: Vec<_> = metrics.mouse_button_frequency.iter().collect();
+        sorted_buttons.sort_by(|a, b| b.1.cmp(a.1));
+        for (button, count) in sorted_buttons.iter() {
+            println!("║   {:30} {:>10} ║", button, count);
+        }
+    }
+    
+    println!("╚════════════════════════════════════════════════════════╝");
+
+    Ok(())
+}
+
+fn format_duration(duration: std::time::Duration) -> String {
+    let secs = duration.as_secs();
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
 }
 

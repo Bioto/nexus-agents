@@ -26,6 +26,14 @@ pub struct CaptureArgs {
     /// Include mouse move events (can be verbose)
     #[arg(long, default_value = "false")]
     pub mouse_moves: bool,
+
+    /// Database path for storing events and metrics (default: events.db)
+    #[arg(short = 'd', long, default_value = "events.db")]
+    pub database: PathBuf,
+
+    /// Show metrics summary every N seconds (0 to disable)
+    #[arg(short = 's', long, default_value = "10")]
+    pub metrics_interval: u64,
 }
 
 /// Runs the capture command based on args.
@@ -61,6 +69,8 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     } else {
         println!("   Output: stdout");
     }
+    println!("   Database: {}", args.database.display());
+    println!("   Metrics interval: {}s", args.metrics_interval);
     println!("\nPress Ctrl+C to stop\n");
 
     // Run the capture service
@@ -70,6 +80,8 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
         args.mouse_moves,
         format,
         args.output,
+        args.database,
+        args.metrics_interval,
         running,
     )?;
 

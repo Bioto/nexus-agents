@@ -18,9 +18,12 @@ pub enum Commands {
     Log(commands::log::LogArgs),
     /// Capture keyboard and mouse input
     Capture(commands::capture::CaptureArgs),
+    /// Unified recording (screen + input capture with callbacks)
+    Unified(commands::unified::UnifiedArgs),
 }
 
 // Re-export command handlers for convenience
 pub use commands::log::run_log;
 pub use commands::capture::run_capture;
+pub use commands::unified::run_unified;
 
