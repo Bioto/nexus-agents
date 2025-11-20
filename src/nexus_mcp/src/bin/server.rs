@@ -1,12 +1,10 @@
 use clap::Parser;
 use nexus_mcp::server::NexusMcpServer;
 use rmcp::serve_server;
-use rmcp::transport::{
-    stdio,
-    streamable_http_server::{
-        session::local::LocalSessionManager, tower::StreamableHttpService,
-        StreamableHttpServerConfig,
-    },
+use rmcp::transport::stdio;
+use rmcp::transport::streamable_http_server::{
+    session::local::LocalSessionManager, tower::StreamableHttpService,
+    StreamableHttpServerConfig,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -39,9 +37,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Starting Nexus MCP Server...");
     eprintln!("Transport: {}", args.transport);
 
-    let server = NexusMcpServer::new();
+    // Create server instance
+    // let server = NexusMcpServer::new(); // Not needed here as HTTP service creates its own
 
-    match "http" {
+    match args.transport.as_str() {
+        "stdio" => {
+            eprintln!("Using stdio transport");
+            let server = NexusMcpServer::new();
+            serve_server(server, stdio()).await?;
+        }
         "http" => {
             eprintln!("Using streamable HTTP transport");
             let bind_addr: SocketAddr = args

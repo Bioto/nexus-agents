@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod codegen;
 pub mod config;
+pub mod error;
 pub mod external_servers;
 pub mod mcp_client;
 pub mod schema;

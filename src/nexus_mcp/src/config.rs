@@ -1,6 +1,9 @@
+use crate::error::NexusError;
+use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// Configuration for a single MCP server instance
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,47 +54,47 @@ pub struct MultiServerConfig {
 
 impl ServerConfig {
     /// Parse bind address, returning an error if invalid
-    pub fn parse_bind_addr(&self) -> Result<SocketAddr, String> {
+    pub fn parse_bind_addr(&self) -> Result<SocketAddr, NexusError> {
         self.bind
             .parse()
-            .map_err(|e| format!("Invalid bind address '{}': {}", self.bind, e))
+            .map_err(|e| NexusError::Config(format!("Invalid bind address '{}': {}", self.bind, e)))
     }
 
     /// Validate the configuration
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), NexusError> {
         match self.transport.as_str() {
             "stdio" => Ok(()),
             "http" => {
                 // For HTTP, either bind (local server) or url (external server) must be specified
                 if self.url.is_some() && !self.bind.is_empty() && self.bind != default_bind() {
-                    return Err(format!(
+                    return Err(NexusError::Config(format!(
                         "Server '{}': Cannot specify both 'url' and 'bind' - use 'url' for external servers, 'bind' for local servers",
                         self.name
-                    ));
+                    )));
                 }
                 
                 if self.url.is_none() {
                     // Local server - validate bind address
                     self.parse_bind_addr()?;
                     if self.path.is_empty() {
-                        return Err("Path cannot be empty for HTTP transport".to_string());
+                        return Err(NexusError::Config("Path cannot be empty for HTTP transport".to_string()));
                     }
                 } else {
                     // External server - validate URL
                     let url_str = self.url.as_ref().unwrap();
                     if !url_str.starts_with("http://") && !url_str.starts_with("https://") {
-                        return Err(format!(
+                        return Err(NexusError::Config(format!(
                             "Server '{}': URL must start with 'http://' or 'https://'",
                             self.name
-                        ));
+                        )));
                     }
                 }
                 Ok(())
             }
-            _ => Err(format!(
+            _ => Err(NexusError::Config(format!(
                 "Invalid transport type: {}. Must be 'stdio' or 'http'",
                 self.transport
-            )),
+            ))),
         }
     }
     
@@ -119,68 +122,28 @@ impl ServerConfig {
 /// Expand environment variable references in a string
 /// Supports ${VAR_NAME} and $VAR_NAME syntax
 fn expand_env_var(value: &str) -> String {
-    let mut result = String::new();
-    let mut chars = value.chars().peekable();
-    
-    while let Some(ch) = chars.next() {
-        if ch == '$' {
-            // Check for ${VAR_NAME} syntax
-            if chars.peek() == Some(&'{') {
-                chars.next(); // consume '{'
-                let mut var_name = String::new();
-                while let Some(ch) = chars.next() {
-                    if ch == '}' {
-                        break;
-                    }
-                    var_name.push(ch);
-                }
-                // Get environment variable value
-                let env_value = std::env::var(&var_name)
-                    .unwrap_or_else(|_| {
-                        eprintln!("Warning: Environment variable '{}' not found, using empty string", var_name);
-                        String::new()
-                    });
-                result.push_str(&env_value);
-            } else {
-                // Check for $VAR_NAME syntax (simple form)
-                let mut var_name = String::new();
-                let mut found_var = false;
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_alphanumeric() || ch == '_' {
-                        var_name.push(ch);
-                        chars.next();
-                        found_var = true;
-                    } else {
-                        break;
-                    }
-                }
-                if found_var {
-                    let env_value = std::env::var(&var_name)
-                        .unwrap_or_else(|_| {
-                            eprintln!("Warning: Environment variable '{}' not found, using empty string", var_name);
-                            String::new()
-                        });
-                    result.push_str(&env_value);
-                } else {
-                    // Not a variable, just a literal $
-                    result.push('$');
-                }
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-    
-    result
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\$\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?").unwrap());
+
+    re.replace_all(value, |caps: &Captures| {
+        let var_name = &caps[1];
+        std::env::var(var_name).unwrap_or_else(|_| {
+            eprintln!(
+                "Warning: Environment variable '{}' not found, using empty string",
+                var_name
+            );
+            String::new()
+        })
+    })
+    .to_string()
 }
 
 impl MultiServerConfig {
     /// Load configuration from a TOML file
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, NexusError> {
         let contents = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| format!("Failed to read config file: {}", e))?;
-        let mut config: MultiServerConfig = toml::from_str(&contents)
-            .map_err(|e| format!("Failed to parse config file: {}", e))?;
+            .map_err(|e| NexusError::Config(format!("Failed to read config file: {}", e)))?;
+        let mut config: MultiServerConfig = toml::from_str(&contents)?;
         
         // Expand environment variables in headers
         for server in &mut config.servers {
@@ -192,16 +155,16 @@ impl MultiServerConfig {
     }
 
     /// Validate all server configurations
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), NexusError> {
         if self.servers.is_empty() {
-            return Err("At least one server configuration is required".to_string());
+            return Err(NexusError::Config("At least one server configuration is required".to_string()));
         }
 
         // Check for duplicate names
         let mut names = std::collections::HashSet::new();
         for server in &self.servers {
             if names.contains(&server.name) {
-                return Err(format!("Duplicate server name: {}", server.name));
+                return Err(NexusError::Config(format!("Duplicate server name: {}", server.name)));
             }
             names.insert(&server.name);
             server.validate()?;
@@ -213,10 +176,10 @@ impl MultiServerConfig {
             if server.transport == "http" && !server.is_external() {
                 let addr = server.parse_bind_addr()?;
                 if bind_addrs.contains(&addr) {
-                    return Err(format!(
+                    return Err(NexusError::Config(format!(
                         "Duplicate bind address {} for server '{}'",
                         addr, server.name
-                    ));
+                    )));
                 }
                 bind_addrs.insert(addr);
             }

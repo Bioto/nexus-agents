@@ -1,24 +1,5 @@
+use crate::error::NexusError;
 use serde_json::{json, Value};
-
-/// Error type for MCP client operations
-#[derive(Debug)]
-pub enum McpClientError {
-    HttpError(String),
-    ParseError(String),
-    ServerError(String),
-}
-
-impl std::fmt::Display for McpClientError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpClientError::HttpError(msg) => write!(f, "HTTP error: {}", msg),
-            McpClientError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            McpClientError::ServerError(msg) => write!(f, "Server error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for McpClientError {}
 
 /// Tool definition structure
 #[derive(Debug, Clone)]
@@ -58,7 +39,7 @@ impl McpClient {
     }
 
     /// Fetch tool definitions from MCP server
-    pub async fn fetch_tools(&self) -> Result<Vec<ToolDefinition>, McpClientError> {
+    pub async fn fetch_tools(&self) -> Result<Vec<ToolDefinition>, NexusError> {
         // Handle both cases: server_url with or without /mcp
         let url = if self.server_url.ends_with("/mcp") {
             self.server_url.clone()
@@ -95,15 +76,12 @@ impl McpClient {
         let init_response = init_request_builder
             .json(&init_request)
             .send()
-            .await
-            .map_err(|e| {
-                McpClientError::HttpError(format!("Failed to connect to MCP server: {}", e))
-            })?;
+            .await?;
 
         if !init_response.status().is_success() {
             let status = init_response.status();
             let error_text = init_response.text().await.unwrap_or_else(|_| "Unable to read error response".to_string());
-            return Err(McpClientError::HttpError(format!(
+            return Err(NexusError::Http(format!(
                 "MCP server returned error during initialization: {} - {}",
                 status, error_text
             )));
@@ -117,19 +95,17 @@ impl McpClient {
             .map(|s| s.to_string());
 
         // Parse SSE format response
-        let init_text = init_response.text().await.map_err(|e| {
-            McpClientError::ParseError(format!("Failed to read init response: {}", e))
-        })?;
+        let init_text = init_response.text().await.map_err(|e| NexusError::Http(e.to_string()))?;
 
         // If response is empty or doesn't match SSE format, try to parse as JSON directly
         let init_json = if init_text.trim().is_empty() {
-            return Err(McpClientError::ParseError(
+            return Err(NexusError::Parse(
                 "Empty response from MCP server. Check authentication headers.".to_string()
             ));
         } else if init_text.trim().starts_with('{') {
             // Direct JSON response
             serde_json::from_str(&init_text).map_err(|e| {
-                McpClientError::ParseError(format!("Failed to parse JSON response: {} - Response: {}", e, &init_text[..init_text.len().min(500)]))
+                NexusError::Parse(format!("Failed to parse JSON response: {} - Response: {}", e, &init_text[..init_text.len().min(500)]))
             })?
         } else {
             // Try SSE format
@@ -137,7 +113,7 @@ impl McpClient {
         };
 
         if let Some(error) = init_json.get("error") {
-            return Err(McpClientError::ServerError(format!(
+            return Err(NexusError::Server(format!(
                 "MCP initialization error: {}",
                 error
             )));
@@ -197,40 +173,37 @@ impl McpClient {
         let tools_response = tools_request_builder
             .json(&tools_request)
             .send()
-            .await
-            .map_err(|e| McpClientError::HttpError(format!("Failed to request tools: {}", e)))?;
+            .await?;
 
         if !tools_response.status().is_success() {
-            return Err(McpClientError::HttpError(format!(
+            return Err(NexusError::Http(format!(
                 "MCP server returned error: {}",
                 tools_response.status()
             )));
         }
 
         // Parse SSE format response
-        let tools_text = tools_response.text().await.map_err(|e| {
-            McpClientError::ParseError(format!("Failed to read tools response: {}", e))
-        })?;
+        let tools_text = tools_response.text().await.map_err(|e| NexusError::Http(e.to_string()))?;
 
         let tools_json = self.parse_sse_response(&tools_text)?;
 
         // Handle JSON-RPC response
         if let Some(error) = tools_json.get("error") {
-            return Err(McpClientError::ServerError(format!(
+            return Err(NexusError::Server(format!(
                 "MCP server error: {}",
                 error
             )));
         }
 
         let result = tools_json.get("result").ok_or_else(|| {
-            McpClientError::ParseError("Missing 'result' in response".to_string())
+            NexusError::Parse("Missing 'result' in response".to_string())
         })?;
 
         let tools = result
             .get("tools")
             .and_then(|t| t.as_array())
             .ok_or_else(|| {
-                McpClientError::ParseError("Missing 'tools' array in result".to_string())
+                NexusError::Parse("Missing 'tools' array in result".to_string())
             })?;
 
         let mut tool_defs = Vec::new();
@@ -242,11 +215,11 @@ impl McpClient {
     }
 
     /// Parse a single tool definition from JSON
-    fn parse_tool_definition(&self, tool: &Value) -> Result<ToolDefinition, McpClientError> {
+    fn parse_tool_definition(&self, tool: &Value) -> Result<ToolDefinition, NexusError> {
         let name = tool
             .get("name")
             .and_then(|n| n.as_str())
-            .ok_or_else(|| McpClientError::ParseError("Missing 'name' in tool".to_string()))?
+            .ok_or_else(|| NexusError::Parse("Missing 'name' in tool".to_string()))?
             .to_string();
 
         let description = tool
@@ -269,20 +242,43 @@ impl McpClient {
 
     /// Parse SSE (Server-Sent Events) format response
     /// Looks for lines starting with "data: " and extracts JSON
-    fn parse_sse_response(&self, text: &str) -> Result<Value, McpClientError> {
+    /// Handles multiple data lines by accumulating them if needed, or picking the last valid one
+    fn parse_sse_response(&self, text: &str) -> Result<Value, NexusError> {
         // First, try to parse as direct JSON (some servers return JSON directly)
         if let Ok(json) = serde_json::from_str::<Value>(text.trim()) {
             return Ok(json);
         }
         
-        // Then try SSE format
+        let mut json_data = String::new();
+        
+        // Try SSE format
         for line in text.lines() {
             let line = line.trim();
-            if let Some(json_str) = line.strip_prefix("data: ") {
-                return serde_json::from_str(json_str).map_err(|e| {
-                    McpClientError::ParseError(format!("Failed to parse SSE JSON: {} - Line: {}", e, json_str))
-                });
+            if let Some(data) = line.strip_prefix("data: ") {
+                json_data.push_str(data);
             }
+        }
+        
+        if !json_data.is_empty() {
+            // Try to parse the accumulated data
+             if let Ok(json) = serde_json::from_str::<Value>(&json_data) {
+                return Ok(json);
+            }
+            
+            // If that failed, maybe it was multiple independent JSON objects?
+            // Try to parse the last one found
+             for line in text.lines().rev() {
+                let line = line.trim();
+                if let Some(data) = line.strip_prefix("data: ") {
+                     if let Ok(json) = serde_json::from_str::<Value>(data) {
+                        return Ok(json);
+                    }
+                }
+             }
+             
+             return Err(NexusError::Parse(format!(
+                 "Failed to parse SSE JSON data: {}", json_data
+             )));
         }
         
         // If neither worked, return error with response preview
@@ -291,7 +287,7 @@ impl McpClient {
         } else {
             text.to_string()
         };
-        Err(McpClientError::ParseError(format!(
+        Err(NexusError::Parse(format!(
             "No 'data: ' line found in SSE response and not valid JSON. Response preview: {}",
             preview
         )))

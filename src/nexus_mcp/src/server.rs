@@ -11,12 +11,12 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 /// MCP Server with tools, resources, and prompts for testing
 #[derive(Clone)]
 pub struct NexusMcpServer {
-    counter: Arc<Mutex<i32>>,
+    counter: Arc<AtomicI32>,
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     #[allow(dead_code)]
@@ -28,7 +28,7 @@ pub struct NexusMcpServer {
 impl NexusMcpServer {
     pub fn new() -> Self {
         Self {
-            counter: Arc::new(Mutex::new(0)),
+            counter: Arc::new(AtomicI32::new(0)),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
@@ -56,21 +56,20 @@ impl NexusMcpServer {
     /// Counter tool - increments and returns counter value
     #[tool(description = "Increments an internal counter and returns the new value")]
     async fn increment_counter(&self) -> Result<CallToolResult, McpError> {
-        let mut counter = self.counter.lock().await;
-        *counter += 1;
+        let new_value = self.counter.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Counter value: {}",
-            *counter
+            new_value
         ))]))
     }
 
     /// Get counter tool - returns current counter value
     #[tool(description = "Returns the current value of the internal counter")]
     async fn get_counter(&self) -> Result<CallToolResult, McpError> {
-        let counter = self.counter.lock().await;
+        let counter = self.counter.load(Ordering::SeqCst);
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Current counter: {}",
-            *counter
+            counter
         ))]))
     }
 
@@ -405,10 +404,10 @@ impl ServerHandler for NexusMcpServer {
                     )],
                 }),
                 "test://counter/state" => {
-                    let counter_value = counter.lock().await;
+                    let counter_value = counter.load(Ordering::SeqCst);
                     Ok(ReadResourceResult {
                         contents: vec![ResourceContents::text(
-                            format!("Current counter value: {}", *counter_value),
+                            format!("Current counter value: {}", counter_value),
                             "test://counter/state",
                         )],
                     })

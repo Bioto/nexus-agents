@@ -1,3 +1,4 @@
+use crate::error::NexusError;
 use clap::Args;
 use std::io::{self, Write};
 
@@ -9,7 +10,7 @@ pub struct ShellArgs {
     pub verbose: bool,
 }
 
-pub fn run_shell(args: ShellArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_shell(args: ShellArgs) -> Result<(), NexusError> {
     println!("Nexus MCP Shell v0.1.0");
     println!("Type 'help' for available commands, 'exit' or 'quit' to exit");
     if args.verbose {
@@ -18,10 +19,10 @@ pub fn run_shell(args: ShellArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         print!("mcp> ");
-        io::stdout().flush()?;
+        io::stdout().flush().map_err(|e| NexusError::Io(e))?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        io::stdin().read_line(&mut input).map_err(|e| NexusError::Io(e))?;
         let input = input.trim();
 
         if input.is_empty() {

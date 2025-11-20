@@ -14,9 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             nexus_mcp::run_generate_external(args).await?;
         }
         Commands::StartServers(args) => {
-            nexus_mcp::run_start_servers(args)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) })?;
+            nexus_mcp::run_start_servers(args).await?;
         }
     }
 

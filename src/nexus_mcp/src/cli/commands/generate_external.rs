@@ -1,3 +1,4 @@
+use crate::error::NexusError;
 use crate::external_servers::generate_external_server_tools;
 use clap::Args;
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ pub struct GenerateExternalArgs {
 
 pub async fn run_generate_external(
     args: GenerateExternalArgs,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), NexusError> {
     println!("Generating Python code API for external MCP servers...");
     println!("Config file: {}", args.config.display());
     println!("Output directory: {}", args.output.display());

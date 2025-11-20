@@ -1,43 +1,6 @@
+use crate::error::NexusError;
 use crate::mcp_client::{McpClient, ToolDefinition};
 use crate::schema::SchemaConverter;
-
-/// Error type for code generation
-#[derive(Debug)]
-pub enum CodegenError {
-    HttpError(String),
-    ParseError(String),
-    ServerError(String),
-}
-
-impl std::fmt::Display for CodegenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CodegenError::HttpError(msg) => write!(f, "HTTP error: {}", msg),
-            CodegenError::ParseError(msg) => write!(f, "Parse error: {}", msg),
-            CodegenError::ServerError(msg) => write!(f, "Server error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for CodegenError {}
-
-impl From<crate::mcp_client::McpClientError> for CodegenError {
-    fn from(err: crate::mcp_client::McpClientError) -> Self {
-        match err {
-            crate::mcp_client::McpClientError::HttpError(msg) => CodegenError::HttpError(msg),
-            crate::mcp_client::McpClientError::ParseError(msg) => CodegenError::ParseError(msg),
-            crate::mcp_client::McpClientError::ServerError(msg) => CodegenError::ServerError(msg),
-        }
-    }
-}
-
-impl From<crate::schema::SchemaError> for CodegenError {
-    fn from(err: crate::schema::SchemaError) -> Self {
-        match err {
-            crate::schema::SchemaError::ParseError(msg) => CodegenError::ParseError(msg),
-        }
-    }
-}
 
 /// Generate Python code API for MCP tools
 pub struct CodeGenerator {
@@ -84,19 +47,19 @@ impl CodeGenerator {
     pub async fn generate_code_files(
         &self,
         output_dir: &std::path::Path,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), NexusError> {
         let tools = self.mcp_client.fetch_tools().await?;
 
         // Create server directory (e.g., servers/context7)
         let server_dir = output_dir.join(&self.server_name);
         std::fs::create_dir_all(&server_dir)
-            .map_err(|e| CodegenError::ParseError(format!("Failed to create directory: {}", e)))?;
+            .map_err(|e| NexusError::Io(e))?;
 
         // Generate shared MCP client
         let client_code = self.generate_mcp_client_code()?;
         let client_path = output_dir.join("_mcp_client.py");
         std::fs::write(&client_path, client_code)
-            .map_err(|e| CodegenError::ParseError(format!("Failed to write client file: {}", e)))?;
+            .map_err(|e| NexusError::Io(e))?;
 
         // Generate individual tool files
         let mut tool_exports = Vec::new();
@@ -107,7 +70,7 @@ impl CodeGenerator {
             let file_path = server_dir.join(&file_name);
 
             std::fs::write(&file_path, tool_code).map_err(|e| {
-                CodegenError::ParseError(format!("Failed to write tool file: {}", e))
+                NexusError::Io(e)
             })?;
 
             tool_exports.push((function_name, tool.name.clone()));
@@ -117,20 +80,20 @@ impl CodeGenerator {
         let index_code = self.generate_index_code(&tool_exports)?;
         let index_path = server_dir.join("index.py");
         std::fs::write(&index_path, index_code)
-            .map_err(|e| CodegenError::ParseError(format!("Failed to write index file: {}", e)))?;
+            .map_err(|e| NexusError::Io(e))?;
 
         // Generate __init__.py
         let init_code = self.generate_init_code(&tool_exports)?;
         let init_path = server_dir.join("__init__.py");
         std::fs::write(&init_path, init_code).map_err(|e| {
-            CodegenError::ParseError(format!("Failed to write __init__ file: {}", e))
+            NexusError::Io(e)
         })?;
 
         Ok(())
     }
 
     /// Generate MCP client code (shared across all tool files)
-    fn generate_mcp_client_code(&self) -> Result<String, CodegenError> {
+    fn generate_mcp_client_code(&self) -> Result<String, NexusError> {
         let mut code = String::new();
 
         code.push_str("# uv: dependencies = [\"httpx\"]\n\n");
@@ -292,7 +255,7 @@ impl CodeGenerator {
     }
 
     /// Generate a single tool file (self-contained with inline MCP client)
-    fn generate_tool_file_code(&self, tool: &ToolDefinition) -> Result<String, CodegenError> {
+    fn generate_tool_file_code(&self, tool: &ToolDefinition) -> Result<String, NexusError> {
         let mut code = String::new();
 
         code.push_str("# uv: dependencies = [\"httpx\"]\n\n");
@@ -492,7 +455,7 @@ impl CodeGenerator {
             let input_type = SchemaConverter::schema_to_typed_dict(
                 &tool.input_schema,
                 &format!("{}Input", self.to_pascal_case(&tool.name)),
-            )?;
+            ).map_err(|e| NexusError::Parse(e.to_string()))?;
             code.push_str(&input_type);
             code.push_str("\n\n");
         }
@@ -533,7 +496,7 @@ impl CodeGenerator {
     fn generate_index_code(
         &self,
         tool_exports: &[(String, String)],
-    ) -> Result<String, CodegenError> {
+    ) -> Result<String, NexusError> {
         let mut code = String::new();
 
         code.push_str("\"\"\"\n");
@@ -563,7 +526,7 @@ impl CodeGenerator {
     fn generate_init_code(
         &self,
         tool_exports: &[(String, String)],
-    ) -> Result<String, CodegenError> {
+    ) -> Result<String, NexusError> {
         let mut code = String::new();
 
         code.push_str("\"\"\"\n");

@@ -1,4 +1,5 @@
 use crate::codegen::CodeGenerator;
+use crate::error::NexusError;
 use clap::Args;
 use std::fs;
 use std::path::PathBuf;
@@ -19,7 +20,7 @@ pub struct GenerateCodeArgs {
     pub overwrite: bool,
 }
 
-pub async fn run_generate_code(args: GenerateCodeArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_generate_code(args: GenerateCodeArgs) -> Result<(), NexusError> {
     println!("Generating Python code API for MCP tools...");
     println!("Server URL: {}", args.server_url);
     println!("Output directory: {}", args.output.display());
@@ -30,23 +31,21 @@ pub async fn run_generate_code(args: GenerateCodeArgs) -> Result<(), Box<dyn std
             .map(|mut entries| entries.next().is_some())
             .unwrap_or(false);
         if has_content {
-            return Err(format!(
+            return Err(NexusError::Config(format!(
                 "Directory {} already exists and has content. Use --overwrite to replace it.",
                 args.output.display()
-            )
-            .into());
+            )));
         }
     }
 
     // Create output directory if it doesn't exist
-    fs::create_dir_all(&args.output)?;
+    fs::create_dir_all(&args.output).map_err(|e| NexusError::Io(e))?;
 
     // Generate code files in directory structure
     let generator = CodeGenerator::new(&args.server_url);
     generator
         .generate_code_files(&args.output)
-        .await
-        .map_err(|e| format!("Failed to generate code: {}", e))?;
+        .await?;
 
     println!(
         "Successfully generated code API in directory {}",

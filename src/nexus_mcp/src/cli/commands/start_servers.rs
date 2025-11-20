@@ -1,4 +1,5 @@
 use crate::config::{MultiServerConfig, ServerConfig};
+use crate::error::NexusError;
 use crate::server::NexusMcpServer;
 use clap::Args;
 use rmcp::transport::streamable_http_server::{
@@ -28,17 +29,15 @@ struct ServerHandle {
     name: String,
     #[allow(dead_code)] // Reserved for future manual shutdown functionality
     shutdown_tx: oneshot::Sender<()>,
-    join_handle: tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send>>>,
+    join_handle: tokio::task::JoinHandle<Result<(), NexusError>>,
 }
 
 /// Start a single HTTP server instance
 async fn start_http_server(
     config: ServerConfig,
     shutdown_token: CancellationToken,
-) -> Result<ServerHandle, Box<dyn std::error::Error + Send>> {
-    let bind_addr: SocketAddr = config
-        .parse_bind_addr()
-        .map_err(|e| -> Box<dyn std::error::Error + Send> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)) })?;
+) -> Result<ServerHandle, NexusError> {
+    let bind_addr: SocketAddr = config.parse_bind_addr()?;
     let path = config.path.clone();
     let name = config.name.clone();
     let name_for_logging = name.clone();
@@ -58,7 +57,7 @@ async fn start_http_server(
     let router = axum::Router::new().nest_service(&path, service);
     let tcp_listener = tokio::net::TcpListener::bind(bind_addr)
         .await
-        .map_err(|e| -> Box<dyn std::error::Error + Send> { Box::new(e) })?;
+        .map_err(|e| NexusError::Io(e))?;
 
     eprintln!(
         "[{}] HTTP server started. Endpoint: http://{}{}",
@@ -73,10 +72,10 @@ async fn start_http_server(
             shutdown_rx.await.ok();
         };
 
-            axum::serve(tcp_listener, router)
-                .with_graceful_shutdown(shutdown_future)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send> { Box::new(e) })?;
+        axum::serve(tcp_listener, router)
+            .with_graceful_shutdown(shutdown_future)
+            .await
+            .map_err(|e| NexusError::Io(e))?;
 
         eprintln!("[{}] Server shutdown complete", name_for_logging);
         Ok(())
@@ -90,31 +89,25 @@ async fn start_http_server(
 }
 
 /// Start a single stdio server instance
-/// Note: stdio servers are not recommended in multi-server mode as they require
-/// exclusive access to stdin/stdout. This function returns an error to prevent conflicts.
 async fn start_stdio_server(
     config: ServerConfig,
     _shutdown_token: CancellationToken,
-) -> Result<ServerHandle, Box<dyn std::error::Error + Send>> {
-    Err(Box::new(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        format!(
-            "stdio transport is not supported in multi-server mode. \
-             Server '{}' cannot use stdio transport as it requires exclusive access to stdin/stdout. \
-             Please use HTTP transport for multi-server setups or run stdio servers separately.",
-            config.name
-        ),
-    )) as Box<dyn std::error::Error + Send>)
+) -> Result<ServerHandle, NexusError> {
+    Err(NexusError::Config(format!(
+        "stdio transport is not supported in multi-server mode. \
+            Server '{}' cannot use stdio transport as it requires exclusive access to stdin/stdout. \
+            Please use HTTP transport for multi-server setups or run stdio servers separately.",
+        config.name
+    )))
 }
 
 /// Start all servers from configuration
 pub async fn run_start_servers(
     args: StartServersArgs,
-) -> Result<(), Box<dyn std::error::Error + Send>> {
+) -> Result<(), NexusError> {
     load_dotenv();
     eprintln!("Loading configuration from: {}", args.config.display());
-    let config = MultiServerConfig::from_file(&args.config)
-        .map_err(|e| -> Box<dyn std::error::Error + Send> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())) })?;
+    let config = MultiServerConfig::from_file(&args.config)?;
 
     eprintln!("Found {} server(s) in configuration", config.servers.len());
 
@@ -141,10 +134,10 @@ pub async fn run_start_servers(
             "http" => start_http_server(server_config, shutdown_token.clone()).await?,
             "stdio" => start_stdio_server(server_config, shutdown_token.clone()).await?,
             _ => {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("Unsupported transport type: {}", server_config.transport),
-                )) as Box<dyn std::error::Error + Send>);
+                return Err(NexusError::Config(format!(
+                    "Unsupported transport type: {}",
+                    server_config.transport
+                )));
             }
         };
         handles.push(handle);
@@ -174,10 +167,7 @@ pub async fn run_start_servers(
             }
             Err(e) => {
                 eprintln!("[{}] Server task error: {}", name, e);
-                results.push(Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Task join error: {}", e),
-                )) as Box<dyn std::error::Error + Send>));
+                results.push(Err(NexusError::Server(format!("Task join error: {}", e))));
             }
         }
     }
