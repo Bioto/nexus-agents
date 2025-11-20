@@ -27,9 +27,8 @@ pub struct CaptureArgs {
     #[arg(long, default_value = "false")]
     pub mouse_moves: bool,
 
-    /// Database path for storing events and metrics (default: events.db)
-    #[arg(short = 'd', long, default_value = "events.db")]
-    pub database: PathBuf,
+    /// Note: Database is now configured via ClickHouse environment variables
+    /// (CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_DATABASE, etc.)
 
     /// Show metrics summary every N seconds (0 to disable)
     #[arg(short = 's', long, default_value = "10")]
@@ -37,7 +36,7 @@ pub struct CaptureArgs {
 }
 
 /// Runs the capture command based on args.
-pub fn run_capture(args: CaptureArgs) -> Result<()> {
+pub async fn run_capture(args: CaptureArgs) -> Result<()> {
     // Validate format
     let format = match args.format.as_str() {
         "json" | "text" | "both" => args.format.clone(),
@@ -69,21 +68,20 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
     } else {
         println!("   Output: stdout");
     }
-    println!("   Database: {}", args.database.display());
+    println!("   Database: ClickHouse (configured via environment variables)");
     println!("   Metrics interval: {}s", args.metrics_interval);
     println!("\nPress Ctrl+C to stop\n");
 
-    // Run the capture service
+    // Run the capture service (async)
     crate::services::capture::run_capture_service(
         args.keyboard,
         args.mouse,
         args.mouse_moves,
         format,
         args.output,
-        args.database,
         args.metrics_interval,
         running,
-    )?;
+    ).await?;
 
     println!("\n✅ Capture stopped.");
     Ok(())

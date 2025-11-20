@@ -235,8 +235,8 @@ impl UnifiedRecordingService {
         let recording_start = Utc::now();
         
         // Initialize database
-        let db = Database::new(&self.config.database_path)?;
-        db.create_session(&session_id)?;
+        let db = Database::new().await?;
+        db.create_session(&session_id).await?;
 
         // Channel for events from input capture
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(InputEvent, Instant)>();
@@ -334,25 +334,35 @@ impl UnifiedRecordingService {
                     let timestamp = Local::now().to_rfc3339();
                     match &event {
                         InputEvent::Keyboard { key, pressed, .. } => {
-                            if let Err(e) = db_clone.insert_event(
-                                &session_id_clone,
-                                "keyboard",
-                                Some(if *pressed { "press" } else { "release" }),
-                                Some(key),
-                                None,
-                                None,
-                                None,
-                                Some(*pressed),
-                                &timestamp,
-                            ) {
-                                eprintln!("⚠️  Failed to store keyboard event in database: {}", e);
-                            }
-
-                            if *pressed {
-                                if let Err(e) = db_clone.update_key_frequency(&session_id_clone, key) {
-                                    eprintln!("⚠️  Failed to update key frequency: {}", e);
+                            let db_for_event = db_clone.clone();
+                            let session_id_for_event = session_id_clone.clone();
+                            let key_for_event = key.clone();
+                            let timestamp_for_event = timestamp.clone();
+                            let pressed_for_event = *pressed;
+                            tokio::spawn(async move {
+                                if let Err(e) = db_for_event.insert_event(
+                                    &session_id_for_event,
+                                    "keyboard",
+                                    Some(if pressed_for_event { "press" } else { "release" }),
+                                    Some(&key_for_event),
+                                    None,
+                                    None,
+                                    None,
+                                    Some(pressed_for_event),
+                                    &timestamp_for_event,
+                                    None, // timecode
+                                    None, // metadata
+                                    None, // screenshot_id
+                                ).await {
+                                    eprintln!("⚠️  Failed to store keyboard event in database: {}", e);
                                 }
-                            }
+
+                                if pressed_for_event {
+                                    if let Err(e) = db_for_event.update_key_frequency(&session_id_for_event, &key_for_event).await {
+                                        eprintln!("⚠️  Failed to update key frequency: {}", e);
+                                    }
+                                }
+                            });
                         }
                         InputEvent::Mouse {
                             event_type,
@@ -361,27 +371,39 @@ impl UnifiedRecordingService {
                             y,
                             timestamp: _,
                         } => {
-                            if let Err(e) = db_clone.insert_event(
-                                &session_id_clone,
-                                "mouse",
-                                Some(event_type),
-                                None,
-                                button.as_deref(),
-                                *x,
-                                *y,
-                                None,
-                                &timestamp,
-                            ) {
-                                eprintln!("⚠️  Failed to store mouse event in database: {}", e);
-                            }
+                            let db_for_event = db_clone.clone();
+                            let session_id_for_event = session_id_clone.clone();
+                            let event_type_for_event = event_type.clone();
+                            let button_for_event = button.clone();
+                            let x_for_event = *x;
+                            let y_for_event = *y;
+                            let timestamp_for_event = timestamp.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = db_for_event.insert_event(
+                                    &session_id_for_event,
+                                    "mouse",
+                                    Some(&event_type_for_event),
+                                    None,
+                                    button_for_event.as_deref(),
+                                    x_for_event,
+                                    y_for_event,
+                                    None,
+                                    &timestamp_for_event,
+                                    None, // timecode
+                                    None, // metadata
+                                    None, // screenshot_id
+                                ).await {
+                                    eprintln!("⚠️  Failed to store mouse event in database: {}", e);
+                                }
 
-                            if event_type == "click" {
-                                if let Some(ref btn) = button {
-                                    if let Err(e) = db_clone.update_mouse_button_frequency(&session_id_clone, btn) {
-                                        eprintln!("⚠️  Failed to update mouse button frequency: {}", e);
+                                if event_type_for_event == "click" {
+                                    if let Some(ref btn) = button_for_event {
+                                        if let Err(e) = db_for_event.update_mouse_button_frequency(&session_id_for_event, btn).await {
+                                            eprintln!("⚠️  Failed to update mouse button frequency: {}", e);
+                                        }
                                     }
                                 }
-                            }
+                            });
                         }
                     }
                 }
@@ -486,10 +508,10 @@ impl UnifiedRecordingService {
 
                 let button_names = ["Left", "Right", "Middle", "X1", "X2"];
 
-                for (idx, &pressed) in mouse.button_pressed.iter().enumerate() {
+                for (idx, &pressed) in mouse.button_pressed.iter().enumerate().skip(1) {
                     let was_pressed = last_mouse_buttons.get(idx).copied().unwrap_or(false);
                     let button_name = button_names
-                        .get(idx)
+                        .get(idx - 1)
                         .copied()
                         .map(String::from)
                         .unwrap_or_else(|| format!("Button{}", idx));

@@ -35,6 +35,7 @@ mime = "0.3"
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = "0.4.38"
+clickhouse-rs = { version = "1.1.0-alpha.1", features = ["tls"] }
 nexus_sandbox = { path = "../nexus_sandbox" }
 nexus_mcp = { path = "../nexus_mcp" }
 

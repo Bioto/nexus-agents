@@ -1,0 +1,4 @@
+<clickhouse>
+    <http_server_default_response><![CDATA[<html><body>OK</body></html>]]></http_server_default_response>
+</clickhouse>
+

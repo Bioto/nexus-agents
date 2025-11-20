@@ -1,12 +1,16 @@
 use crate::error::{LoggerError, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use nexus_core::services::{ClickHouseConfig, ClickHouseService};
+use serde_json::Value;
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
+/// ClickHouse-based database for storing events, sessions, and screenshots
+#[derive(Clone)]
 pub struct Database {
-    conn: Arc<Mutex<Connection>>,
+    service: Arc<ClickHouseService>,
+    initialized: Arc<Mutex<bool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,120 +31,164 @@ pub struct Metrics {
 }
 
 impl Database {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open(path).map_err(|e| {
-            LoggerError::Other(format!("Failed to open database: {}", e))
-        })?;
+    /// Create a new database instance with ClickHouse service from environment
+    pub async fn new() -> Result<Self> {
+        let config = ClickHouseConfig::from_env();
+        let connection_url = config.connection_url();
+        eprintln!("asdConnecting to ClickHouse at: {}", connection_url);
+
+        let service = ClickHouseService::new(config)
+            .await
+            .map_err(|e| LoggerError::Configuration(format!(
+                "Failed to create ClickHouse service: {}",
+                e
+            )))?;
 
         let db = Self {
-            conn: Arc::new(Mutex::new(conn)),
+            service: Arc::new(service),
+            initialized: Arc::new(Mutex::new(false)),
         };
 
-        db.init_schema()?;
+        db.init_schema().await?;
         Ok(db)
     }
 
-    fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+    /// Create a new database instance with custom ClickHouse configuration
+    pub async fn with_config(config: ClickHouseConfig) -> Result<Self> {
+        let connection_url = config.connection_url();
+        eprintln!("Connecting to ClickHouse at: {}", connection_url);
 
-        // Events table
-        conn.execute(
+        let service = ClickHouseService::new(config)
+            .await
+            .map_err(|e| LoggerError::Configuration(format!(
+                "Failed to create ClickHouse service: {}",
+                e
+            )))?;
+
+        let db = Self {
+            service: Arc::new(service),
+            initialized: Arc::new(Mutex::new(false)),
+        };
+
+        db.init_schema().await?;
+        Ok(db)
+    }
+
+    /// Initialize the database schema
+    async fn init_schema(&self) -> Result<()> {
+        let mut initialized = self.initialized.lock().await;
+        if *initialized {
+            return Ok(());
+        }
+
+        // Create events table with flexible schema for dynamic event types
+        // Using JSON for additional metadata to support future event types
+        self.service.execute(
             "CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                event_subtype TEXT,
-                key TEXT,
-                button TEXT,
-                x INTEGER,
-                y INTEGER,
-                pressed BOOLEAN,
-                timestamp TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-            [],
-        )
+                id UUID DEFAULT generateUUIDv4(),
+                session_id String NOT NULL,
+                event_type LowCardinality(String) NOT NULL,
+                event_subtype LowCardinality(String),
+                key Nullable(String),
+                button Nullable(String),
+                x Nullable(Int32),
+                y Nullable(Int32),
+                pressed Nullable(UInt8),
+                timestamp DateTime64(3, 'UTC') NOT NULL,
+                timecode Nullable(Float64),
+                metadata String DEFAULT '{}',
+                screenshot_id Nullable(UUID),
+                created_at DateTime DEFAULT now()
+            ) ENGINE = MergeTree()
+            PARTITION BY toYYYYMM(timestamp)
+            ORDER BY (session_id, timestamp)
+            SETTINGS index_granularity = 8192"
+        ).await
         .map_err(|e| LoggerError::Other(format!("Failed to create events table: {}", e)))?;
 
-        // Sessions table
-        conn.execute(
+        // Create sessions table
+        self.service.execute(
             "CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                start_time TEXT NOT NULL,
-                end_time TEXT,
-                keyboard_events INTEGER DEFAULT 0,
-                keyboard_presses INTEGER DEFAULT 0,
-                keyboard_releases INTEGER DEFAULT 0,
-                mouse_events INTEGER DEFAULT 0,
-                mouse_clicks INTEGER DEFAULT 0,
-                mouse_releases INTEGER DEFAULT 0,
-                mouse_moves INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-            [],
-        )
+                id String PRIMARY KEY,
+                start_time DateTime64(3, 'UTC') NOT NULL,
+                end_time Nullable(DateTime64(3, 'UTC')),
+                keyboard_events UInt64 DEFAULT 0,
+                keyboard_presses UInt64 DEFAULT 0,
+                keyboard_releases UInt64 DEFAULT 0,
+                mouse_events UInt64 DEFAULT 0,
+                mouse_clicks UInt64 DEFAULT 0,
+                mouse_releases UInt64 DEFAULT 0,
+                mouse_moves UInt64 DEFAULT 0,
+                created_at DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY id"
+        ).await
         .map_err(|e| LoggerError::Other(format!("Failed to create sessions table: {}", e)))?;
 
-        // Key frequency table
-        conn.execute(
+        // Create screenshots/frames table for storing image references
+        // This allows linking clicks to screenshots for analysis over multiple frames
+        self.service.execute(
+            "CREATE TABLE IF NOT EXISTS screenshots (
+                id UUID DEFAULT generateUUIDv4(),
+                session_id String NOT NULL,
+                timestamp DateTime64(3, 'UTC') NOT NULL,
+                frame_number UInt64,
+                file_path String,
+                width UInt32,
+                height UInt32,
+                click_x Nullable(Int32),
+                click_y Nullable(Int32),
+                metadata String DEFAULT '{}',
+                created_at DateTime DEFAULT now()
+            ) ENGINE = MergeTree()
+            PARTITION BY toYYYYMM(timestamp)
+            ORDER BY (session_id, timestamp, frame_number)
+            SETTINGS index_granularity = 8192"
+        ).await
+        .map_err(|e| LoggerError::Other(format!("Failed to create screenshots table: {}", e)))?;
+
+        // Create key frequency materialized view for analytics
+        self.service.execute(
             "CREATE TABLE IF NOT EXISTS key_frequency (
-                session_id TEXT NOT NULL,
-                key TEXT NOT NULL,
-                count INTEGER DEFAULT 0,
-                PRIMARY KEY (session_id, key),
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            )",
-            [],
-        )
+                session_id String NOT NULL,
+                key String NOT NULL,
+                count UInt64 DEFAULT 0
+            ) ENGINE = SummingMergeTree()
+            ORDER BY (session_id, key)"
+        ).await
         .map_err(|e| LoggerError::Other(format!("Failed to create key_frequency table: {}", e)))?;
 
-        // Mouse button frequency table
-        conn.execute(
+        // Create mouse button frequency materialized view
+        self.service.execute(
             "CREATE TABLE IF NOT EXISTS mouse_button_frequency (
-                session_id TEXT NOT NULL,
-                button TEXT NOT NULL,
-                count INTEGER DEFAULT 0,
-                PRIMARY KEY (session_id, button),
-                FOREIGN KEY (session_id) REFERENCES sessions(id)
-            )",
-            [],
-        )
+                session_id String NOT NULL,
+                button String NOT NULL,
+                count UInt64 DEFAULT 0
+            ) ENGINE = SummingMergeTree()
+            ORDER BY (session_id, button)"
+        ).await
         .map_err(|e| LoggerError::Other(format!("Failed to create mouse_button_frequency table: {}", e)))?;
 
-        // Create indexes
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)",
-            [],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to create index: {}", e)))?;
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)",
-            [],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to create index: {}", e)))?;
-
+        *initialized = true;
         Ok(())
     }
 
-    pub fn create_session(&self, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+    /// Create a new session
+    pub async fn create_session(&self, session_id: &str) -> Result<()> {
+        let start_time = Utc::now();
+        let start_time_str = start_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-        let start_time = Utc::now().to_rfc3339();
-        conn.execute(
-            "INSERT OR IGNORE INTO sessions (id, start_time) VALUES (?1, ?2)",
-            params![session_id, start_time],
-        )
+        self.service.insert(&format!(
+            "INSERT INTO sessions (id, start_time) VALUES ('{}', '{}')",
+            session_id, start_time_str
+        )).await
         .map_err(|e| LoggerError::Other(format!("Failed to create session: {}", e)))?;
 
         Ok(())
     }
 
-    pub fn insert_event(
+    /// Insert an event with flexible metadata support
+    pub async fn insert_event(
         &self,
         session_id: &str,
         event_type: &str,
@@ -151,33 +199,111 @@ impl Database {
         y: Option<i32>,
         pressed: Option<bool>,
         timestamp: &str,
+        timecode: Option<f64>,
+        metadata: Option<Value>,
+        screenshot_id: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+        let metadata_str = metadata
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()))
+            .unwrap_or_else(|| "{}".to_string());
 
-        conn.execute(
+        let event_subtype_str = event_subtype.map(|s| format!("'{}'", s)).unwrap_or_else(|| "NULL".to_string());
+        let key_str = key.map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string());
+        let button_str = button.map(|s| format!("'{}'", s.replace('\'', "''"))).unwrap_or_else(|| "NULL".to_string());
+        let x_str = x.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+        let y_str = y.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+        let pressed_str = pressed.map(|v| if v { "1" } else { "0" }).unwrap_or("NULL");
+        let timecode_str = timecode.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+        let screenshot_id_str = screenshot_id.map(|s| format!("'{}'", s)).unwrap_or_else(|| "NULL".to_string());
+
+        // Parse timestamp - support both RFC3339 and other formats
+        let timestamp_dt = if let Ok(dt) = DateTime::parse_from_rfc3339(timestamp) {
+            dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+        } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S%.f") {
+            format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f"))
+        } else {
+            // Try to use as-is
+            timestamp.to_string()
+        };
+
+        let query = format!(
             "INSERT INTO events (
-                session_id, event_type, event_subtype, key, button, x, y, pressed, timestamp
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                session_id,
-                event_type,
-                event_subtype,
-                key,
-                button,
-                x,
-                y,
-                pressed,
-                timestamp
-            ],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to insert event: {}", e)))?;
+                session_id, event_type, event_subtype, key, button, x, y, pressed,
+                timestamp, timecode, metadata, screenshot_id
+            ) VALUES (
+                '{}', '{}', {}, {}, {}, {}, {}, {}, '{}', {}, '{}', {}
+            )",
+            session_id.replace('\'', "''"),
+            event_type.replace('\'', "''"),
+            event_subtype_str,
+            key_str,
+            button_str,
+            x_str,
+            y_str,
+            pressed_str,
+            timestamp_dt,
+            timecode_str,
+            metadata_str.replace('\'', "''"),
+            screenshot_id_str
+        );
+
+        self.service.insert(&query).await
+            .map_err(|e| LoggerError::Other(format!("Failed to insert event: {}", e)))?;
 
         Ok(())
     }
 
-    pub fn update_session_metrics(
+    /// Store a screenshot/frame reference for click analysis
+    pub async fn insert_screenshot(
+        &self,
+        session_id: &str,
+        timestamp: DateTime<Utc>,
+        frame_number: u64,
+        file_path: &str,
+        width: u32,
+        height: u32,
+        click_x: Option<i32>,
+        click_y: Option<i32>,
+        metadata: Option<Value>,
+    ) -> Result<String> {
+        let screenshot_id = uuid::Uuid::new_v4().to_string();
+        let timestamp_str = timestamp.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let metadata_str = metadata
+            .as_ref()
+            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()))
+            .unwrap_or_else(|| "{}".to_string());
+
+        let click_x_str = click_x.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+        let click_y_str = click_y.map(|v| v.to_string()).unwrap_or_else(|| "NULL".to_string());
+
+        let query = format!(
+            "INSERT INTO screenshots (
+                id, session_id, timestamp, frame_number, file_path, width, height,
+                click_x, click_y, metadata
+            ) VALUES (
+                '{}', '{}', '{}', {}, '{}', {}, {}, {}, {}, '{}'
+            )",
+            screenshot_id,
+            session_id.replace('\'', "''"),
+            timestamp_str,
+            frame_number,
+            file_path.replace('\'', "''"),
+            width,
+            height,
+            click_x_str,
+            click_y_str,
+            metadata_str.replace('\'', "''")
+        );
+
+        self.service.insert(&query).await
+            .map_err(|e| LoggerError::Other(format!("Failed to insert screenshot: {}", e)))?;
+
+        Ok(screenshot_id)
+    }
+
+    /// Update session metrics
+    pub async fn update_session_metrics(
         &self,
         session_id: &str,
         keyboard_events: u64,
@@ -188,154 +314,198 @@ impl Database {
         mouse_releases: u64,
         mouse_moves: u64,
     ) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+        // ClickHouse uses INSERT with ReplacingMergeTree, so we insert a new row
+        // The engine will merge duplicates based on the ORDER BY key
+        let query = format!(
+            "INSERT INTO sessions (
+                id, start_time, keyboard_events, keyboard_presses, keyboard_releases,
+                mouse_events, mouse_clicks, mouse_releases, mouse_moves
+            ) VALUES (
+                '{}', now(), {}, {}, {}, {}, {}, {}, {}
+            )",
+            session_id.replace('\'', "''"),
+            keyboard_events,
+            keyboard_presses,
+            keyboard_releases,
+            mouse_events,
+            mouse_clicks,
+            mouse_releases,
+            mouse_moves
+        );
 
-        conn.execute(
-            "UPDATE sessions SET
-                keyboard_events = ?2,
-                keyboard_presses = ?3,
-                keyboard_releases = ?4,
-                mouse_events = ?5,
-                mouse_clicks = ?6,
-                mouse_releases = ?7,
-                mouse_moves = ?8
-            WHERE id = ?1",
-            params![
-                session_id,
-                keyboard_events,
-                keyboard_presses,
-                keyboard_releases,
-                mouse_events,
-                mouse_clicks,
-                mouse_releases,
-                mouse_moves
-            ],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to update session metrics: {}", e)))?;
+        self.service.insert(&query).await
+            .map_err(|e| LoggerError::Other(format!("Failed to update session metrics: {}", e)))?;
 
         Ok(())
     }
 
-    pub fn update_key_frequency(&self, session_id: &str, key: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+    /// Update key frequency
+    pub async fn update_key_frequency(&self, session_id: &str, key: &str) -> Result<()> {
+        let query = format!(
+            "INSERT INTO key_frequency (session_id, key, count) VALUES ('{}', '{}', 1)",
+            session_id.replace('\'', "''"),
+            key.replace('\'', "''")
+        );
 
-        conn.execute(
-            "INSERT INTO key_frequency (session_id, key, count)
-             VALUES (?1, ?2, 1)
-             ON CONFLICT(session_id, key) DO UPDATE SET count = count + 1",
-            params![session_id, key],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to update key frequency: {}", e)))?;
+        self.service.insert(&query).await
+            .map_err(|e| LoggerError::Other(format!("Failed to update key frequency: {}", e)))?;
 
         Ok(())
     }
 
-    pub fn update_mouse_button_frequency(&self, session_id: &str, button: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+    /// Update mouse button frequency
+    pub async fn update_mouse_button_frequency(&self, session_id: &str, button: &str) -> Result<()> {
+        let query = format!(
+            "INSERT INTO mouse_button_frequency (session_id, button, count) VALUES ('{}', '{}', 1)",
+            session_id.replace('\'', "''"),
+            button.replace('\'', "''")
+        );
 
-        conn.execute(
-            "INSERT INTO mouse_button_frequency (session_id, button, count)
-             VALUES (?1, ?2, 1)
-             ON CONFLICT(session_id, button) DO UPDATE SET count = count + 1",
-            params![session_id, button],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to update mouse button frequency: {}", e)))?;
+        self.service.insert(&query).await
+            .map_err(|e| LoggerError::Other(format!("Failed to update mouse button frequency: {}", e)))?;
 
         Ok(())
     }
 
-    pub fn end_session(&self, session_id: &str) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+    /// End a session
+    pub async fn end_session(&self, session_id: &str) -> Result<()> {
+        let end_time = Utc::now();
+        let end_time_str = end_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-        let end_time = Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE sessions SET end_time = ?2 WHERE id = ?1",
-            params![session_id, end_time],
-        )
-        .map_err(|e| LoggerError::Other(format!("Failed to end session: {}", e)))?;
+        // Update the session with end_time
+        let _query = format!(
+            "INSERT INTO sessions (id, start_time, end_time) 
+             SELECT id, start_time, '{}' 
+             FROM sessions 
+             WHERE id = '{}' 
+             LIMIT 1",
+            end_time_str,
+            session_id.replace('\'', "''")
+        );
+
+        // For ReplacingMergeTree, we need to insert a new row with updated end_time
+        // First get the existing start_time
+        let block = self.service.query(&format!(
+            "SELECT start_time FROM sessions WHERE id = '{}' LIMIT 1",
+            session_id.replace('\'', "''")
+        )).await
+        .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
+
+        if let Some(row) = block.rows().next() {
+            // Insert updated row
+            let start_time: String = row.get("start_time")
+                .map_err(|_| LoggerError::Other("Failed to get start_time".to_string()))?;
+            
+            let update_query = format!(
+                "INSERT INTO sessions (id, start_time, end_time) VALUES ('{}', '{}', '{}')",
+                session_id.replace('\'', "''"),
+                start_time,
+                end_time_str
+            );
+
+            self.service.insert(&update_query).await
+                .map_err(|e| LoggerError::Other(format!("Failed to end session: {}", e)))?;
+        }
 
         Ok(())
     }
 
-    pub fn get_session_metrics(&self, session_id: &str) -> Result<Metrics> {
-        let conn = self.conn.lock().map_err(|e| {
-            LoggerError::Other(format!("Failed to lock database: {}", e))
-        })?;
+    /// Get session metrics
+    pub async fn get_session_metrics(&self, session_id: &str) -> Result<Metrics> {
+        // Get session data
+        let block = self.service.query(&format!(
+            "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
+                    mouse_events, mouse_clicks, mouse_releases, mouse_moves
+             FROM sessions
+             WHERE id = '{}'
+             ORDER BY created_at DESC
+             LIMIT 1",
+            session_id.replace('\'', "''")
+        )).await
+        .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
-                        mouse_events, mouse_clicks, mouse_releases, mouse_moves
-                 FROM sessions WHERE id = ?1",
-            )
-            .map_err(|e| LoggerError::Other(format!("Failed to prepare statement: {}", e)))?;
+        if block.row_count() == 0 {
+            return Err(LoggerError::Other(format!("Session {} not found", session_id)));
+        }
 
-        let row = stmt
-            .query_row(params![session_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, u64>(2)?,
-                    row.get::<_, u64>(3)?,
-                    row.get::<_, u64>(4)?,
-                    row.get::<_, u64>(5)?,
-                    row.get::<_, u64>(6)?,
-                    row.get::<_, u64>(7)?,
-                    row.get::<_, u64>(8)?,
-                ))
-            })
-            .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
+        // Parse session data using rows iterator
+        let mut rows = block.rows();
+        let row = rows.next()
+            .ok_or_else(|| LoggerError::Other("No session data found".to_string()))?;
 
-        let start_time = DateTime::parse_from_rfc3339(&row.0)
-            .map_err(|e| LoggerError::Other(format!("Failed to parse start_time: {}", e)))?
-            .with_timezone(&Utc);
+        let start_time_str: String = row.get("start_time")
+            .map_err(|_| LoggerError::Other("Failed to get start_time".to_string()))?;
+        let end_time_opt: Option<String> = row.get("end_time").ok();
+        let keyboard_events: u64 = row.get("keyboard_events")
+            .map_err(|_| LoggerError::Other("Failed to get keyboard_events".to_string()))?;
+        let keyboard_presses: u64 = row.get("keyboard_presses")
+            .map_err(|_| LoggerError::Other("Failed to get keyboard_presses".to_string()))?;
+        let keyboard_releases: u64 = row.get("keyboard_releases")
+            .map_err(|_| LoggerError::Other("Failed to get keyboard_releases".to_string()))?;
+        let mouse_events: u64 = row.get("mouse_events")
+            .map_err(|_| LoggerError::Other("Failed to get mouse_events".to_string()))?;
+        let mouse_clicks: u64 = row.get("mouse_clicks")
+            .map_err(|_| LoggerError::Other("Failed to get mouse_clicks".to_string()))?;
+        let mouse_releases: u64 = row.get("mouse_releases")
+            .map_err(|_| LoggerError::Other("Failed to get mouse_releases".to_string()))?;
+        let mouse_moves: u64 = row.get("mouse_moves")
+            .map_err(|_| LoggerError::Other("Failed to get mouse_moves".to_string()))?;
 
-        let end_time = row.1.and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
-            .map(|dt| dt.with_timezone(&Utc));
+        let start_time = match DateTime::parse_from_rfc3339(&start_time_str) {
+            Ok(dt) => dt.with_timezone(&Utc),
+            Err(_) => {
+                chrono::NaiveDateTime::parse_from_str(&start_time_str, "%Y-%m-%d %H:%M:%S%.f")
+                    .map_err(|e| LoggerError::Other(format!("Failed to parse start_time: {}", e)))?
+                    .and_utc()
+            }
+        };
+
+        let end_time = end_time_opt.and_then(|s| {
+            match DateTime::parse_from_rfc3339(&s) {
+                Ok(dt) => Some(dt.with_timezone(&Utc)),
+                Err(_) => {
+                    chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                        .ok()
+                        .map(|ndt| ndt.and_utc())
+                }
+            }
+        });
 
         // Get key frequency
+        let key_block = self.service.query(&format!(
+            "SELECT key, sum(count) as total
+             FROM key_frequency
+             WHERE session_id = '{}'
+             GROUP BY key",
+            session_id.replace('\'', "''")
+        )).await
+        .map_err(|e| LoggerError::Other(format!("Failed to query key frequency: {}", e)))?;
+
         let mut key_frequency = HashMap::new();
-        let mut key_stmt = conn
-            .prepare("SELECT key, count FROM key_frequency WHERE session_id = ?1")
-            .map_err(|e| LoggerError::Other(format!("Failed to prepare key statement: {}", e)))?;
-
-        let key_rows = key_stmt
-            .query_map(params![session_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-            })
-            .map_err(|e| LoggerError::Other(format!("Failed to query key frequency: {}", e)))?;
-
-        for row in key_rows {
-            let (key, count) = row.map_err(|e| {
-                LoggerError::Other(format!("Failed to read key frequency row: {}", e))
-            })?;
+        for row in key_block.rows() {
+            let key: String = row.get("key")
+                .map_err(|_| LoggerError::Other("Failed to get key".to_string()))?;
+            let count: u64 = row.get("total")
+                .map_err(|_| LoggerError::Other("Failed to get count".to_string()))?;
             key_frequency.insert(key, count);
         }
 
         // Get mouse button frequency
+        let button_block = self.service.query(&format!(
+            "SELECT button, sum(count) as total
+             FROM mouse_button_frequency
+             WHERE session_id = '{}'
+             GROUP BY button",
+            session_id.replace('\'', "''")
+        )).await
+        .map_err(|e| LoggerError::Other(format!("Failed to query button frequency: {}", e)))?;
+
         let mut mouse_button_frequency = HashMap::new();
-        let mut button_stmt = conn
-            .prepare("SELECT button, count FROM mouse_button_frequency WHERE session_id = ?1")
-            .map_err(|e| LoggerError::Other(format!("Failed to prepare button statement: {}", e)))?;
-
-        let button_rows = button_stmt
-            .query_map(params![session_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
-            })
-            .map_err(|e| LoggerError::Other(format!("Failed to query button frequency: {}", e)))?;
-
-        for row in button_rows {
-            let (button, count) = row.map_err(|e| {
-                LoggerError::Other(format!("Failed to read button frequency row: {}", e))
-            })?;
+        for row in button_block.rows() {
+            let button: String = row.get("button")
+                .map_err(|_| LoggerError::Other("Failed to get button".to_string()))?;
+            let count: u64 = row.get("total")
+                .map_err(|_| LoggerError::Other("Failed to get count".to_string()))?;
             mouse_button_frequency.insert(button, count);
         }
 
@@ -343,7 +513,7 @@ impl Database {
         let duration = end_time
             .unwrap_or_else(Utc::now)
             .signed_duration_since(start_time);
-        let total_events = row.2 + row.5; // keyboard_events + mouse_events
+        let total_events = keyboard_events + mouse_events;
         let events_per_second = if duration.num_seconds() > 0 {
             total_events as f64 / duration.num_seconds() as f64
         } else {
@@ -354,17 +524,57 @@ impl Database {
             session_id: session_id.to_string(),
             start_time,
             end_time,
-            keyboard_events: row.2,
-            keyboard_presses: row.3,
-            keyboard_releases: row.4,
-            mouse_events: row.5,
-            mouse_clicks: row.6,
-            mouse_releases: row.7,
-            mouse_moves: row.8,
+            keyboard_events,
+            keyboard_presses,
+            keyboard_releases,
+            mouse_events,
+            mouse_clicks,
+            mouse_releases,
+            mouse_moves,
             key_frequency,
             mouse_button_frequency,
             events_per_second,
         })
     }
-}
 
+    /// Get screenshots for a click location (for analyzing what was clicked over multiple frames)
+    pub async fn get_screenshots_for_click(
+        &self,
+        session_id: &str,
+        click_x: i32,
+        click_y: i32,
+        time_window_seconds: f64,
+    ) -> Result<Vec<(String, String, u64)>> {
+        // Find screenshots within time window of clicks at this location
+        let block = self.service.query(&format!(
+            "SELECT s.id, s.file_path, s.frame_number
+             FROM screenshots s
+             INNER JOIN events e ON s.session_id = e.session_id
+             WHERE s.session_id = '{}'
+               AND e.x = {}
+               AND e.y = {}
+               AND e.event_type = 'mouse'
+               AND e.event_subtype = 'click'
+               AND abs(toUnixTimestamp(s.timestamp) - toUnixTimestamp(e.timestamp)) <= {}
+             ORDER BY s.timestamp",
+            session_id.replace('\'', "''"),
+            click_x,
+            click_y,
+            time_window_seconds
+        )).await
+        .map_err(|e| LoggerError::Other(format!("Failed to query screenshots: {}", e)))?;
+
+        let mut results = Vec::new();
+        for row in block.rows() {
+            let id: String = row.get("id")
+                .map_err(|_| LoggerError::Other("Failed to get screenshot id".to_string()))?;
+            let file_path: String = row.get("file_path")
+                .map_err(|_| LoggerError::Other("Failed to get file_path".to_string()))?;
+            let frame_number: u64 = row.get("frame_number")
+                .map_err(|_| LoggerError::Other("Failed to get frame_number".to_string()))?;
+            results.push((id, file_path, frame_number));
+        }
+
+        Ok(results)
+    }
+}

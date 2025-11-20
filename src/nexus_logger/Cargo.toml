@@ -17,8 +17,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4.38", features = ["serde"] }
 ctrlc = "3.4"
-rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 uuid = { workspace = true }
+log = "0.4.22"
+nexus-core = { path = "../nexus_core" }
 nexus-screen = { path = "../nexus_screen" }
 tempfile = "3.10"
 tray-icon = "0.21"
