@@ -86,6 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         capture_keyboard: true,
         capture_mouse: true,
         capture_mouse_moves: false, // Disable to reduce noise
+        show_timestamp: true,
+        show_labels: true,
+        context_fps: Some(1.0),
     };
 
     // Create callback

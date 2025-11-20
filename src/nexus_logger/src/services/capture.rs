@@ -1,5 +1,4 @@
 use crate::error::{LoggerError, Result};
-use crate::services::click_context::{ClickContextEvent, ClickContextHandle, ClickContextService};
 use crate::services::database::Database;
 use chrono::{Local, Utc};
 use device_query::{DeviceQuery, DeviceState, Keycode};
@@ -75,8 +74,6 @@ pub async fn run_capture_service(
     let db = Database::new().await?;
     let session_id = Uuid::new_v4().to_string();
     db.create_session(&session_id).await?;
-
-    let click_context = ClickContextService::maybe_start(db.clone());
 
     let device_state = DeviceState::new();
     let mut last_keys: Vec<Keycode> = vec![];
@@ -306,15 +303,6 @@ pub async fn run_capture_service(
                         timestamp: timestamp.clone(),
                     };
                     write_output(&event)?;
-                    trigger_click_context(
-                        &click_context,
-                        &session_id,
-                        timestamp_utc,
-                        Some(button_name.clone()),
-                        Some(mouse.coords.0),
-                        Some(mouse.coords.1),
-                    );
-
                     // Update metrics
                     metrics.mouse_events += 1;
                     metrics.mouse_clicks += 1;
@@ -426,33 +414,7 @@ pub async fn run_capture_service(
     println!("\n📊 Final Session Summary:");
     display_metrics_summary(&metrics, &db_clone_for_final, &session_id).await?;
 
-    // Wait for click-context worker to finish processing in-flight analyses
-    if let Some(ctx) = click_context {
-        println!("\n🔍 Waiting for in-flight click analyses to complete...");
-        ctx.wait_for_completion().await;
-        println!("✅ All click analyses complete");
-    }
-
     Ok(())
-}
-
-fn trigger_click_context(
-    handle: &Option<ClickContextHandle>,
-    session_id: &str,
-    timestamp: chrono::DateTime<Utc>,
-    button: Option<String>,
-    x: Option<i32>,
-    y: Option<i32>,
-) {
-    if let Some(ctx) = handle {
-        ctx.trigger(ClickContextEvent::new(
-            Some(session_id.to_string()),
-            timestamp,
-            button,
-            x,
-            y,
-        ));
-    }
 }
 
 struct MetricsTracker {

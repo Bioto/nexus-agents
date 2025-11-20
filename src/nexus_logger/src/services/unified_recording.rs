@@ -1,8 +1,10 @@
 use crate::error::{LoggerError, Result};
 use crate::services::capture::InputEvent;
-use crate::services::click_context::{ClickContextEvent, ClickContextHandle, ClickContextService};
+use crate::services::click_context::{ClickContextHandle, ClickContextService};
+use crate::services::context_processing::ProcessingJob;
 use crate::services::database::Database;
 use chrono::{DateTime, Local, Utc};
+use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -143,6 +145,8 @@ pub struct UnifiedRecordingConfig {
     pub show_timestamp: bool,
     /// Whether to add event labels to video
     pub show_labels: bool,
+    /// Frames per second for post-recording context analysis (None = disabled)
+    pub context_fps: Option<f64>,
 }
 
 /// Screen recording configuration.
@@ -201,6 +205,7 @@ impl Default for UnifiedRecordingConfig {
             capture_mouse_moves: false,
             show_timestamp: true,
             show_labels: true,
+            context_fps: None,
         }
     }
 }
@@ -324,14 +329,8 @@ impl UnifiedRecordingService {
         let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
         let overlay_labels_clone = overlay_labels.clone();
 
-        // Collect click events for post-recording batch analysis
-        let click_events = Arc::new(std::sync::Mutex::new(Vec::<ClickContextEvent>::new()));
-        let click_events_clone = click_events.clone();
-
         // Process events and call callbacks
         let stop_signal_process = stop_signal.clone();
-        let session_id_for_clicks = session_id.clone();
-        let video_path_for_clicks = self.config.screen_config.output_path.clone();
         let video_start_time = recording_start_instant;
         let process_handle = tokio::spawn(async move {
             loop {
@@ -483,29 +482,6 @@ impl UnifiedRecordingService {
                         }
                     }
                 }
-
-                // Queue click events for post-recording analysis
-                if let InputEvent::Mouse {
-                    event_type,
-                    button,
-                    x,
-                    y,
-                    ..
-                } = &event
-                {
-                    if event_type == "click" {
-                        let click_evt = ClickContextEvent::new(
-                            Some(session_id_for_clicks.clone()),
-                            Local::now().with_timezone(&Utc),
-                            button.clone(),
-                            *x,
-                            *y,
-                        )
-                        .with_video_context(video_timestamp, video_path_for_clicks.clone());
-
-                        click_events_clone.lock().unwrap().push(click_evt);
-                    }
-                }
             }
 
             // Labels are stored in the shared Arc<Mutex<Vec<OverlayLabel>>>
@@ -524,7 +500,6 @@ impl UnifiedRecordingService {
             overlay_labels,
             config: self.config.clone(),
             click_context,
-            click_events,
         })
     }
 
@@ -669,7 +644,6 @@ impl UnifiedRecordingService {
 
         Ok(())
     }
-
 
     fn run_screen_recording_blocking(
         config: ScreenRecordingConfig,
@@ -889,7 +863,6 @@ pub struct RecordingSession {
     overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
     config: UnifiedRecordingConfig,
     click_context: Option<ClickContextHandle>,
-    click_events: Arc<std::sync::Mutex<Vec<ClickContextEvent>>>,
 }
 
 impl RecordingSession {
@@ -934,52 +907,34 @@ impl RecordingSession {
             }
         }
 
-        // Wait for click-context worker to finish processing in-flight analyses
-        // Process queued click events now that video is complete
-        if let Some(ctx) = self.click_context {
-            let clicks = self.click_events.lock().unwrap().clone();
-            if !clicks.is_empty() {
+        if let (Some(ctx), Some(fps)) = (self.click_context, self.config.context_fps) {
+            if fps > 0.0 {
                 println!(
-                    "\n🔍 Processing {} click events from recording...",
-                    clicks.len()
+                    "\n🧠 Processing full recording context at {:.2} fps...",
+                    fps
                 );
-                
-                // Give extra time for video file to be fully flushed and accessible
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                
-                // Get actual video duration to filter out clicks after recording stopped
-                let video_duration = UnifiedRecordingService::get_video_duration(&self.config.screen_config.output_path);
-                
-                let mut processed_count = 0;
-                let mut skipped_count = 0;
-                
-                for click in clicks {
-                    // Filter out clicks that happened after video ended
-                    if let (Some(timestamp), Ok(duration)) = (click.video_timestamp, &video_duration) {
-                        if timestamp > *duration {
-                            eprintln!(
-                                "⚠️  Skipping click at {:.2}s (after video ended at {:.2}s)",
-                                timestamp, duration
-                            );
-                            skipped_count += 1;
-                            continue;
-                        }
-                    }
-                    
-                    ctx.trigger(click);
-                    processed_count += 1;
-                }
+                let video_path = self.config.screen_config.output_path.clone();
+                let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
 
-                if skipped_count > 0 {
-                    println!(
-                        "   ℹ️  Skipped {} click(s) that occurred after recording ended",
-                        skipped_count
-                    );
-                }
+                let metadata = json!({
+                    "mode": "full_video",
+                    "frames_per_second": fps,
+                    "video_duration_seconds": video_duration,
+                });
 
-                // Wait for all analyses to complete
+                let job = ProcessingJob::new(
+                    "video_context",
+                    format!("Full recording sweep ({:.2} fps)", fps),
+                    Utc::now(),
+                )
+                .with_session_id(Some(self.session_id.clone()))
+                .with_metadata(metadata)
+                .with_full_video_sampling(video_path, fps);
+
+                ctx.trigger_job(job);
                 ctx.wait_for_completion().await;
-                println!("✅ Processed {} click analyses", processed_count);
+                println!("✅ Full recording analysis complete");
             }
         }
 

@@ -66,6 +66,10 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub mouse_moves: bool,
 
+    /// Frames per second for full-video context analysis (0 = disable)
+    #[arg(long, default_value = "0")]
+    pub analysis_fps: f64,
+
     /// Enable verbose event callbacks (prints events with video timestamps)
     #[arg(long)]
     pub verbose: bool,
@@ -125,6 +129,11 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         capture_mouse_moves: args.mouse_moves,
         show_timestamp: !args.no_timestamp,
         show_labels: !args.no_labels,
+        context_fps: if args.analysis_fps > 0.0 {
+            Some(args.analysis_fps)
+        } else {
+            None
+        },
     };
 
     println!("🎬 Starting unified recording...");
@@ -155,6 +164,14 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     println!(
         "   Event labels: {}",
         if !args.no_labels { "✓" } else { "✗" }
+    );
+    println!(
+        "   Context analysis: {}",
+        if let Some(fps) = config.context_fps {
+            format!("{:.2} fps", fps)
+        } else {
+            "disabled".to_string()
+        }
     );
     if args.verbose {
         println!("   Verbose callbacks: ✓");
