@@ -18,9 +18,9 @@ pub struct DockerConfig {
 impl Default for DockerConfig {
     fn default() -> Self {
         Self {
-            image_name: "nexus_py".to_string(),
+            image_name: "nexus_sandbox".to_string(),
             image_tag: "latest".to_string(),
-            dockerfile_path: "src/nexus_py/.docker/Dockerfile".to_string(),
+            dockerfile_path: "src/nexus_sandbox/.docker/Dockerfile".to_string(),
             build_context: ".".to_string(),
         }
     }
@@ -199,7 +199,7 @@ impl DockerService {
                             image_name,
                             images.len()
                         );
-                        // Show all images with nexus_py in the name for debugging
+                        // Show all images with nexus_sandbox in the name for debugging
                         let nexus_images: Vec<_> = images
                             .iter()
                             .filter(|img| img.repo_tags.iter().any(|tag| tag.contains("nexus")))
@@ -896,9 +896,9 @@ impl DockerService {
         // Ensure the container is running before trying to exec
         self.ensure_container_running(container_id).await?;
 
-        // Use nexus_py exec-code since the persistent container has entrypoint overridden to /bin/sh
+        // Use nexus_sandbox exec-code since the persistent container has entrypoint overridden to /bin/sh
         let command = vec![
-            "nexus_py".to_string(),
+            "nexus_sandbox".to_string(),
             "exec-code".to_string(),
             "--code".to_string(),
             code.to_string(),
@@ -909,7 +909,7 @@ impl DockerService {
 
     /// Create a long-running container that can be reused for multiple Python executions
     /// The container runs a sleep command to keep it alive
-    /// Overrides the Dockerfile entrypoint to use /bin/sh since the image has ENTRYPOINT ["nexus_py"]
+    /// Overrides the Dockerfile entrypoint to use /bin/sh since the image has ENTRYPOINT ["nexus_sandbox"]
     pub async fn create_persistent_container(
         &self,
         mounts: Option<Vec<(String, String)>>,
@@ -948,10 +948,10 @@ impl DockerService {
         }
 
         // Override entrypoint to /bin/sh and use sleep infinity to keep container running
-        // The Dockerfile has ENTRYPOINT ["nexus_py"], so we need to override it
+        // The Dockerfile has ENTRYPOINT ["nexus_sandbox"], so we need to override it
         let container_config = Config {
             image: Some(image_name),
-            entrypoint: Some(vec!["/bin/sh".to_string()]), // Override the nexus_py entrypoint
+            entrypoint: Some(vec!["/bin/sh".to_string()]), // Override the nexus_sandbox entrypoint
             cmd: Some(vec!["-c".to_string(), "sleep infinity".to_string()]), // Run sleep infinity via sh
             attach_stdout: Some(true),
             attach_stderr: Some(true),

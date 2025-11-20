@@ -78,10 +78,10 @@ fi
 
 eval $INSTALL_CMD
 
-# Optional: Install Docker for nexus_py Python execution
+# Optional: Install Docker for nexus_sandbox Python execution
 if ! command -v docker &> /dev/null; then
     echo ""
-    echo "Docker is not installed. nexus_py requires Docker for Python execution."
+    echo "Docker is not installed. nexus_sandbox requires Docker for Python execution."
     echo "To install Docker, run:"
     echo "  curl -fsSL https://get.docker.com -o get-docker.sh"
     echo "  sudo sh get-docker.sh"

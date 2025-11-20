@@ -59,10 +59,10 @@ brew install \
 # GBM is typically not needed on macOS (it's Linux-specific)
 # PipeWire may not be available via Homebrew; macOS uses CoreAudio/CoreVideo instead
 
-# Optional: Install Docker for nexus_py Python execution
+# Optional: Install Docker for nexus_sandbox Python execution
 if ! command -v docker &> /dev/null; then
     echo ""
-    echo "Docker is not installed. nexus_py requires Docker for Python execution."
+    echo "Docker is not installed. nexus_sandbox requires Docker for Python execution."
     echo "To install Docker Desktop for Mac, visit:"
     echo "  https://www.docker.com/products/docker-desktop/"
     echo ""

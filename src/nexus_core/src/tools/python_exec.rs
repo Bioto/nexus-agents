@@ -2,7 +2,7 @@ use crate::models::tool::{Tool, ToolParameter};
 use crate::models::Result;
 use crate::tools::ExecutableTool;
 use log::{debug, error, info};
-use nexus_py::{DockerConfig, DockerService};
+use nexus_sandbox::{DockerConfig, DockerService};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -520,7 +520,7 @@ def import_tool(server_name, tool_name):
         drop(env_vars);
 
         // Convert to ExecutionResult format
-        use nexus_py::ExecutionResult;
+        use nexus_sandbox::ExecutionResult;
         let result = ExecutionResult {
             stdout,
             stderr,

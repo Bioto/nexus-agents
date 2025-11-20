@@ -42,15 +42,15 @@ pub struct DockerExecArgs {
     #[arg(short, long)]
     pub code: Option<String>,
 
-    /// Docker image name (default: nexus_py)
-    #[arg(long, default_value = "nexus_py")]
+    /// Docker image name (default: nexus_sandbox)
+    #[arg(long, default_value = "nexus_sandbox")]
     pub image: Option<String>,
 
     /// Docker image tag (default: latest)
     #[arg(long, default_value = "latest")]
     pub tag: Option<String>,
 
-    /// Path to Dockerfile (default: src/nexus_py/.docker/Dockerfile)
+    /// Path to Dockerfile (default: src/nexus_sandbox/.docker/Dockerfile)
     #[arg(long)]
     pub dockerfile: Option<String>,
 
@@ -80,7 +80,7 @@ pub async fn run_docker_exec(args: DockerExecArgs) -> Result<(), Box<dyn std::er
         .image
         .as_ref()
         .map(|s| s.clone())
-        .unwrap_or_else(|| "nexus_py".to_string());
+        .unwrap_or_else(|| "nexus_sandbox".to_string());
     let image_tag = args
         .tag
         .as_ref()
@@ -93,7 +93,7 @@ pub async fn run_docker_exec(args: DockerExecArgs) -> Result<(), Box<dyn std::er
             .dockerfile
             .as_ref()
             .map(|s| s.clone())
-            .unwrap_or_else(|| "src/nexus_py/.docker/Dockerfile".to_string()),
+            .unwrap_or_else(|| "src/nexus_sandbox/.docker/Dockerfile".to_string()),
         build_context: args
             .build_context
             .as_ref()

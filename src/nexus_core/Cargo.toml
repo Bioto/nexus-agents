@@ -35,7 +35,7 @@ mime = "0.3"
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = "0.4.38"
-nexus_py = { path = "../nexus_py" }
+nexus_sandbox = { path = "../nexus_sandbox" }
 nexus_mcp = { path = "../nexus_mcp" }
 
 [dev-dependencies]
