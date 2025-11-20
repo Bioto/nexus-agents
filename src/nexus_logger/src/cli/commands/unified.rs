@@ -9,6 +9,11 @@ use clap::Args;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::mpsc;
+use tray_icon::{TrayIconBuilder, TrayIconEvent, Icon, menu::{Menu, MenuItem}};
+
+#[cfg(target_os = "linux")]
+use gtk::glib;
 
 /// CLI arguments for the unified recording subcommand.
 #[derive(Args)]
@@ -155,15 +160,181 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     let session_id = session.session_id().to_string();
     let recording_start = session.recording_start();
 
+    // Create tray icon
+    // Use std::sync::Mutex for blocking context (tray event handler)
+    let session_for_tray = Arc::new(std::sync::Mutex::new(Some(session)));
+    
+    // Create icon (simple red circle for recording indicator)
+    let icon = create_recording_icon()?;
+    
+    // On Linux, we need to initialize GTK and run the event loop
+    #[cfg(target_os = "linux")]
+    {
+        // Initialize GTK in a separate thread
+        let running_gtk = running.clone();
+        let session_clone_gtk = session_for_tray.clone();
+        std::thread::spawn(move || {
+            // Initialize GTK
+            if gtk::init().is_err() {
+                eprintln!("⚠️  Failed to initialize GTK - tray icon may not appear");
+                return;
+            }
+            
+            // On Linux, click events don't work - we MUST use a menu
+            // Create a menu for the tray icon
+            let menu = Menu::new();
+            let stop_item = MenuItem::new("Stop Recording", true, None);
+            let stop_id = stop_item.id().clone(); // Clone ID before appending
+            menu.append(&stop_item).unwrap();
+            
+            // Keep stop_item alive (menu borrows it)
+            let _stop_item = stop_item;
+            
+            // Create tray icon with menu
+            let tray_icon = match TrayIconBuilder::new()
+                .with_icon(icon)
+                .with_tooltip("Nexus Logger - Recording in progress\nRight-click for menu")
+                .with_menu(Box::new(menu))
+                .build()
+            {
+                Ok(icon) => {
+                    eprintln!("✅ Tray icon created successfully with menu");
+                    eprintln!("ℹ️  Right-click the tray icon and select 'Stop Recording' to stop");
+                    icon
+                },
+                Err(e) => {
+                    eprintln!("⚠️  Failed to create tray icon: {}", e);
+                    return;
+                }
+            };
+            
+            // Spawn thread to poll for menu events (this is how clicks work on Linux)
+            let session_clone = session_clone_gtk.clone();
+            let running_clone = running_gtk.clone();
+            std::thread::spawn(move || {
+                use tray_icon::menu::MenuEvent;
+                loop {
+                    match MenuEvent::receiver().try_recv() {
+                        Ok(event) => {
+                            eprintln!("🔔 Menu event received: {:?}", event);
+                            if event.id == stop_id {
+                                eprintln!("🛑 Stop Recording menu item clicked");
+                                running_clone.store(true, Ordering::SeqCst);
+                                if let Ok(session_guard) = session_clone.try_lock() {
+                                    if let Some(s) = session_guard.as_ref() {
+                                        s.stop();
+                                        eprintln!("✅ Session stop() called");
+                                    }
+                                }
+                            }
+                        }
+                        Err(crossbeam_channel::TryRecvError::Empty) => {
+                            // No event, continue
+                        }
+                        Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                            eprintln!("⚠️  Menu event receiver disconnected");
+                            break;
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    if running_clone.load(Ordering::SeqCst) {
+                        break;
+                    }
+                }
+            });
+            
+            // Keep the tray icon alive by keeping GTK running
+            // Run GTK event loop until stopped
+            let running_loop = running_gtk.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+                if running_loop.load(Ordering::SeqCst) {
+                    gtk::main_quit();
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+            
+            // Keep reference to tray icon
+            let _tray_icon = tray_icon;
+            
+            // Run GTK main loop
+            gtk::main();
+        });
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    {
+        // For non-Linux platforms, create tray icon directly
+        let _tray_icon = TrayIconBuilder::new()
+            .with_icon(icon)
+            .with_tooltip("Nexus Logger - Recording in progress")
+            .build()
+            .map_err(|e| crate::error::LoggerError::Other(format!("Failed to create tray icon: {}", e)))?;
+
+        // Set up event handler
+        let session_clone = session_for_tray.clone();
+        let running_clone = running.clone();
+        TrayIconEvent::set_event_handler(Some(move |event| {
+            // Handle click events
+            match event {
+                TrayIconEvent::Click { button, .. } => {
+                    use tray_icon::MouseButton;
+                    if matches!(button, MouseButton::Left) {
+                        println!("\n🛑 Stopping unified recording from tray icon...");
+                        running_clone.store(true, Ordering::SeqCst);
+                        if let Ok(session_guard) = session_clone.try_lock() {
+                            if let Some(s) = session_guard.as_ref() {
+                                s.stop();
+                            }
+                        }
+                    }
+                }
+                TrayIconEvent::DoubleClick { .. } => {
+                    println!("\n🛑 Stopping unified recording from tray icon...");
+                    running_clone.store(true, Ordering::SeqCst);
+                    if let Ok(session_guard) = session_clone.try_lock() {
+                        if let Some(s) = session_guard.as_ref() {
+                            s.stop();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }));
+    }
+
     // Handle duration if specified
     if args.duration > 0 {
         // Wait for the specified duration, then stop
         tokio::time::sleep(tokio::time::Duration::from_secs(args.duration)).await;
-        session.stop();
+        if let Ok(session_guard) = session_for_tray.lock() {
+            if let Some(s) = session_guard.as_ref() {
+                s.stop();
+            }
+        }
+    } else {
+        // Wait until stopped (either by tray click or Ctrl+C)
+        while !running.load(Ordering::SeqCst) {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+        // Ensure session is stopped
+        if let Ok(session_guard) = session_for_tray.lock() {
+            if let Some(s) = session_guard.as_ref() {
+                s.stop();
+            }
+        }
     }
 
     // Wait for recording to complete
-    session.wait().await?;
+    // We need to move the session out, so we'll use a blocking call
+    let session = tokio::task::spawn_blocking(move || {
+        session_for_tray.lock().ok().and_then(|mut g| g.take())
+    }).await.ok().flatten();
+    
+    if let Some(s) = session {
+        s.wait().await?;
+    }
 
     println!("\n✅ Unified recording complete!");
     println!("   Session ID: {}", session_id);
@@ -266,5 +437,36 @@ impl EventCallback for VerboseEventCallback {
         }
         (true, None)
     }
+}
+
+/// Creates a simple recording icon (red circle).
+fn create_recording_icon() -> Result<Icon> {
+    use image::{ImageBuffer, Rgba};
+    
+    // Create a simple red circle icon (16x16 pixels)
+    let size = 16;
+    let mut img = ImageBuffer::<Rgba<u8>, Vec<u8>>::new(size, size);
+    
+    let center = (size / 2) as f32;
+    let radius = (size / 2 - 2) as f32;
+    
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32) - center;
+            let dy = (y as f32) - center;
+            let distance = (dx * dx + dy * dy).sqrt();
+            
+            if distance <= radius {
+                // Red color for recording indicator
+                img.put_pixel(x, y, Rgba([255, 0, 0, 255]));
+            } else {
+                // Transparent background
+                img.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+            }
+        }
+    }
+    
+    Icon::from_rgba(img.into_raw(), size, size)
+        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to create icon: {}", e)))
 }
 
