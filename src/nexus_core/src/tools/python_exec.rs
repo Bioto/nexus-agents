@@ -1,6 +1,7 @@
 use crate::models::tool::{Tool, ToolParameter};
 use crate::models::Result;
 use crate::tools::ExecutableTool;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use log::{debug, error, info};
 use nexus_sandbox::{DockerConfig, DockerService};
 use serde_json::Value;
@@ -93,10 +94,6 @@ impl PythonExec {
                 })
         })?;
 
-        println!(
-            "[execute_python] Created persistent container: {}",
-            container_id
-        );
         info!(
             "[execute_python] Created persistent container: {}",
             container_id
@@ -104,6 +101,103 @@ impl PythonExec {
 
         *container_guard = Some(container_id.clone());
         Ok(container_id)
+    }
+
+    /// Check Python code with ruff for formatting and basic errors
+    /// Returns Ok(()) if no issues found, or Err with ruff output if issues exist
+    fn check_code_with_ruff(
+        &self,
+        docker_service: &Arc<DockerService>,
+        container_id: &str,
+        code: &str,
+    ) -> Result<()> {
+        info!("[execute_python] Checking code with ruff");
+
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            crate::models::Error::Other(
+                "Cannot check code with ruff: not in an async runtime context".to_string(),
+            )
+        })?;
+
+        // Write code to temp file and check with ruff
+        // Use base64 encoding to safely pass the code without escaping issues
+        let code_b64 = STANDARD.encode(code.as_bytes());
+
+        let check_code = format!(
+            r#"
+import subprocess
+import sys
+import tempfile
+import os
+import base64
+
+# Decode user code from base64
+code_b64 = """{}"""
+user_code = base64.b64decode(code_b64).decode('utf-8')
+
+with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+    temp_path = f.name
+    f.write(user_code)
+
+try:
+    # Run ruff check using uvx which automatically downloads and runs ruff
+    # This avoids PATH issues and ensures ruff runs in the container
+    result = subprocess.run(
+        ["uvx", "ruff", "check", "--output-format", "concise", temp_path],
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+    
+    # ruff exits with 0 if no issues, 1 if issues found, 2 on error
+    if result.returncode == 1:
+        # Issues found - output them
+        print(result.stdout, end='')
+        print(result.stderr, end='', file=sys.stderr)
+        sys.exit(1)
+    elif result.returncode == 2:
+        # Ruff error (not code issues)
+        print(f"[ruff] Error running ruff: {{result.stderr}}", file=sys.stderr)
+        sys.exit(2)
+    else:
+        # No issues found
+        print("[ruff] Code check passed")
+finally:
+    # Clean up temp file
+    try:
+        os.unlink(temp_path)
+    except:
+        pass
+"#,
+            code_b64
+        );
+
+        let (stdout, stderr, exit_code) = handle
+            .block_on(async {
+                docker_service
+                    .execute_python_code_in_container_with_env(container_id, &check_code, None)
+                    .await
+            })
+            .map_err(|e| {
+                crate::models::Error::Other(format!("Failed to run ruff check: {}", e))
+            })?;
+
+        if exit_code != 0 {
+            // Ruff found issues or had an error
+            let error_msg = if !stdout.trim().is_empty() {
+                format!("Ruff found issues:\n{}", stdout)
+            } else if !stderr.trim().is_empty() {
+                format!("Ruff error:\n{}", stderr)
+            } else {
+                "Ruff check failed (no output)".to_string()
+            };
+
+            error!("[execute_python] Ruff check failed: {}", error_msg);
+            return Err(crate::models::Error::Other(error_msg));
+        }
+
+        debug!("[execute_python] Ruff check passed");
+        Ok(())
     }
 
     /// Clean up the persistent container
@@ -132,10 +226,6 @@ impl PythonExec {
                     })
             })?;
 
-            println!(
-                "[execute_python] Cleaned up persistent container: {}",
-                container_id
-            );
             info!(
                 "[execute_python] Cleaned up persistent container: {}",
                 container_id
@@ -173,10 +263,6 @@ impl Drop for PythonExec {
                         });
                     } else {
                         // Not in async context - can't clean up automatically
-                        eprintln!(
-                            "[execute_python] WARNING: Cannot cleanup container on drop (not in async context). Container ID: {}. Please clean up manually or call cleanup() before dropping.",
-                            container_id
-                        );
                         debug!("[execute_python] Cannot cleanup container on drop: not in async context. Container ID: {}", container_id);
                     }
                 }
@@ -206,20 +292,13 @@ impl ExecutableTool for PythonExec {
     }
 
     fn execute(&self, args: Value) -> Result<String> {
-        println!("[execute_python] Starting Python code execution");
         info!("[execute_python] Starting Python code execution");
 
         let code = args.get("code").and_then(|v| v.as_str()).ok_or_else(|| {
-            println!("[execute_python] ERROR: Missing required parameter: code");
             error!("[execute_python] Missing required parameter: code");
             crate::models::Error::Configuration("Missing required parameter: code".to_string())
         })?;
 
-        println!("[execute_python]s Code length: {} characters", code.len());
-        println!(
-            "[execute_python] Code preview: {}",
-            code.chars().take(200).collect::<String>()
-        );
         debug!("[execute_python] Code length: {} characters", code.len());
         debug!(
             "[execute_python] Code preview: {}",
@@ -227,15 +306,7 @@ impl ExecutableTool for PythonExec {
         );
 
         // Add servers directory to Python path and execute
-        println!(
-            "[execute_python] Canonicalizing servers directory: {}",
-            self.servers_dir.display()
-        );
         let servers_path = self.servers_dir.canonicalize().map_err(|e| {
-            println!(
-                "[execute_python] ERROR: Failed to canonicalize servers path: {}",
-                e
-            );
             error!(
                 "[execute_python] Failed to canonicalize servers path: {}",
                 e
@@ -243,10 +314,6 @@ impl ExecutableTool for PythonExec {
             crate::models::Error::Other(format!("Failed to canonicalize servers path: {}", e))
         })?;
 
-        println!(
-            "[execute_python] Servers directory: {}",
-            servers_path.display()
-        );
         debug!(
             "[execute_python] Servers directory: {}",
             servers_path.display()
@@ -254,15 +321,10 @@ impl ExecutableTool for PythonExec {
 
         // Get parent directory (workspace root) to add to Python path
         let workspace_root = servers_path.parent().ok_or_else(|| {
-            println!("[execute_python] ERROR: Servers directory has no parent");
             error!("[execute_python] Servers directory has no parent");
             crate::models::Error::Other("Servers directory has no parent".to_string())
         })?;
 
-        println!(
-            "[execute_python] Workspace root: {}",
-            workspace_root.display()
-        );
         debug!(
             "[execute_python] Workspace root: {}",
             workspace_root.display()
@@ -271,11 +333,6 @@ impl ExecutableTool for PythonExec {
         // Mount the workspace root into the container at /workspace
         let workspace_root_str = workspace_root.to_string_lossy().to_string();
         let mounts = vec![(workspace_root_str.clone(), "/workspace".to_string())];
-
-        println!(
-            "[execute_python] Mounting workspace root: {} -> /workspace",
-            workspace_root_str
-        );
 
         // Update the code to use /workspace instead of the host path
         // Note: Using raw string with proper indentation - the indentation after \n\ is preserved
@@ -338,29 +395,14 @@ exec(user_code)
             code = code
         );
 
-        println!(
-            "[execute_python] Executing Python code via Docker (code length: {} chars)",
-            container_code.len()
-        );
         info!("[execute_python] Executing Python code via Docker");
         debug!(
             "[execute_python] Code length: {} characters",
             container_code.len()
         );
 
-        // Debug: print first 500 chars of generated code to check indentation
-        let preview = container_code.chars().take(500).collect::<String>();
-        println!(
-            "[execute_python] Generated code preview (first 500 chars):\n{}",
-            preview
-        );
-
         // Get Docker service (lazy initialization)
         let docker_service = self.get_docker_service().map_err(|e| {
-            println!(
-                "[execute_python] ERROR: Failed to get Docker service: {}",
-                e
-            );
             error!("[execute_python] Failed to get Docker service: {}", e);
             e
         })?;
@@ -369,19 +411,17 @@ exec(user_code)
         let mut container_id = self
             .get_persistent_container(&docker_service, mounts.clone())
             .map_err(|e| {
-                println!(
-                    "[execute_python] ERROR: Failed to get persistent container: {}",
-                    e
-                );
                 error!("[execute_python] Failed to get persistent container: {}", e);
                 e
             })?;
 
+        // Check code with ruff before execution
+        if let Err(e) = self.check_code_with_ruff(&docker_service, &container_id, code) {
+            // Ruff found issues - return early with the error
+            return Err(e);
+        }
+
         // Execute the code in the persistent container using exec
-        println!(
-            "[execute_python] Executing code in persistent container: {}",
-            container_id
-        );
         info!(
             "[execute_python] Executing code in persistent container: {}",
             container_id
@@ -421,18 +461,6 @@ exec(user_code)
                 } else {
                     url
                 };
-                let original_url = std::env::var("MCP_SERVER_URL").unwrap_or_default();
-                if docker_url != original_url {
-                    println!(
-                        "[execute_python] Converted MCP_SERVER_URL from {} to {} for Docker networking",
-                        original_url, docker_url
-                    );
-                } else {
-                    println!(
-                        "[execute_python] Using MCP_SERVER_URL: {}",
-                        docker_url
-                    );
-                }
                 docker_url
             });
 
@@ -463,10 +491,6 @@ exec(user_code)
                     let error_msg = e.to_string();
                     // Check if the container doesn't exist or was removed
                     if error_msg.contains("does not exist") || error_msg.contains("not found") {
-                        println!(
-                            "[execute_python] Container {} was removed, recreating...",
-                            container_id
-                        );
                         error!(
                             "[execute_python] Container {} was removed, recreating...",
                             container_id
@@ -481,10 +505,6 @@ exec(user_code)
                         container_id = self
                             .get_persistent_container(&docker_service, mounts.clone())
                             .map_err(|e| {
-                                println!(
-                                    "[execute_python] ERROR: Failed to recreate persistent container: {}",
-                                    e
-                                );
                                 error!(
                                     "[execute_python] Failed to recreate persistent container: {}",
                                     e
@@ -495,10 +515,6 @@ exec(user_code)
                                 ))
                             })?;
 
-                        println!(
-                            "[execute_python] Recreated persistent container: {}",
-                            container_id
-                        );
                         info!(
                             "[execute_python] Recreated persistent container: {}",
                             container_id
@@ -508,7 +524,6 @@ exec(user_code)
                         continue;
                     } else {
                         // Some other error - return it
-                        println!("[execute_python] ERROR: Docker execution failed: {}", e);
                         error!("[execute_python] Docker execution failed: {}", e);
                         return Err(crate::models::Error::Other(format!(
                             "Docker execution failed: {}",
@@ -530,18 +545,6 @@ exec(user_code)
             exit_code,
         };
 
-        println!(
-            "[execute_python] Python execution completed with exit code: {}",
-            result.exit_code
-        );
-        println!(
-            "[execute_python] STDOUT length: {} characters",
-            result.stdout.len()
-        );
-        println!(
-            "[execute_python] STDERR length: {} characters",
-            result.stderr.len()
-        );
         info!(
             "[execute_python] Python execution completed with exit code: {}",
             result.exit_code
@@ -556,12 +559,6 @@ exec(user_code)
         );
 
         if result.exit_code != 0 {
-            println!(
-                "[execute_python] ERROR: Python code exited with non-zero code: {}",
-                result.exit_code
-            );
-            println!("[execute_python] STDOUT: {}", result.stdout);
-            println!("[execute_python] STDERR: {}", result.stderr);
             error!(
                 "[execute_python] Python code exited with non-zero code: {}",
                 result.exit_code
@@ -576,19 +573,13 @@ exec(user_code)
 
         // Return stdout, or stderr if stdout is empty
         let output = if result.stdout.trim().is_empty() {
-            println!("[execute_python] Using STDERR as output (STDOUT is empty)");
             debug!("[execute_python] Using STDERR as output (STDOUT is empty)");
             result.stderr
         } else {
-            println!("[execute_python] Using STDOUT as output");
             debug!("[execute_python] Using STDOUT as output");
             result.stdout
         };
 
-        println!(
-            "[execute_python] Execution successful, output length: {} characters",
-            output.len()
-        );
         info!(
             "[execute_python] Execution successful, output length: {} characters",
             output.len()
