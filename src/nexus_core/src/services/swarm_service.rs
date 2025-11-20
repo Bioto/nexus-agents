@@ -50,7 +50,7 @@ pub struct SwarmResult {
 }
 
 fn default_model_for_swarm() -> String {
-    "gpt-4o-mini".to_string()
+    "gpt-4o-miniasdsad".to_string()
 }
 
 impl SwarmService {
