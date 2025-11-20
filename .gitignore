@@ -6,3 +6,4 @@ logs
 
 **/__pycache__/**
 .ruff_cache
+__pycache__/** */
