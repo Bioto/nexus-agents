@@ -475,22 +475,34 @@ impl UnifiedRecordingService {
     }
 
     fn run_screen_recording_blocking(
-        _config: ScreenRecordingConfig,
+        config: ScreenRecordingConfig,
         stop_signal: Arc<AtomicBool>,
     ) -> Result<()> {
-        // TODO: Integrate with nexus_screen::services::screen_recorder::ScreenRecorder
-        // For now, this is a placeholder that waits until stop signal
-        // The actual implementation would:
-        // 1. Create a ScreenRecorder
-        // 2. Convert ScreenRecordingConfig to RecordingConfig
-        // 3. Call recorder.record() in a blocking task
-        // 4. Provide video timestamp information
-        
-        // Wait until stop signal is set
-        while !stop_signal.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        
+        use nexus_screen::{RecordingConfig, ScreenRecorder};
+
+        // Convert our config to nexus_screen's RecordingConfig
+        let recording_config = RecordingConfig {
+            framerate: config.framerate,
+            duration_secs: config.duration_secs,
+            output_path: config.output_path,
+            monitor_index: config.monitor_index,
+            window_id: None,
+            window_title: None,
+            include_audio: config.include_audio,
+            fast: false,
+        };
+
+        // Create recorder
+        let recorder = ScreenRecorder::new_with_config(recording_config.clone())
+            .map_err(|e| {
+                LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
+            })?;
+
+        // Start recording (this is blocking)
+        recorder.record(recording_config, stop_signal).map_err(|e| {
+            LoggerError::Other(format!("Screen recording failed: {}", e))
+        })?;
+
         Ok(())
     }
 

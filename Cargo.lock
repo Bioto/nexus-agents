@@ -3460,6 +3460,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "device_query",
+ "nexus-screen",
  "rusqlite",
  "serde",
  "serde_json",
