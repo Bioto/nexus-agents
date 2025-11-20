@@ -1,6 +1,7 @@
 use crate::load_env;
 use crate::models::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Error, Result,
+    ResponseFormat,
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -988,8 +989,50 @@ impl ResponsesClient {
             request_body["tools"] = serde_json::Value::Array(transformed_tools);
         }
         if let Some(ref response_format) = request.response_format {
-            request_body["response_format"] = serde_json::to_value(response_format)
-                .map_err(|e| Error::Other(format!("Failed to serialize response_format: {}", e)))?;
+            // In the Responses API, response_format has moved to text.format
+            // The Responses API requires text.format.name to be set
+            if !request_body["text"].is_object() {
+                request_body["text"] = serde_json::json!({});
+            }
+            
+            let format_value = match response_format {
+                ResponseFormat::JsonObject => {
+                    // For json_object, Responses API requires a name field
+                    serde_json::json!({
+                        "type": "json_object",
+                        "name": "response"
+                    })
+                }
+                ResponseFormat::JsonSchema { json_schema } => {
+                    // For json_schema, extract name, schema, and optional strict from the wrapper
+                    let mut schema_value = serde_json::to_value(&json_schema.schema)
+                        .map_err(|e| Error::Other(format!("Failed to serialize schema: {}", e)))?;
+                    
+                    // Responses API requires additionalProperties to be explicitly set to false
+                    // Always set it to false as required by the API
+                    if let Some(schema_obj) = schema_value.as_object_mut() {
+                        schema_obj.insert(
+                            "additionalProperties".to_string(),
+                            serde_json::Value::Bool(false),
+                        );
+                    }
+                    
+                    let mut format_obj = serde_json::json!({
+                        "type": "json_schema",
+                        "name": json_schema.name,
+                        "schema": schema_value
+                    });
+                    
+                    // Add strict if present
+                    if let Some(strict) = json_schema.strict {
+                        format_obj["strict"] = serde_json::Value::Bool(strict);
+                    }
+                    
+                    format_obj
+                }
+            };
+            
+            request_body["text"]["format"] = format_value;
         }
 
         Ok(request_body)
