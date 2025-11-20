@@ -76,7 +76,7 @@ pub async fn run_capture_service(
     let session_id = Uuid::new_v4().to_string();
     db.create_session(&session_id).await?;
 
-    let click_context = ClickContextService::maybe_start();
+    let click_context = ClickContextService::maybe_start(db.clone());
 
     let device_state = DeviceState::new();
     let mut last_keys: Vec<Keycode> = vec![];
@@ -425,6 +425,13 @@ pub async fn run_capture_service(
     // Display final summary
     println!("\n📊 Final Session Summary:");
     display_metrics_summary(&metrics, &db_clone_for_final, &session_id).await?;
+
+    // Wait for click-context worker to finish processing in-flight analyses
+    if let Some(ctx) = click_context {
+        println!("\n🔍 Waiting for in-flight click analyses to complete...");
+        ctx.wait_for_completion().await;
+        println!("✅ All click analyses complete");
+    }
 
     Ok(())
 }

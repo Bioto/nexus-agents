@@ -231,6 +231,34 @@ impl UnifiedRecordingService {
         }
     }
 
+    /// Get video duration in seconds using FFprobe
+    fn get_video_duration(video_path: &PathBuf) -> Result<f64> {
+        use std::process::Command;
+
+        let output = Command::new("ffprobe")
+            .arg("-v")
+            .arg("error")
+            .arg("-show_entries")
+            .arg("format=duration")
+            .arg("-of")
+            .arg("default=noprint_wrappers=1:nokey=1")
+            .arg(video_path)
+            .output()
+            .map_err(|e| LoggerError::Other(format!("Failed to run ffprobe: {}", e)))?;
+
+        if !output.status.success() {
+            return Err(LoggerError::Other(
+                "FFprobe failed to get video duration".to_string(),
+            ));
+        }
+
+        let duration_str = String::from_utf8_lossy(&output.stdout);
+        duration_str
+            .trim()
+            .parse::<f64>()
+            .map_err(|e| LoggerError::Other(format!("Failed to parse video duration: {}", e)))
+    }
+
     /// Start unified recording (screen + input).
     ///
     /// This method:
@@ -244,14 +272,16 @@ impl UnifiedRecordingService {
     pub async fn start_recording(&self, stop_signal: Arc<AtomicBool>) -> Result<RecordingSession> {
         let session_id = Uuid::new_v4().to_string();
         let recording_start = Utc::now();
+        let recording_start_instant = Instant::now();
 
         // Initialize database
         let db = Database::new().await?;
         db.create_session(&session_id).await?;
+        let click_context = ClickContextService::maybe_start(db.clone());
+        let db = Arc::new(db);
 
         // Channel for events from input capture
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(InputEvent, Instant)>();
-        let click_context = ClickContextService::maybe_start();
 
         // Start input capture in background
         let input_config = self.config.input_config.clone();
@@ -259,13 +289,14 @@ impl UnifiedRecordingService {
         let capture_mouse = self.config.capture_mouse;
         let capture_mouse_moves = self.config.capture_mouse_moves;
         let callback_clone = Arc::clone(&self.callback);
-        let db_clone = Arc::new(db);
+        let db_clone = Arc::clone(&db);
         let session_id_clone = session_id.clone();
         let recording_start_clone = recording_start;
         let stop_signal_input = stop_signal.clone();
 
         let click_context_for_input = click_context.clone();
         let session_id_for_input = session_id.clone();
+        let video_path_for_input = self.config.screen_config.output_path.clone();
         let input_handle = tokio::task::spawn_blocking(move || {
             Self::run_input_capture_blocking(
                 capture_keyboard,
@@ -276,6 +307,7 @@ impl UnifiedRecordingService {
                 stop_signal_input,
                 click_context_for_input,
                 session_id_for_input,
+                video_path_for_input,
             )
         });
 
@@ -292,11 +324,16 @@ impl UnifiedRecordingService {
         let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
         let overlay_labels_clone = overlay_labels.clone();
 
+        // Collect click events for post-recording batch analysis
+        let click_events = Arc::new(std::sync::Mutex::new(Vec::<ClickContextEvent>::new()));
+        let click_events_clone = click_events.clone();
+
         // Process events and call callbacks
         let stop_signal_process = stop_signal.clone();
+        let session_id_for_clicks = session_id.clone();
+        let video_path_for_clicks = self.config.screen_config.output_path.clone();
+        let video_start_time = recording_start_instant;
         let process_handle = tokio::spawn(async move {
-            let mut video_start_time = None;
-
             loop {
                 // Check stop signal first
                 if stop_signal_process.load(Ordering::SeqCst) {
@@ -319,13 +356,9 @@ impl UnifiedRecordingService {
                     }
                 };
 
-                // Calculate video timestamp
-                // For now, we estimate based on elapsed time
-                // In a real implementation, you'd get this from the video encoder
-                if video_start_time.is_none() {
-                    video_start_time = Some(event_time);
-                }
-                let elapsed = event_time.duration_since(video_start_time.unwrap());
+                // Calculate video timestamp from recording start time
+                // This ensures timestamps are accurate even if the user doesn't interact immediately
+                let elapsed = event_time.duration_since(video_start_time);
                 let video_timestamp = elapsed.as_secs_f64();
 
                 // Call appropriate callback
@@ -450,6 +483,29 @@ impl UnifiedRecordingService {
                         }
                     }
                 }
+
+                // Queue click events for post-recording analysis
+                if let InputEvent::Mouse {
+                    event_type,
+                    button,
+                    x,
+                    y,
+                    ..
+                } = &event
+                {
+                    if event_type == "click" {
+                        let click_evt = ClickContextEvent::new(
+                            Some(session_id_for_clicks.clone()),
+                            Local::now().with_timezone(&Utc),
+                            button.clone(),
+                            *x,
+                            *y,
+                        )
+                        .with_video_context(video_timestamp, video_path_for_clicks.clone());
+
+                        click_events_clone.lock().unwrap().push(click_evt);
+                    }
+                }
             }
 
             // Labels are stored in the shared Arc<Mutex<Vec<OverlayLabel>>>
@@ -467,6 +523,8 @@ impl UnifiedRecordingService {
             stop_signal,
             overlay_labels,
             config: self.config.clone(),
+            click_context,
+            click_events,
         })
     }
 
@@ -477,8 +535,9 @@ impl UnifiedRecordingService {
         input_config: InputCaptureConfig,
         event_tx: mpsc::UnboundedSender<(InputEvent, Instant)>,
         stop_signal: Arc<AtomicBool>,
-        click_context: Option<ClickContextHandle>,
-        session_id: String,
+        _click_context: Option<ClickContextHandle>,
+        _session_id: String,
+        _video_path: PathBuf,
     ) -> Result<()> {
         use device_query::{DeviceQuery, DeviceState, Keycode};
         use std::collections::HashSet;
@@ -488,6 +547,7 @@ impl UnifiedRecordingService {
         let mut last_keys: Vec<Keycode> = vec![];
         let mut last_mouse_buttons: Vec<bool> = vec![];
         let mut last_mouse_pos: Option<(i32, i32)> = None;
+        let _recording_start_instant = Instant::now();
 
         // Open output file if specified
         let mut file_handle: Option<std::fs::File> =
@@ -575,14 +635,7 @@ impl UnifiedRecordingService {
                         };
                         Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
                         let _ = event_tx.send((event, event_time));
-                        Self::notify_click_context(
-                            &click_context,
-                            &session_id,
-                            timestamp_utc,
-                            Some(button_name.clone()),
-                            Some(mouse.coords.0),
-                            Some(mouse.coords.1),
-                        );
+                        // Don't process clicks during recording; batch-process after video is complete
                     } else if !pressed && was_pressed {
                         let event = InputEvent::Mouse {
                             event_type: "release".to_string(),
@@ -617,24 +670,6 @@ impl UnifiedRecordingService {
         Ok(())
     }
 
-    fn notify_click_context(
-        handle: &Option<ClickContextHandle>,
-        session_id: &str,
-        timestamp: DateTime<Utc>,
-        button: Option<String>,
-        x: Option<i32>,
-        y: Option<i32>,
-    ) {
-        if let Some(ctx) = handle {
-            ctx.trigger(ClickContextEvent::new(
-                Some(session_id.to_string()),
-                timestamp,
-                button,
-                x,
-                y,
-            ));
-        }
-    }
 
     fn run_screen_recording_blocking(
         config: ScreenRecordingConfig,
@@ -853,6 +888,8 @@ pub struct RecordingSession {
     stop_signal: Arc<AtomicBool>,
     overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
     config: UnifiedRecordingConfig,
+    click_context: Option<ClickContextHandle>,
+    click_events: Arc<std::sync::Mutex<Vec<ClickContextEvent>>>,
 }
 
 impl RecordingSession {
@@ -894,6 +931,55 @@ impl RecordingSession {
                 eprintln!("⚠️  Failed to apply video overlays: {}", e);
             } else {
                 println!("✅ Overlays applied successfully");
+            }
+        }
+
+        // Wait for click-context worker to finish processing in-flight analyses
+        // Process queued click events now that video is complete
+        if let Some(ctx) = self.click_context {
+            let clicks = self.click_events.lock().unwrap().clone();
+            if !clicks.is_empty() {
+                println!(
+                    "\n🔍 Processing {} click events from recording...",
+                    clicks.len()
+                );
+                
+                // Give extra time for video file to be fully flushed and accessible
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                
+                // Get actual video duration to filter out clicks after recording stopped
+                let video_duration = UnifiedRecordingService::get_video_duration(&self.config.screen_config.output_path);
+                
+                let mut processed_count = 0;
+                let mut skipped_count = 0;
+                
+                for click in clicks {
+                    // Filter out clicks that happened after video ended
+                    if let (Some(timestamp), Ok(duration)) = (click.video_timestamp, &video_duration) {
+                        if timestamp > *duration {
+                            eprintln!(
+                                "⚠️  Skipping click at {:.2}s (after video ended at {:.2}s)",
+                                timestamp, duration
+                            );
+                            skipped_count += 1;
+                            continue;
+                        }
+                    }
+                    
+                    ctx.trigger(click);
+                    processed_count += 1;
+                }
+
+                if skipped_count > 0 {
+                    println!(
+                        "   ℹ️  Skipped {} click(s) that occurred after recording ended",
+                        skipped_count
+                    );
+                }
+
+                // Wait for all analyses to complete
+                ctx.wait_for_completion().await;
+                println!("✅ Processed {} click analyses", processed_count);
             }
         }
 

@@ -35,7 +35,7 @@ impl Database {
     pub async fn new() -> Result<Self> {
         let config = ClickHouseConfig::from_env();
         let connection_url = config.connection_url();
-        eprintln!("asdConnecting to ClickHouse at: {}", connection_url);
+        eprintln!("Connecting to ClickHouse at: {}", connection_url);
 
         let service = ClickHouseService::new(config).await.map_err(|e| {
             LoggerError::Configuration(format!("Failed to create ClickHouse service: {}", e))
@@ -218,19 +218,25 @@ impl Database {
         metadata: Option<Value>,
         screenshot_id: Option<&str>,
     ) -> Result<()> {
+        // Helper to properly escape strings for ClickHouse SQL
+        // Must escape backslashes first, then single quotes
+        fn escape_sql_string(s: &str) -> String {
+            s.replace('\\', "\\\\").replace('\'', "\\'")
+        }
+
         let metadata_str = metadata
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()))
             .unwrap_or_else(|| "{}".to_string());
 
         let event_subtype_str = event_subtype
-            .map(|s| format!("'{}'", s))
+            .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string());
         let key_str = key
-            .map(|s| format!("'{}'", s.replace('\'', "''")))
+            .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string());
         let button_str = button
-            .map(|s| format!("'{}'", s.replace('\'', "''")))
+            .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string());
         let x_str = x
             .map(|v| v.to_string())
@@ -243,7 +249,7 @@ impl Database {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "NULL".to_string());
         let screenshot_id_str = screenshot_id
-            .map(|s| format!("'{}'", s))
+            .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string());
 
         // Parse timestamp - support both RFC3339 and other formats
@@ -265,8 +271,8 @@ impl Database {
             ) VALUES (
                 '{}', '{}', {}, {}, {}, {}, {}, {}, '{}', {}, '{}', {}
             )",
-            session_id.replace('\'', "''"),
-            event_type.replace('\'', "''"),
+            escape_sql_string(session_id),
+            escape_sql_string(event_type),
             event_subtype_str,
             key_str,
             button_str,
@@ -275,7 +281,7 @@ impl Database {
             pressed_str,
             timestamp_dt,
             timecode_str,
-            metadata_str.replace('\'', "''"),
+            escape_sql_string(&metadata_str),
             screenshot_id_str
         );
 
