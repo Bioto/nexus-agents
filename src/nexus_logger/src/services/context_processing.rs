@@ -6,7 +6,6 @@ use nexus_core::models::{ContentPart, ImageUrl};
 use nexus_core::{ChatCompletionRequest, Message, MessageContent, NexusApiService};
 use nexus_screen::ScreenRecorder;
 use serde_json::{json, Value};
-use std::cmp::Ordering;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +18,7 @@ use uuid::Uuid;
 
 const FRAME_SYSTEM_PROMPT: &str = "You are an expert UI and user behavior analyst. Analyze the provided screenshot and, if given, use any prior frame descriptions to infer the user's likely action. In one or two clear sentences, describe what the user is doing, referencing salient UI elements, visible text, and any change or intent you can deduce from the visual context.";
 const SUMMARY_SYSTEM_PROMPT: &str = "You summarize what likely happened around a click event based on prior frame descriptions. Mention the probable user intent in one concise sentence.";
+const FRAME_BATCH_SIZE: usize = 3;
 
 #[derive(Clone)]
 pub struct ProcessingHandle {
@@ -284,8 +284,13 @@ impl ProcessingService {
             frames.len()
         );
 
-        let descriptions =
-            Self::describe_frames_parallel(api_service.clone(), &config, &job, &frames).await?;
+        let descriptions = Self::describe_frames_in_batches(
+            Arc::clone(&api_service),
+            Arc::clone(&config),
+            &job,
+            &frames,
+        )
+        .await?;
 
         if descriptions.is_empty() {
             eprintln!("⚠️  No frame descriptions generated (all frames failed to analyze)");
@@ -328,54 +333,60 @@ impl ProcessingService {
         println!("   → Summary: {}", summary.trim());
     }
 
-    async fn describe_frames_parallel(
+    async fn describe_frames_in_batches(
         api_service: Arc<NexusApiService>,
-        config: &ProcessingConfig,
+        config: Arc<ProcessingConfig>,
         job: &ProcessingJob,
         frames: &[CapturedFrame],
     ) -> Result<Vec<FrameDescription>> {
-        println!("🤖  Analyzing {} frames in parallel...", frames.len());
-        let mut analysis_tasks = Vec::new();
+        println!(
+            "🤖  Analyzing {} frames in batches of {} (batches processed in parallel)...",
+            frames.len(),
+            FRAME_BATCH_SIZE
+        );
 
-        for (idx, frame) in frames.iter().enumerate() {
+        let mut handles = Vec::new();
+        for (batch_idx, chunk) in frames.chunks(FRAME_BATCH_SIZE).enumerate() {
             let api = Arc::clone(&api_service);
-            let cfg = config.clone();
+            let cfg = Arc::clone(&config);
             let job_clone = job.clone();
-            let frm = frame.clone();
+            let batch_frames: Vec<CapturedFrame> = chunk.to_vec();
 
-            let task = tokio::spawn(async move {
-                Self::describe_frame_simple(api, &cfg, &job_clone, &frm).await
+            let handle = tokio::spawn(async move {
+                Self::process_batch(api, cfg, job_clone, batch_idx, batch_frames).await
             });
-
-            analysis_tasks.push((idx, frame.offset_secs, frame.file_path.clone(), task));
+            handles.push(handle);
         }
 
-        let mut descriptions = Vec::new();
-        for (idx, offset, file_path, task) in analysis_tasks {
-            match task.await {
-                Ok(Ok(text)) => {
-                    println!("   ✓ Frame {} (+{:.2}s) analyzed", idx + 1, offset);
-                    descriptions.push(FrameDescription {
-                        offset_secs: offset,
-                        description: text,
-                        file_path,
-                    });
-                }
+        let mut batches = Vec::new();
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(batch)) => batches.push(batch),
                 Ok(Err(err)) => {
-                    eprintln!("   ✗ Frame {} (+{}s) failed: {}", idx + 1, offset, err);
+                    eprintln!("⚠️  Batch processing failed: {}", err);
                 }
                 Err(err) => {
-                    eprintln!("   ✗ Frame {} (+{}s) task failed: {}", idx + 1, offset, err);
+                    eprintln!("⚠️  Batch task panicked: {}", err);
                 }
             }
         }
 
-        descriptions.sort_by(|a, b| {
-            a.offset_secs
-                .partial_cmp(&b.offset_secs)
-                .unwrap_or(Ordering::Equal)
-        });
-        Ok(descriptions)
+        batches.sort_by_key(|batch| batch.index);
+
+        let mut all_descriptions = Vec::new();
+        for batch in batches {
+            if let Some(summary) = &batch.summary {
+                println!(
+                    "🧾 Batch {} summary ({} frames): {}",
+                    batch.index + 1,
+                    batch.descriptions.len(),
+                    summary
+                );
+            }
+            all_descriptions.extend(batch.descriptions);
+        }
+
+        Ok(all_descriptions)
     }
 
     fn get_video_duration(video_path: &Path) -> Result<f64> {
@@ -778,23 +789,117 @@ impl ProcessingService {
         Ok(())
     }
 
-    async fn describe_frame_simple(
+    async fn process_batch(
+        api_service: Arc<NexusApiService>,
+        config: Arc<ProcessingConfig>,
+        job: ProcessingJob,
+        batch_index: usize,
+        frames: Vec<CapturedFrame>,
+    ) -> Result<BatchResult> {
+        println!(
+            "\n🧩 Processing batch {} ({} frame{})",
+            batch_index + 1,
+            frames.len(),
+            if frames.len() == 1 { "" } else { "s" }
+        );
+
+        let mut descriptions = Vec::new();
+        for (frame_idx, frame) in frames.iter().enumerate() {
+            match Self::describe_frame_with_context(
+                Arc::clone(&api_service),
+                config.as_ref(),
+                &job,
+                &descriptions,
+                frame,
+            )
+            .await
+            {
+                Ok(text) => {
+                    println!(
+                        "   ✓ Batch {} Frame {} (+{:.2}s) analyzed",
+                        batch_index + 1,
+                        frame_idx + 1,
+                        frame.offset_secs
+                    );
+                    descriptions.push(FrameDescription {
+                        offset_secs: frame.offset_secs,
+                        description: text,
+                        file_path: frame.file_path.clone(),
+                    });
+                }
+                Err(err) => {
+                    eprintln!(
+                        "   ✗ Batch {} Frame {} (+{:.2}s) failed: {}",
+                        batch_index + 1,
+                        frame_idx + 1,
+                        frame.offset_secs,
+                        err
+                    );
+                }
+            }
+        }
+
+        let summary = if !descriptions.is_empty() {
+            match Self::summarize_batch(
+                Arc::clone(&api_service),
+                config.as_ref(),
+                &job,
+                batch_index,
+                &descriptions,
+            )
+            .await
+            {
+                Ok(text) if !text.is_empty() => Some(text),
+                Ok(_) => None,
+                Err(err) => {
+                    eprintln!("⚠️  Failed to summarize batch {}: {}", batch_index + 1, err);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok(BatchResult {
+            index: batch_index,
+            descriptions,
+            summary,
+        })
+    }
+
+    async fn describe_frame_with_context(
         api_service: Arc<NexusApiService>,
         config: &ProcessingConfig,
         job: &ProcessingJob,
+        prior_descriptions: &[FrameDescription],
         frame: &CapturedFrame,
     ) -> Result<String> {
         let coordinates = job.coordinates().unwrap_or((0, 0));
-        let instruction = format!(
-            "Frame captured +{:.2}s from '{}' at ({}, {}). Describe visible UI in one or two sentences, focusing on user intent.",
-            frame.offset_secs,
-            job.label,
-            coordinates.0,
-            coordinates.1
+        let mut prompt = format!(
+            "Frame captured +{:.2}s from '{}' at ({}, {}).",
+            frame.offset_secs, job.label, coordinates.0, coordinates.1
         );
 
+        if prior_descriptions.is_empty() {
+            prompt.push_str(
+                " This is the first frame in this batch. Describe the visible UI in one or two sentences and infer the user's likely intent.",
+            );
+        } else {
+            prompt.push_str(
+                " Continue the story by referencing the prior observations below. Highlight what changed, what stayed the same, and what the user is probably doing now.",
+            );
+            prompt.push_str("\n\nPrior frames:");
+            for desc in prior_descriptions {
+                prompt.push_str(&format!(
+                    "\n• +{:.2}s: {}",
+                    desc.offset_secs, desc.description
+                ));
+            }
+            prompt.push_str("\n\nDescribe the current frame:");
+        }
+
         let content = MessageContent::Array(vec![
-            ContentPart::Text { text: instruction },
+            ContentPart::Text { text: prompt },
             ContentPart::ImageUrl {
                 image_url: ImageUrl {
                     url: format!("data:image/png;base64,{}", frame.base64_image),
@@ -847,6 +952,47 @@ impl ProcessingService {
         ];
         let request = ChatCompletionRequest::new(config.summary_model.clone(), messages);
 
+        let response = api_service.chat(request).await?;
+        let text = response
+            .content
+            .as_ref()
+            .map(|c| c.extract_text())
+            .unwrap_or_default();
+        Ok(text.trim().to_string())
+    }
+
+    async fn summarize_batch(
+        api_service: Arc<NexusApiService>,
+        config: &ProcessingConfig,
+        job: &ProcessingJob,
+        batch_idx: usize,
+        frames: &[FrameDescription],
+    ) -> Result<String> {
+        if frames.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut prompt = format!(
+            "Batch {} of context '{}' ({} frames).\n",
+            batch_idx + 1,
+            job.label,
+            frames.len()
+        );
+        for frame in frames {
+            prompt.push_str(&format!(
+                "Frame +{:.2}s: {}\n",
+                frame.offset_secs, frame.description
+            ));
+        }
+        prompt.push_str(
+            "Summarize this batch in one or two sentences, focusing on how the user's behavior evolved during these frames.",
+        );
+
+        let messages = vec![
+            Message::system(SUMMARY_SYSTEM_PROMPT),
+            Message::user(prompt),
+        ];
+        let request = ChatCompletionRequest::new(config.summary_model.clone(), messages);
         let response = api_service.chat(request).await?;
         let text = response
             .content
@@ -930,4 +1076,10 @@ struct FrameDescription {
     offset_secs: f64,
     description: String,
     file_path: Option<PathBuf>,
+}
+
+struct BatchResult {
+    index: usize,
+    descriptions: Vec<FrameDescription>,
+    summary: Option<String>,
 }
