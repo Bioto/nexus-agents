@@ -6,55 +6,18 @@ use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use tokio::time;
+use tracing::{debug, info, warn};
 
-#[derive(Debug, Clone)]
-pub struct DockerConfig {
-    pub image_name: String,
-    pub image_tag: String,
-    pub dockerfile_path: String,
-    pub build_context: String,
-}
+use crate::service::docker::config::DockerConfig;
+use crate::service::docker::error::DockerError;
 
-impl Default for DockerConfig {
-    fn default() -> Self {
-        Self {
-            image_name: "nexus_sandbox".to_string(),
-            image_tag: "latest".to_string(),
-            dockerfile_path: "src/nexus_sandbox/.docker/Dockerfile".to_string(),
-            build_context: ".".to_string(),
-        }
-    }
-}
+// Constants for timeouts and limits
+const CONTAINER_TIMEOUT_SECS: u64 = 300; // 5 minutes
+const MAX_POLL_ATTEMPTS: usize = 60;
+const POLL_INTERVAL_MS: u64 = 500;
+const DOCKER_CONNECT_TIMEOUT_SECS: u64 = 120;
 
-#[derive(Debug)]
-pub enum DockerError {
-    ConnectionFailed(String),
-    BuildFailed(String),
-    ImageNotFound(String),
-    ContainerCreationFailed(String),
-    ContainerStartFailed(String),
-    ExecutionFailed(String),
-    IoError(String),
-}
-
-impl std::fmt::Display for DockerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DockerError::ConnectionFailed(msg) => write!(f, "Docker connection failed: {}", msg),
-            DockerError::BuildFailed(msg) => write!(f, "Docker build failed: {}", msg),
-            DockerError::ImageNotFound(msg) => write!(f, "Docker image not found: {}", msg),
-            DockerError::ContainerCreationFailed(msg) => {
-                write!(f, "Container creation failed: {}", msg)
-            }
-            DockerError::ContainerStartFailed(msg) => write!(f, "Container start failed: {}", msg),
-            DockerError::ExecutionFailed(msg) => write!(f, "Container execution failed: {}", msg),
-            DockerError::IoError(msg) => write!(f, "IO error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for DockerError {}
-
+/// Service for managing Docker containers and executing code within them.
 pub struct DockerService {
     docker: Docker,
     config: DockerConfig,
@@ -64,12 +27,17 @@ impl DockerService {
     /// Create a new Docker service instance
     /// Connects to the system Docker daemon via the default socket
     /// Supports standard Docker, Docker Desktop, and Colima
+    #[must_use]
     pub async fn new(config: DockerConfig) -> Result<Self, DockerError> {
+        // Validate configuration
+        config.validate()?;
+
         // Try to connect to Docker daemon
         // First check DOCKER_HOST, then try Colima sockets, then default
         let docker = if let Ok(docker_host) = env::var("DOCKER_HOST") {
             // Use DOCKER_HOST if set
-            Docker::connect_with_socket(&docker_host, 120, bollard::API_DEFAULT_VERSION).map_err(
+            debug!("Connecting to Docker via DOCKER_HOST: {}", docker_host);
+            Docker::connect_with_socket(&docker_host, DOCKER_CONNECT_TIMEOUT_SECS, bollard::API_DEFAULT_VERSION).map_err(
                 |e| {
                     DockerError::ConnectionFailed(format!(
                         "Failed to connect to Docker daemon at {}: {}",
@@ -83,9 +51,10 @@ impl DockerService {
             let colima_socket_old = format!("{}/.colima/default/docker.sock", home);
 
             if Path::new(&colima_socket_new).exists() {
+                debug!("Connecting to Docker via Colima socket (new): {}", colima_socket_new);
                 Docker::connect_with_socket(
                     &format!("unix://{}", colima_socket_new),
-                    120,
+                    DOCKER_CONNECT_TIMEOUT_SECS,
                     bollard::API_DEFAULT_VERSION,
                 )
                 .map_err(|e| {
@@ -95,9 +64,10 @@ impl DockerService {
                     ))
                 })?
             } else if Path::new(&colima_socket_old).exists() {
+                debug!("Connecting to Docker via Colima socket (old): {}", colima_socket_old);
                 Docker::connect_with_socket(
                     &format!("unix://{}", colima_socket_old),
-                    120,
+                    DOCKER_CONNECT_TIMEOUT_SECS,
                     bollard::API_DEFAULT_VERSION,
                 )
                 .map_err(|e| {
@@ -108,6 +78,7 @@ impl DockerService {
                 })?
             } else {
                 // Fall back to default connection
+                debug!("Connecting to Docker via local defaults");
                 Docker::connect_with_local_defaults().map_err(|e| {
                     DockerError::ConnectionFailed(format!(
                         "Failed to connect to Docker daemon: {}. \
@@ -118,6 +89,7 @@ impl DockerService {
             }
         } else {
             // No HOME, use default connection
+            debug!("Connecting to Docker via local defaults (no HOME)");
             Docker::connect_with_local_defaults().map_err(|e| {
                 DockerError::ConnectionFailed(format!(
                     "Failed to connect to Docker daemon: {}. \
@@ -131,6 +103,7 @@ impl DockerService {
     }
 
     /// Create a Docker service with default configuration
+    #[must_use]
     pub async fn with_defaults() -> Result<Self, DockerError> {
         Self::new(DockerConfig::default()).await
     }
@@ -169,9 +142,8 @@ impl DockerService {
                                 DockerError::ImageNotFound(format!("Failed to list images: {}", e))
                             })?;
 
-                    // Debug: print what we're looking for and what we found
-                    eprintln!("Looking for image: '{}'", image_name);
-                    eprintln!("Checking {} images...", images.len());
+                    debug!("Looking for image: '{}'", image_name);
+                    debug!("Checking {} images...", images.len());
 
                     // Check if any image has the tag we're looking for
                     let exists = images.iter().any(|img| {
@@ -184,7 +156,7 @@ impl DockerService {
                                     || (tag.split(':').next().unwrap_or("")
                                         == self.config.image_name);
                                 if matches {
-                                    eprintln!("Found matching image: '{}'", tag);
+                                    debug!("Found matching image: '{}'", tag);
                                 }
                                 matches
                             })
@@ -194,34 +166,11 @@ impl DockerService {
                     });
 
                     if !exists {
-                        eprintln!(
-                            "Image '{}' not found in {} listed images",
-                            image_name,
-                            images.len()
-                        );
-                        // Show all images with nexus_sandbox in the name for debugging
-                        let nexus_images: Vec<_> = images
-                            .iter()
-                            .filter(|img| img.repo_tags.iter().any(|tag| tag.contains("nexus")))
-                            .flat_map(|img| img.repo_tags.iter())
-                            .collect();
-                        if !nexus_images.is_empty() {
-                            eprintln!("Found nexus-related images: {:?}", nexus_images);
-                        }
-                        // Show first few images for debugging
-                        let sample: Vec<_> = images
-                            .iter()
-                            .filter(|img| !img.repo_tags.is_empty())
-                            .take(10)
-                            .flat_map(|img| img.repo_tags.iter())
-                            .collect();
-                        if !sample.is_empty() {
-                            eprintln!("Sample of available images: {:?}", sample);
-                        }
-
+                        warn!("Image '{}' not found in {} listed images", image_name, images.len());
+                        
                         // Last resort: try to inspect by ID or try creating a container
                         // Sometimes images exist but aren't in list_images
-                        eprintln!("Attempting direct container creation test...");
+                        debug!("Attempting direct container creation test...");
                         let test_config = Config {
                             image: Some(image_name.clone()),
                             cmd: Some(vec!["echo".to_string(), "test".to_string()]),
@@ -244,7 +193,7 @@ impl DockerService {
                                         }),
                                     )
                                     .await;
-                                eprintln!("Image exists (verified by test container creation)");
+                                debug!("Image exists (verified by test container creation)");
                                 return Ok(true);
                             }
                             Err(e) => {
@@ -252,12 +201,10 @@ impl DockerService {
                                 if err_msg.contains("no such image")
                                     || err_msg.contains("not found")
                                 {
-                                    eprintln!(
-                                        "Image confirmed not found via container creation test"
-                                    );
+                                    debug!("Image confirmed not found via container creation test");
                                 } else {
                                     // Other error might mean image exists but can't create container
-                                    eprintln!("Container creation test error (might indicate image exists): {}", e);
+                                    warn!("Container creation test error (might indicate image exists): {}", e);
                                 }
                             }
                         }
@@ -384,14 +331,14 @@ impl DockerService {
         if !is_running {
             // Container is not running - try to start it
             // This works for both stopped and exited containers
-            eprintln!(
-                "[DockerService] Container {} is not running, attempting to start it...",
+            debug!(
+                "Container {} is not running, attempting to start it...",
                 container_id
             );
             match self.start_container(container_id).await {
                 Ok(_) => {
                     // Give it a moment to start
-                    time::sleep(time::Duration::from_millis(500)).await;
+                    time::sleep(time::Duration::from_millis(POLL_INTERVAL_MS)).await;
                     // Verify it's actually running now
                     let is_running_after = self.is_container_running(container_id).await?;
                     if !is_running_after {
@@ -400,10 +347,7 @@ impl DockerService {
                             container_id
                         )));
                     }
-                    eprintln!(
-                        "[DockerService] Container {} successfully started",
-                        container_id
-                    );
+                    debug!("Container {} successfully started", container_id);
                 }
                 Err(e) => {
                     // Check if container exists at all
@@ -563,7 +507,7 @@ impl DockerService {
         // Wait for container to finish
         // Try waiting, but if it fails, we'll poll the container state instead
         let wait_success = tokio::time::timeout(
-            time::Duration::from_secs(300), // 5 minute timeout
+            time::Duration::from_secs(CONTAINER_TIMEOUT_SECS),
             async {
                 let mut wait_stream = self.docker.wait_container::<String>(&container_id, None);
                 while let Some(result) = wait_stream.next().await {
@@ -575,7 +519,7 @@ impl DockerService {
                         Err(e) => {
                             // Wait failed - container might have already finished or there's an issue
                             // We'll check the state via inspect instead
-                            eprintln!("Warning: Container wait stream error: {}, will check container state directly", e);
+                            warn!("Container wait stream error: {}, will check container state directly", e);
                             return Ok::<bool, DockerError>(false);
                         }
                     }
@@ -589,7 +533,6 @@ impl DockerService {
         if wait_success.is_err() || matches!(wait_success, Ok(Ok(false))) {
             // Poll container state until it's stopped
             let mut attempts = 0;
-            let max_attempts = 60; // 30 seconds max (0.5s * 60)
             loop {
                 let inspect_result = self
                     .docker
@@ -614,13 +557,13 @@ impl DockerService {
                 }
 
                 attempts += 1;
-                if attempts >= max_attempts {
+                if attempts >= MAX_POLL_ATTEMPTS {
                     return Err(DockerError::ExecutionFailed(
                         "Container did not finish within timeout".to_string(),
                     ));
                 }
 
-                time::sleep(time::Duration::from_millis(500)).await;
+                time::sleep(time::Duration::from_millis(POLL_INTERVAL_MS)).await;
             }
         }
 
@@ -679,7 +622,7 @@ impl DockerService {
         if remove_after {
             let _ = self.remove_container(&container_id, true).await;
         } else {
-            eprintln!("Container {} kept alive (not removed)", container_id);
+            info!("Container {} kept alive (not removed)", container_id);
         }
 
         Ok((
@@ -704,7 +647,7 @@ impl DockerService {
 
         // Wait for container to finish
         let wait_success = tokio::time::timeout(
-            time::Duration::from_secs(300),
+            time::Duration::from_secs(CONTAINER_TIMEOUT_SECS),
             async {
                 let mut wait_stream = self.docker.wait_container::<String>(&container_id, None);
                 while let Some(result) = wait_stream.next().await {
@@ -713,7 +656,7 @@ impl DockerService {
                             return Ok::<bool, DockerError>(true);
                         }
                         Err(e) => {
-                            eprintln!("Warning: Container wait stream error: {}, will check container state directly", e);
+                            warn!("Container wait stream error: {}, will check container state directly", e);
                             return Ok::<bool, DockerError>(false);
                         }
                     }
@@ -725,7 +668,6 @@ impl DockerService {
         // If wait failed or timed out, poll the container state
         if wait_success.is_err() || matches!(wait_success, Ok(Ok(false))) {
             let mut attempts = 0;
-            let max_attempts = 60;
             loop {
                 let inspect_result = self
                     .docker
@@ -748,13 +690,13 @@ impl DockerService {
                 }
 
                 attempts += 1;
-                if attempts >= max_attempts {
+                if attempts >= MAX_POLL_ATTEMPTS {
                     return Err(DockerError::ExecutionFailed(
                         "Container did not finish within timeout".to_string(),
                     ));
                 }
 
-                time::sleep(time::Duration::from_millis(500)).await;
+                time::sleep(time::Duration::from_millis(POLL_INTERVAL_MS)).await;
             }
         }
 

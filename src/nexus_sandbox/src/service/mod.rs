@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
+use thiserror::Error;
+use tracing::error;
 
 #[derive(Debug, Clone)]
 pub struct ExecutionResult {
@@ -13,37 +15,20 @@ pub struct ExecutionResult {
     pub exit_code: i32,
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum PythonExecutionError {
+    #[error("uv is not installed or not in PATH. Please install uv first.")]
     UvNotFound,
+    
+    #[error("Script not found: {0}")]
     ScriptNotFound(String),
+    
+    #[error("Execution failed: {0}")]
     ExecutionFailed(String),
+    
+    #[error("IO error: {0}")]
     IoError(String),
 }
-
-impl std::fmt::Display for PythonExecutionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PythonExecutionError::UvNotFound => {
-                write!(
-                    f,
-                    "uv is not installed or not in PATH. Please install uv first."
-                )
-            }
-            PythonExecutionError::ScriptNotFound(path) => {
-                write!(f, "Script not found: {}", path)
-            }
-            PythonExecutionError::ExecutionFailed(msg) => {
-                write!(f, "Execution failed: {}", msg)
-            }
-            PythonExecutionError::IoError(msg) => {
-                write!(f, "IO error: {}", msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for PythonExecutionError {}
 
 pub struct PythonExecutionService;
 
@@ -274,7 +259,7 @@ impl PythonExecutionService {
                 PythonExecutionError::IoError(format!("Failed to read stderr: {}", e))
             })?;
             // Stream stderr to stderr output
-            eprintln!("{}", line);
+            error!("{}", line);
             stderr_lines.push(line);
         }
 

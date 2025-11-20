@@ -2,6 +2,8 @@ use crate::service::docker::{DockerConfig, DockerService};
 use clap::Args;
 use std::io::{self, Read};
 use std::time::{SystemTime, UNIX_EPOCH};
+use chrono::{DateTime, Utc};
+use tracing::{error, info};
 
 /// Escape XML special characters
 fn escape_xml(s: &str) -> String {
@@ -14,25 +16,9 @@ fn escape_xml(s: &str) -> String {
 
 /// Format a Unix timestamp to a readable datetime string
 fn format_timestamp(secs: u64) -> String {
-    // Calculate time components from Unix timestamp
-    // This is a simplified approach - for production, consider using chrono
-    let total_secs = secs;
-    let days = total_secs / 86400;
-    let secs_in_day = total_secs % 86400;
-    let hours = secs_in_day / 3600;
-    let mins = (secs_in_day % 3600) / 60;
-    let secs_remain = secs_in_day % 60;
-
-    // Approximate year (Unix epoch started Jan 1, 1970)
-    // This is a rough calculation - for accurate dates, use chrono
-    let year = 1970 + (days / 365);
-    let day_of_year = (days % 365) + 1; // Day of year (1-365)
-
-    // Simple format: YYYY-DDD HH:MM:SS
-    format!(
-        "{:04}-{:03} {:02}:{:02}:{:02} UTC",
-        year, day_of_year, hours, mins, secs_remain
-    )
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        .unwrap_or_else(Utc::now);
+    dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
 #[derive(Args, Debug)]
@@ -71,43 +57,28 @@ pub async fn run_docker_exec(args: DockerExecArgs) -> Result<(), Box<dyn std::er
     };
 
     if code.trim().is_empty() {
-        eprintln!("Error: No code provided. Use --code <code> or pipe code via stdin.");
+        error!("No code provided. Use --code <code> or pipe code via stdin.");
         std::process::exit(1);
     }
 
     // Create Docker configuration
-    let image_name = args
-        .image
-        .as_ref()
-        .map(|s| s.clone())
-        .unwrap_or_else(|| "nexus_sandbox".to_string());
-    let image_tag = args
-        .tag
-        .as_ref()
-        .map(|s| s.clone())
-        .unwrap_or_else(|| "latest".to_string());
+    let image_name = args.image.as_deref().unwrap_or("nexus_sandbox");
+    let image_tag = args.tag.as_deref().unwrap_or("latest");
+
     let config = DockerConfig {
-        image_name: image_name.clone(),
-        image_tag: image_tag.clone(),
-        dockerfile_path: args
-            .dockerfile
-            .as_ref()
-            .map(|s| s.clone())
-            .unwrap_or_else(|| "src/nexus_sandbox/.docker/Dockerfile".to_string()),
-        build_context: args
-            .build_context
-            .as_ref()
-            .map(|s| s.clone())
-            .unwrap_or_else(|| ".".to_string()),
+        image_name: image_name.to_string(),
+        image_tag: image_tag.to_string(),
+        dockerfile_path: args.dockerfile.clone().unwrap_or_else(|| "src/nexus_sandbox/.docker/Dockerfile".to_string()),
+        build_context: args.build_context.clone().unwrap_or_else(|| ".".to_string()),
     };
 
     // Create Docker service
-    eprintln!("Connecting to Docker daemon...");
+    info!("Connecting to Docker daemon...");
     let docker = DockerService::new(config).await.map_err(|e| {
-        eprintln!("Error: Failed to connect to Docker daemon. Is Docker running?");
+        error!("Failed to connect to Docker daemon. Is Docker running?");
         e
     })?;
-    eprintln!("Connected to Docker daemon.");
+    info!("Connected to Docker daemon.");
 
     // Execute Python code in container
     // Note: We don't check for image existence here - Docker will return a clear error
@@ -120,10 +91,10 @@ pub async fn run_docker_exec(args: DockerExecArgs) -> Result<(), Box<dyn std::er
         .unwrap_or_default()
         .as_secs();
 
-    // Format start time (simple format without external dependencies)
+    // Format start time
     let start_datetime = format_timestamp(start_timestamp);
 
-    eprintln!("Executing code in Docker container...");
+    info!("Executing code in Docker container...");
 
     let (stdout, stderr, exit_code) = docker.execute_python_code(&code).await?;
 
@@ -177,4 +148,20 @@ pub async fn run_docker_exec(args: DockerExecArgs) -> Result<(), Box<dyn std::er
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_xml() {
+        assert_eq!(escape_xml("normal string"), "normal string");
+        assert_eq!(escape_xml("a < b"), "a &lt; b");
+        assert_eq!(escape_xml("a > b"), "a &gt; b");
+        assert_eq!(escape_xml("a & b"), "a &amp; b");
+        assert_eq!(escape_xml("\"quotes\""), "&quot;quotes&quot;");
+        assert_eq!(escape_xml("'single quotes'"), "&apos;single quotes&apos;");
+        assert_eq!(escape_xml("<tag>content</tag>"), "&lt;tag&gt;content&lt;/tag&gt;");
+    }
 }

@@ -11,3 +11,9 @@ bollard = "0.16"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 tar = "0.4"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1.0"
+anyhow = "1.0"
+regex = "1.10"
