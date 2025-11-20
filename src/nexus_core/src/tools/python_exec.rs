@@ -332,7 +332,8 @@ impl ExecutableTool for PythonExec {
 
         // Mount the workspace root into the container at /workspace
         let workspace_root_str = workspace_root.to_string_lossy().to_string();
-        let mounts = vec![(workspace_root_str.clone(), "/workspace".to_string())];
+        // Mount as read-only (:ro) to prevent the sandboxed code from modifying the workspace
+        let mounts = vec![(format!("{}:ro", workspace_root_str), "/workspace".to_string())];
 
         // Update the code to use /workspace instead of the host path
         // Note: Using raw string with proper indentation - the indentation after \n\ is preserved
