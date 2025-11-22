@@ -206,7 +206,9 @@ impl VoiceListener {
         self.running.store(true, Ordering::Relaxed);
 
         // Create channels
-        let (tx_transcribe, rx_transcribe) = mpsc::sync_channel::<(Vec<f32>, f32)>(2);
+        // Use a larger buffer to handle longer transcriptions without blocking
+        // This allows multiple audio segments to queue while transcription is in progress
+        let (tx_transcribe, rx_transcribe) = mpsc::sync_channel::<(Vec<f32>, f32)>(10);
         let (tx_results, rx_results) = mpsc::channel::<TranscriptionResult>();
         self.transcription_tx = Some(tx_transcribe);
 
@@ -421,22 +423,19 @@ impl VoiceListener {
                                     duration_seconds
                                 );
                                 if let Some(ref tx) = self.transcription_tx {
-                                    if let Err(e) =
-                                        tx.try_send((speech_buffer.clone(), duration_seconds))
-                                    {
-                                        match e {
-                                            mpsc::TrySendError::Full(_) => {
-                                                log::warn!("Transcription queue full");
-                                            }
-                                            mpsc::TrySendError::Disconnected(_) => {
-                                                log::error!("Transcription thread disconnected");
-                                                break;
-                                            }
+                                    // Use blocking send instead of try_send to ensure audio segments
+                                    // are not dropped. This will wait if the queue is full, ensuring
+                                    // continuous listening even during long transcriptions.
+                                    match tx.send((speech_buffer.clone(), duration_seconds)) {
+                                        Ok(()) => {
+                                            log::debug!(
+                                                "Successfully sent audio to transcription thread"
+                                            );
                                         }
-                                    } else {
-                                        log::debug!(
-                                            "Successfully sent audio to transcription thread"
-                                        );
+                                        Err(mpsc::SendError(_)) => {
+                                            log::error!("Transcription thread disconnected");
+                                            break;
+                                        }
                                     }
                                 } else {
                                     log::warn!(

@@ -371,6 +371,7 @@ impl UnifiedRecordingService {
         // CRITICAL: Desktop audio MUST start first to set up loopback sink and default source
         // before microphone recording tries to connect to its device
         let mut audio_handles = Vec::new();
+        let mut audio_config_indices = Vec::new(); // Track which config index each handle corresponds to
         
         // Start desktop audio monitoring tasks first (they set up the loopback and default source)
         // CRITICAL: We need to set the monitor as default source BEFORE starting the recording
@@ -388,7 +389,7 @@ impl UnifiedRecordingService {
         #[cfg(not(target_os = "linux"))]
         let loopback_module_ids: Vec<u32> = Vec::new();
         
-        for audio_config in self.config.audio_configs.iter() {
+        for (config_idx, audio_config) in self.config.audio_configs.iter().enumerate() {
             if audio_config.enabled && audio_config.monitor_desktop_audio {
                 // Set up loopback sink and default source BEFORE starting recording
                 #[cfg(target_os = "linux")]
@@ -435,6 +436,7 @@ impl UnifiedRecordingService {
                 let audio_config_clone = audio_config.clone();
                 let stop_signal_audio = stop_signal.clone();
                 
+                audio_config_indices.push(config_idx);
                 audio_handles.push(tokio::task::spawn_blocking(move || {
                     Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
                 }));
@@ -445,11 +447,12 @@ impl UnifiedRecordingService {
         }
         
         // Then start microphone tasks (they use explicit device names)
-        for audio_config in self.config.audio_configs.iter() {
+        for (config_idx, audio_config) in self.config.audio_configs.iter().enumerate() {
             if audio_config.enabled && !audio_config.monitor_desktop_audio {
                 let audio_config_clone = audio_config.clone();
                 let stop_signal_audio = stop_signal.clone();
                 
+                audio_config_indices.push(config_idx);
                 audio_handles.push(tokio::task::spawn_blocking(move || {
                     Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
                 }));
@@ -635,6 +638,7 @@ impl UnifiedRecordingService {
             previous_default_source,
             previous_default_sink,
             loopback_module_ids,
+            audio_config_indices,
         })
     }
 
@@ -820,6 +824,15 @@ impl UnifiedRecordingService {
         use std::io::BufWriter;
         use std::sync::mpsc;
 
+        let device_type = if config.monitor_desktop_audio {
+            "📺 Desktop audio monitor"
+        } else {
+            "🎤 Microphone"
+        };
+        
+        eprintln!("🚀 {} recording function started, output: {}", 
+            device_type, config.output_path.display());
+
         // Create audio recorder
         let recorder = AudioRecorder::new()?;
 
@@ -883,12 +896,6 @@ impl UnifiedRecordingService {
         };
 
         // Log device selection for debugging
-        let device_type = if config.monitor_desktop_audio {
-            "📺 Desktop audio monitor"
-        } else {
-            "🎤 Microphone"
-        };
-        
         let device_name_display = recording_config.device_name.as_ref()
             .map(|d| d.as_str())
             .unwrap_or("system default");
@@ -897,16 +904,44 @@ impl UnifiedRecordingService {
             device_type, device_name_display, 
             recording_config.sample_rate, recording_config.channels);
 
+        // Convert output path to absolute FIRST to ensure consistent file location
+        let output_path = if config.output_path.is_absolute() {
+            config.output_path.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| LoggerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to get current directory: {}", e),
+                )))?
+                .join(&config.output_path)
+        };
+
+        eprintln!("📁 {} output path resolved to: {}", device_type, output_path.display());
+
         // Use streaming API to have control over stop signal
         // This will return the actual sample rate and channels from the device
-        let (stream, rx, actual_sample_rate, actual_channels) = recorder.stream_audio_chunks(recording_config.clone())?;
+        eprintln!("🎙️  {} attempting to create audio stream...", device_type);
+        let (stream, rx, actual_sample_rate, actual_channels) = match recorder.stream_audio_chunks(recording_config.clone()) {
+            Ok(result) => {
+                eprintln!("✅ {} stream created successfully", device_type);
+                result
+            }
+            Err(e) => {
+                eprintln!("❌ {} failed to create stream: {}", device_type, e);
+                return Err(LoggerError::Other(format!(
+                    "Failed to create audio stream for {}: {}",
+                    device_type, e
+                )));
+            }
+        };
 
         eprintln!("{} opened: device='{}' (actual {} Hz, {} channels) -> {}", 
             device_type, device_name_display,
             actual_sample_rate, actual_channels,
-            config.output_path.display());
+            output_path.display());
 
-        // Create WAV file
+        // Create WAV file BEFORE starting the stream to ensure it exists
+        // This way, even if the stream fails, we have a record that recording was attempted
         let spec = WavSpec {
             channels: actual_channels,
             sample_rate: actual_sample_rate,
@@ -914,13 +949,21 @@ impl UnifiedRecordingService {
             sample_format: hound::SampleFormat::Int,
         };
 
-        let writer = File::create(&config.output_path)
+        let writer = File::create(&output_path)
             .map_err(|e| LoggerError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to create audio file: {}", e),
+                format!("Failed to create audio file at {}: {}", output_path.display(), e),
             )))?;
         let mut wav_writer = WavWriter::new(BufWriter::new(writer), spec)
             .map_err(|e| LoggerError::Other(format!("Failed to create WAV writer: {}", e)))?;
+
+        // Verify file was created
+        if !output_path.exists() {
+            return Err(LoggerError::Other(format!(
+                "File was not created at {} even though File::create() succeeded",
+                output_path.display()
+            )));
+        }
 
         // Start the stream
         cpal::traits::StreamTrait::play(&stream).map_err(|e| {
@@ -930,6 +973,9 @@ impl UnifiedRecordingService {
         // Record audio chunks until stop signal
         // For stereo, samples come interleaved: [L, R, L, R, ...]
         // For mono, samples come as: [M, M, M, ...]
+        let mut samples_written = 0u64;
+        let mut write_error_occurred = false;
+        
         while !stop_signal.load(Ordering::SeqCst) {
             // Try to receive audio chunk with timeout to allow periodic stop signal checks
             match rx.recv_timeout(Duration::from_millis(100)) {
@@ -942,9 +988,15 @@ impl UnifiedRecordingService {
                         for sample in samples {
                             let clamped = sample.clamp(-1.0, 1.0);
                             let sample_i16 = (clamped * 32767.0).round() as i16;
-                            if let Err(e) = wav_writer.write_sample(sample_i16) {
-                                log::error!("Error writing audio sample: {}", e);
-                                break;
+                            match wav_writer.write_sample(sample_i16) {
+                                Ok(()) => {
+                                    samples_written += 1;
+                                }
+                                Err(e) => {
+                                    eprintln!("❌ Error writing audio sample to {}: {}", output_path.display(), e);
+                                    write_error_occurred = true;
+                                    break;
+                                }
                             }
                         }
                     } else {
@@ -952,11 +1004,21 @@ impl UnifiedRecordingService {
                         for sample in samples {
                             let clamped = sample.clamp(-1.0, 1.0);
                             let sample_i16 = (clamped * 32767.0).round() as i16;
-                            if let Err(e) = wav_writer.write_sample(sample_i16) {
-                                log::error!("Error writing audio sample: {}", e);
-                                break;
+                            match wav_writer.write_sample(sample_i16) {
+                                Ok(()) => {
+                                    samples_written += 1;
+                                }
+                                Err(e) => {
+                                    eprintln!("❌ Error writing audio sample to {}: {}", output_path.display(), e);
+                                    write_error_occurred = true;
+                                    break;
+                                }
                             }
                         }
+                    }
+                    
+                    if write_error_occurred {
+                        break;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -965,26 +1027,57 @@ impl UnifiedRecordingService {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // Channel disconnected, stop recording
-                    log::warn!("Audio stream channel disconnected");
+                    eprintln!("⚠️  Audio stream channel disconnected for {}", output_path.display());
                     break;
                 }
             }
         }
+        
+        eprintln!("📊 {} recording: wrote {} samples before finalization", device_type, samples_written);
 
         // Stop the stream
         cpal::traits::StreamTrait::pause(&stream).map_err(|e| {
             LoggerError::Other(format!("Failed to pause audio stream: {}", e))
         })?;
 
-        // Finalize WAV file
+        // Finalize WAV file - this is critical, even if no audio was recorded
         drop(stream);
+        
+        eprintln!("💾 Finalizing WAV file at {}...", output_path.display());
         wav_writer.finalize().map_err(|e| {
-            LoggerError::Other(format!("Failed to finalize WAV file: {}", e))
+            LoggerError::Other(format!("Failed to finalize WAV file at {}: {}", output_path.display(), e))
         })?;
+        eprintln!("✅ WAV file finalized successfully");
+
+        // Give filesystem a moment to sync
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Verify file exists after finalization
+        if !output_path.exists() {
+            return Err(LoggerError::Other(format!(
+                "WAV file does not exist after finalization at {} (samples written: {})",
+                output_path.display(), samples_written
+            )));
+        }
+
+        // Log file size for debugging
+        match std::fs::metadata(&output_path) {
+            Ok(metadata) => {
+                eprintln!("✅ {} recording file created: {} ({} bytes, {} samples)", 
+                    device_type, output_path.display(), metadata.len(), samples_written);
+            }
+            Err(e) => {
+                return Err(LoggerError::Other(format!(
+                    "Failed to get file metadata for {} after creation: {}",
+                    output_path.display(), e
+                )));
+            }
+        }
 
         // NOTE: Desktop audio loopback sink cleanup is handled in RecordingSession::wait()
         // to ensure proper ordering (restore default source before removing modules)
 
+        eprintln!("✅ {} recording function completed successfully, returning Ok(())", device_type);
         Ok(())
     }
 
@@ -1335,6 +1428,7 @@ pub struct RecordingSession {
     input_handle: tokio::task::JoinHandle<Result<()>>,
     screen_handle: tokio::task::JoinHandle<Result<()>>,
     audio_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
+    audio_config_indices: Vec<usize>, // Maps handle index to config index
     process_handle: tokio::task::JoinHandle<Result<()>>,
     stop_signal: Arc<AtomicBool>,
     overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
@@ -1402,12 +1496,18 @@ impl RecordingSession {
             .map_err(|e| LoggerError::Other(format!("Event processing task failed: {}", e)))??;
 
         // Wait for all audio recordings to complete
-        for (idx, audio_handle) in self.audio_handles.into_iter().enumerate() {
+        for (handle_idx, audio_handle) in self.audio_handles.into_iter().enumerate() {
             let audio_result = audio_handle.await;
+            // Get the config index for this handle
+            let config_idx = self.audio_config_indices.get(handle_idx)
+                .copied()
+                .unwrap_or(handle_idx); // Fallback to handle_idx if mapping is missing
+            eprintln!("🔍 Audio recording handle {} (config {}) result: {:?}", handle_idx, config_idx,
+                audio_result.as_ref().map(|r| r.as_ref().map(|_| "Ok(())").map_err(|e| format!("Err({})", e))).map_err(|e| format!("JoinError({:?})", e)));
             match audio_result {
                 Ok(Ok(())) => {
-                    // Get the corresponding audio config
-                    if let Some(audio_config) = self.config.audio_configs.get(idx) {
+                    // Get the corresponding audio config using the mapped index
+                    if let Some(audio_config) = self.config.audio_configs.get(config_idx) {
                         let timestamp = Local::now().to_rfc3339();
                         let metadata = json!({
                             "output_path": audio_config.output_path.to_string_lossy(),
@@ -1439,7 +1539,23 @@ impl RecordingSession {
                             } else {
                                 "Microphone audio"
                             };
-                            println!("✅ {} recording completed: {}", audio_type, audio_config.output_path.display());
+                            
+                            // Verify file actually exists before reporting success
+                            let wav_path = if audio_config.output_path.is_absolute() {
+                                audio_config.output_path.clone()
+                            } else {
+                                std::env::current_dir()
+                                    .ok()
+                                    .map(|cwd| cwd.join(&audio_config.output_path))
+                                    .unwrap_or_else(|| audio_config.output_path.clone())
+                            };
+                            
+                            if wav_path.exists() {
+                                println!("✅ {} recording completed: {}", audio_type, wav_path.display());
+                            } else {
+                                eprintln!("⚠️  {} recording reported success but file not found at: {}", 
+                                    audio_type, wav_path.display());
+                            }
                         }
 
                         // Transcribe audio if enabled
@@ -1450,21 +1566,41 @@ impl RecordingSession {
                                 } else {
                                     "microphone audio"
                                 };
-                                println!("🎤 Transcribing {} with model: {}...", audio_type, model_path.display());
-                                match UnifiedRecordingService::transcribe_wav_file(
-                                    &audio_config.output_path,
-                                    model_path,
-                                    &self.session_id,
-                                    &db,
-                                    audio_config.monitor_desktop_audio,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        println!("✅ {} transcription completed", audio_type);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("⚠️  {} transcription failed: {}", audio_type, e);
+                                
+                                // Convert to absolute path and verify file exists
+                                let wav_path = if audio_config.output_path.is_absolute() {
+                                    audio_config.output_path.clone()
+                                } else {
+                                    // Convert relative path to absolute using current working directory
+                                    std::env::current_dir()
+                                        .map_err(|e| LoggerError::Io(std::io::Error::new(
+                                            std::io::ErrorKind::Other,
+                                            format!("Failed to get current directory: {}", e),
+                                        )))?
+                                        .join(&audio_config.output_path)
+                                };
+                                
+                                // Verify file exists before attempting transcription
+                                if !wav_path.exists() {
+                                    eprintln!("⚠️  {} transcription skipped: WAV file not found at {}", 
+                                        audio_type, wav_path.display());
+                                } else {
+                                    println!("🎤 Transcribing {} with model: {}...", audio_type, model_path.display());
+                                    match UnifiedRecordingService::transcribe_wav_file(
+                                        &wav_path,
+                                        model_path,
+                                        &self.session_id,
+                                        &db,
+                                        audio_config.monitor_desktop_audio,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => {
+                                            println!("✅ {} transcription completed", audio_type);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("⚠️  {} transcription failed: {}", audio_type, e);
+                                        }
                                     }
                                 }
                             } else {
