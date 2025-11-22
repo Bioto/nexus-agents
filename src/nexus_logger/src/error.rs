@@ -35,3 +35,16 @@ impl From<nexus_screen::ScreenError> for LoggerError {
         LoggerError::Other(err.to_string())
     }
 }
+
+impl From<nexus_audio::VoiceError> for LoggerError {
+    fn from(err: nexus_audio::VoiceError) -> Self {
+        match err {
+            nexus_audio::VoiceError::Audio(msg) => LoggerError::Other(format!("Audio error: {}", msg)),
+            nexus_audio::VoiceError::Configuration(msg) => LoggerError::Configuration(msg),
+            nexus_audio::VoiceError::Io(e) => LoggerError::Io(e),
+            nexus_audio::VoiceError::Tui(msg) => LoggerError::Other(format!("TUI error: {}", msg)),
+            nexus_audio::VoiceError::Api(msg) => LoggerError::Other(format!("API error: {}", msg)),
+            nexus_audio::VoiceError::Other(msg) => LoggerError::Other(msg),
+        }
+    }
+}

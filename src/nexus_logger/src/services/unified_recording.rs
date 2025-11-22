@@ -4,6 +4,8 @@ use crate::services::click_context::{ClickContextHandle, ClickContextService};
 use crate::services::context_processing::ProcessingJob;
 use crate::services::database::Database;
 use chrono::{DateTime, Local, Utc};
+use nexus_audio::{AudioRecorder, RecordingConfig as NexusAudioRecordingConfig};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -133,6 +135,8 @@ pub struct UnifiedRecordingConfig {
     pub screen_config: ScreenRecordingConfig,
     /// Input capture configuration
     pub input_config: InputCaptureConfig,
+    /// Audio recording configuration
+    pub audio_config: Option<AudioRecordingConfig>,
     /// Database path for storing events
     pub database_path: PathBuf,
     /// Whether to capture keyboard events
@@ -194,11 +198,45 @@ impl Default for InputCaptureConfig {
     }
 }
 
+/// Audio recording configuration.
+#[derive(Clone, Debug)]
+pub struct AudioRecordingConfig {
+    /// Whether to record audio
+    pub enabled: bool,
+    /// Output path for WAV file
+    pub output_path: PathBuf,
+    /// Sample rate in Hz (default 48000)
+    pub sample_rate: u32,
+    /// Number of channels (1 = mono, 2 = stereo, default 1)
+    pub channels: u16,
+    /// Specific microphone device name (None = default device)
+    pub device_name: Option<String>,
+    /// Whether to transcribe audio (future feature)
+    pub transcribe: bool,
+    /// Path to Whisper model if transcribing (None = disabled)
+    pub transcription_model_path: Option<PathBuf>,
+}
+
+impl Default for AudioRecordingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            output_path: PathBuf::from("recording.wav"),
+            sample_rate: 48000,
+            channels: 1,
+            device_name: None,
+            transcribe: false,
+            transcription_model_path: None,
+        }
+    }
+}
+
 impl Default for UnifiedRecordingConfig {
     fn default() -> Self {
         Self {
             screen_config: ScreenRecordingConfig::default(),
             input_config: InputCaptureConfig::default(),
+            audio_config: None,
             database_path: PathBuf::from("events.db"),
             capture_keyboard: true,
             capture_mouse: true,
@@ -324,6 +362,21 @@ impl UnifiedRecordingService {
         let screen_handle = tokio::task::spawn_blocking(move || {
             Self::run_screen_recording_blocking(screen_config, stop_signal_screen)
         });
+
+        // Start audio recording in background if enabled
+        let audio_handle = if let Some(ref audio_config) = self.config.audio_config {
+            if audio_config.enabled {
+                let audio_config_clone = audio_config.clone();
+                let stop_signal_audio = stop_signal.clone();
+                Some(tokio::task::spawn_blocking(move || {
+                    Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         // Shared storage for overlay labels
         let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
@@ -495,6 +548,7 @@ impl UnifiedRecordingService {
             recording_start,
             input_handle,
             screen_handle,
+            audio_handle,
             process_handle,
             stop_signal,
             overlay_labels,
@@ -672,6 +726,257 @@ impl UnifiedRecordingService {
         recorder
             .record(recording_config, stop_signal)
             .map_err(|e| LoggerError::Other(format!("Screen recording failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    fn run_audio_recording_blocking(
+        config: AudioRecordingConfig,
+        stop_signal: Arc<AtomicBool>,
+    ) -> Result<()> {
+        use hound::{WavSpec, WavWriter};
+        use std::fs::File;
+        use std::io::BufWriter;
+        use std::sync::mpsc;
+
+        // Create audio recorder
+        let recorder = AudioRecorder::new()?;
+
+        // Convert our config to nexus_audio's RecordingConfig
+        let recording_config = NexusAudioRecordingConfig {
+            sample_rate: config.sample_rate,
+            channels: config.channels,
+            duration: None, // We'll control duration via stop_signal
+            device_name: config.device_name.clone(),
+        };
+
+        // Use streaming API to have control over stop signal
+        let (stream, mut rx) = recorder.stream_audio_chunks(recording_config)?;
+
+        // Get actual sample rate and channels from the stream
+        // We'll use the config values, but the actual values might differ
+        let actual_sample_rate = config.sample_rate;
+        let actual_channels = config.channels;
+
+        // Create WAV file
+        let spec = WavSpec {
+            channels: actual_channels,
+            sample_rate: actual_sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+
+        let writer = File::create(&config.output_path)
+            .map_err(|e| LoggerError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to create audio file: {}", e),
+            )))?;
+        let mut wav_writer = WavWriter::new(BufWriter::new(writer), spec)
+            .map_err(|e| LoggerError::Other(format!("Failed to create WAV writer: {}", e)))?;
+
+        // Start the stream
+        cpal::traits::StreamTrait::play(&stream).map_err(|e| {
+            LoggerError::Other(format!("Failed to start audio stream: {}", e))
+        })?;
+
+        // Record audio chunks until stop signal
+        while !stop_signal.load(Ordering::SeqCst) {
+            // Try to receive audio chunk with timeout to allow periodic stop signal checks
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(samples) => {
+                    // Write samples to WAV file (convert f32 to i16)
+                    for sample in samples {
+                        let clamped = sample.clamp(-1.0, 1.0);
+                        let sample_i16 = (clamped * 32767.0).round() as i16;
+                        if let Err(e) = wav_writer.write_sample(sample_i16) {
+                            log::error!("Error writing audio sample: {}", e);
+                            break;
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Timeout - continue loop to check stop signal
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    // Channel disconnected, stop recording
+                    log::warn!("Audio stream channel disconnected");
+                    break;
+                }
+            }
+        }
+
+        // Stop the stream
+        cpal::traits::StreamTrait::pause(&stream).map_err(|e| {
+            LoggerError::Other(format!("Failed to pause audio stream: {}", e))
+        })?;
+
+        // Finalize WAV file
+        drop(stream);
+        wav_writer.finalize().map_err(|e| {
+            LoggerError::Other(format!("Failed to finalize WAV file: {}", e))
+        })?;
+
+        Ok(())
+    }
+
+    /// Transcribe a WAV file using Whisper and store segments in database
+    async fn transcribe_wav_file(
+        wav_path: &PathBuf,
+        model_path: &PathBuf,
+        session_id: &str,
+        db: &Database,
+    ) -> Result<()> {
+        use std::io::Read;
+
+        // Read WAV file
+        let mut file = std::fs::File::open(wav_path)
+            .map_err(|e| LoggerError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to open WAV file: {}", e),
+            )))?;
+
+        let mut wav_data = Vec::new();
+        file.read_to_end(&mut wav_data)
+            .map_err(|e| LoggerError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to read WAV file: {}", e),
+            )))?;
+
+        // Decode WAV to f32 samples
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(wav_data))
+            .map_err(|e| LoggerError::Other(format!("Failed to read WAV: {}", e)))?;
+
+        let spec = reader.spec();
+        let sample_rate = spec.sample_rate;
+
+        // Convert samples to f32
+        let samples: Vec<f32> = match spec.bits_per_sample {
+            16 => reader
+                .samples::<i16>()
+                .map(|s| {
+                    s.map(|sample| sample as f32 / 32768.0)
+                        .map_err(|e| LoggerError::Other(format!("Failed to read sample: {}", e)))
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            24 => reader
+                .samples::<i32>()
+                .map(|s| {
+                    s.map(|sample| (sample >> 8) as f32 / 8388608.0)
+                        .map_err(|e| LoggerError::Other(format!("Failed to read sample: {}", e)))
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            32 => reader
+                .samples::<i32>()
+                .map(|s| {
+                    s.map(|sample| sample as f32 / 2147483648.0)
+                        .map_err(|e| LoggerError::Other(format!("Failed to read sample: {}", e)))
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            _ => {
+                return Err(LoggerError::Other(format!(
+                    "Unsupported bit depth: {} bits",
+                    spec.bits_per_sample
+                )));
+            }
+        };
+
+        // Convert to mono if stereo (take left channel)
+        let mono_samples = if spec.channels == 2 {
+            samples.chunks(2).map(|chunk| chunk[0]).collect()
+        } else {
+            samples
+        };
+
+        // Resample to 16kHz if needed (Whisper expects 16kHz)
+        let whisper_samples = if sample_rate != 16000 {
+            // Simple linear resampling (for production, use a proper resampler)
+            let ratio = 16000.0 / sample_rate as f32;
+            let new_len = (mono_samples.len() as f32 * ratio) as usize;
+            let mut resampled = Vec::with_capacity(new_len);
+            for i in 0..new_len {
+                let src_idx = (i as f32 / ratio) as usize;
+                if src_idx < mono_samples.len() {
+                    resampled.push(mono_samples[src_idx]);
+                }
+            }
+            resampled
+        } else {
+            mono_samples
+        };
+
+        // Create Whisper context
+        let ctx = WhisperContext::new_with_params(
+            &model_path.to_string_lossy(),
+            WhisperContextParameters::default(),
+        )
+        .map_err(|e| LoggerError::Other(format!("Failed to create Whisper context: {}", e)))?;
+
+        let mut state = ctx
+            .create_state()
+            .map_err(|e| LoggerError::Other(format!("Failed to create Whisper state: {}", e)))?;
+
+        // Configure transcription parameters
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("en"));
+        params.set_translate(false);
+        params.set_print_progress(false);
+        params.set_print_special(false);
+
+        // Run transcription
+        state
+            .full(params, &whisper_samples)
+            .map_err(|e| LoggerError::Other(format!("Transcription failed: {}", e)))?;
+
+        // Get segments and store in database
+        let num_segments = state.full_n_segments();
+        println!("   Transcribed {} segments", num_segments);
+
+        for i in 0..num_segments {
+            if let Some(segment) = state.get_segment(i) {
+                // Format segment to get text (segment implements Display)
+                let segment_str = format!("{}", segment);
+                // Extract time from segment string format: "[start_time -> end_time] text"
+                // Or just use the text part
+                let text = segment_str.trim().to_string();
+
+                if !text.is_empty() {
+                    // Estimate time based on segment index and average segment duration
+                    // Whisper segments are typically 1-3 seconds, use index as approximation
+                    let estimated_start = i as f64 * 2.0; // Rough estimate: 2 seconds per segment
+                    let estimated_end = estimated_start + 2.0;
+                    let timestamp = Local::now().to_rfc3339();
+                    let metadata = json!({
+                        "start_time": estimated_start,
+                        "end_time": estimated_end,
+                        "duration": estimated_end - estimated_start,
+                        "segment_index": i,
+                        "text": text.clone(),
+                        "segment_string": segment_str,
+                    });
+
+                    if let Err(e) = db
+                        .insert_event(
+                            session_id,
+                            "transcription",
+                            Some("segment"),
+                            Some(&text), // Store text in key field for easy access
+                            None,
+                            None,
+                            None,
+                            None,
+                            &timestamp,
+                            Some(estimated_start), // Use estimated_start as timecode
+                            Some(metadata),
+                            None,
+                        )
+                        .await
+                    {
+                        eprintln!("⚠️  Failed to store transcription segment: {}", e);
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -858,6 +1163,7 @@ pub struct RecordingSession {
     recording_start: DateTime<Utc>,
     input_handle: tokio::task::JoinHandle<Result<()>>,
     screen_handle: tokio::task::JoinHandle<Result<()>>,
+    audio_handle: Option<tokio::task::JoinHandle<Result<()>>>,
     process_handle: tokio::task::JoinHandle<Result<()>>,
     stop_signal: Arc<AtomicBool>,
     overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
@@ -874,6 +1180,39 @@ impl RecordingSession {
     /// Wait for the recording session to complete.
     /// This will wait until the stop signal is set (via stop() or duration expires).
     pub async fn wait(self) -> Result<()> {
+        // Store audio recording start event if enabled
+        let db = Database::new().await?;
+        if let Some(ref audio_config) = self.config.audio_config {
+            if audio_config.enabled {
+                let timestamp = Local::now().to_rfc3339();
+                let metadata = json!({
+                    "output_path": audio_config.output_path.to_string_lossy(),
+                    "sample_rate": audio_config.sample_rate,
+                    "channels": audio_config.channels,
+                    "device_name": audio_config.device_name,
+                });
+                if let Err(e) = db
+                    .insert_event(
+                        &self.session_id,
+                        "audio",
+                        Some("recording_start"),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        &timestamp,
+                        None, // timecode
+                        Some(metadata),
+                        None, // screenshot_id
+                    )
+                    .await
+                {
+                    eprintln!("⚠️  Failed to store audio recording start event: {}", e);
+                }
+            }
+        }
+
         // Wait for all tasks to complete
         // They will exit when stop_signal is set
         let input_result = self.input_handle.await;
@@ -886,6 +1225,77 @@ impl RecordingSession {
             .map_err(|e| LoggerError::Other(format!("Screen recording task failed: {}", e)))??;
         process_result
             .map_err(|e| LoggerError::Other(format!("Event processing task failed: {}", e)))??;
+
+        // Wait for audio recording to complete if enabled
+        if let Some(audio_handle) = self.audio_handle {
+            let audio_result = audio_handle.await;
+            match audio_result {
+                Ok(Ok(())) => {
+                    // Store audio recording stop event
+                    if let Some(ref audio_config) = self.config.audio_config {
+                        let timestamp = Local::now().to_rfc3339();
+                        let metadata = json!({
+                            "output_path": audio_config.output_path.to_string_lossy(),
+                            "sample_rate": audio_config.sample_rate,
+                            "channels": audio_config.channels,
+                        });
+                        if let Err(e) = db
+                            .insert_event(
+                                &self.session_id,
+                                "audio",
+                                Some("recording_stop"),
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                &timestamp,
+                                None, // timecode
+                                Some(metadata),
+                                None, // screenshot_id
+                            )
+                            .await
+                        {
+                            eprintln!("⚠️  Failed to store audio recording stop event: {}", e);
+                        } else {
+                            println!("✅ Audio recording completed: {}", audio_config.output_path.display());
+                        }
+
+                        // Transcribe audio if enabled
+                        if audio_config.transcribe {
+                            if let Some(ref model_path) = audio_config.transcription_model_path {
+                                println!("🎤 Transcribing audio with model: {}...", model_path.display());
+                                match UnifiedRecordingService::transcribe_wav_file(
+                                    &audio_config.output_path,
+                                    model_path,
+                                    &self.session_id,
+                                    &db,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        println!("✅ Audio transcription completed");
+                                    }
+                                    Err(e) => {
+                                        eprintln!("⚠️  Audio transcription failed: {}", e);
+                                    }
+                                }
+                            } else {
+                                eprintln!("⚠️  Transcription enabled but no model path specified");
+                            }
+                        } else {
+                            println!("ℹ️  Transcription disabled (no Whisper model found or specified)");
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    eprintln!("⚠️  Audio recording failed: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Audio recording task failed: {}", e);
+                }
+            }
+        }
 
         // Now that screen recording is complete, apply overlays
         let labels = self.overlay_labels.lock().unwrap().clone();
@@ -1134,6 +1544,37 @@ pub fn print_timeline(
                     });
                 }
             }
+            "transcription" => {
+                if event.event_subtype.as_deref() == Some("segment") {
+                    // Extract text from metadata
+                    if let Some(metadata) = event.metadata.as_object() {
+                        if let Some(text) = metadata.get("text").and_then(|v| v.as_str()) {
+                            timed_events.push(TimedEvent {
+                                timecode: event_timecode,
+                                timestamp: event.timestamp,
+                                event_type: "transcription".to_string(),
+                                data: text.to_string(),
+                            });
+                        } else if let Some(key) = event.key.as_ref() {
+                            // Fallback: use key field if metadata doesn't have text
+                            timed_events.push(TimedEvent {
+                                timecode: event_timecode,
+                                timestamp: event.timestamp,
+                                event_type: "transcription".to_string(),
+                                data: key.clone(),
+                            });
+                        }
+                    } else if let Some(key) = event.key.as_ref() {
+                        // Fallback: use key field
+                        timed_events.push(TimedEvent {
+                            timecode: event_timecode,
+                            timestamp: event.timestamp,
+                            event_type: "transcription".to_string(),
+                            data: key.clone(),
+                        });
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1148,6 +1589,7 @@ pub fn print_timeline(
     let mut frame_descriptions: Vec<String> = Vec::new();
     let mut keys_entered: Vec<String> = Vec::new();
     let mut clicks: Vec<(f64, String)> = Vec::new(); // Store timecode with each click
+    let mut transcriptions: Vec<(f64, String)> = Vec::new(); // Store timecode with each transcription
 
     for timed_event in timed_events {
         // If timecode changed significantly (more than 0.1s difference), print previous group
@@ -1163,10 +1605,12 @@ pub fn print_timeline(
                 &frame_descriptions,
                 &keys_entered,
                 &clicks,
+                &transcriptions,
             );
             frame_descriptions.clear();
             keys_entered.clear();
             clicks.clear();
+            transcriptions.clear();
         }
 
         current_timecode = Some(timed_event.timecode);
@@ -1181,17 +1625,21 @@ pub fn print_timeline(
             "click" => {
                 clicks.push((timed_event.timecode, timed_event.data));
             }
+            "transcription" => {
+                transcriptions.push((timed_event.timecode, timed_event.data));
+            }
             _ => {}
         }
     }
 
     // Print final group
-    if !frame_descriptions.is_empty() || !keys_entered.is_empty() || !clicks.is_empty() {
+    if !frame_descriptions.is_empty() || !keys_entered.is_empty() || !clicks.is_empty() || !transcriptions.is_empty() {
         print_timeline_entry(
             current_timecode,
             &frame_descriptions,
             &keys_entered,
             &clicks,
+            &transcriptions,
         );
     }
 
@@ -1205,6 +1653,7 @@ fn print_timeline_entry(
     frame_descriptions: &[String],
     keys_entered: &[String],
     clicks: &[(f64, String)],
+    transcriptions: &[(f64, String)],
 ) {
     let time_str = if let Some(tc) = timecode {
         format!("{:>8.2}s", tc)
@@ -1243,6 +1692,26 @@ fn print_timeline_entry(
                 format!("@ {:.2}s: {}", click_timecode, click_data)
             };
             println!("║ 🖱️  Click: {}", pad_right(&click_display, 70));
+        }
+    }
+
+    if !transcriptions.is_empty() {
+        for (trans_timecode, trans_text) in transcriptions {
+            // Show timecode for each transcription if different from group timecode
+            let trans_display = if let Some(group_tc) = timecode {
+                if (group_tc - trans_timecode).abs() > 0.1 {
+                    format!("@ {:.2}s: {}", trans_timecode, trans_text)
+                } else {
+                    trans_text.clone()
+                }
+            } else {
+                format!("@ {:.2}s: {}", trans_timecode, trans_text)
+            };
+            // Wrap long transcriptions
+            let wrapped = wrap_text(&trans_display, 75);
+            for line in wrapped {
+                println!("║ 🎤 Transcription: {}", pad_right(&line, 70));
+            }
         }
     }
 

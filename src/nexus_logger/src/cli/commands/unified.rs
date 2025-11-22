@@ -1,12 +1,12 @@
 use crate::error::Result;
 use crate::services::capture::InputEvent;
 use crate::services::unified_recording::{
-    DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel, ScreenRecordingConfig,
-    UnifiedRecordingConfig, UnifiedRecordingService,
+    AudioRecordingConfig, DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel,
+    ScreenRecordingConfig, UnifiedRecordingConfig, UnifiedRecordingService,
 };
 use chrono::DateTime;
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
@@ -38,9 +38,34 @@ pub struct UnifiedArgs {
     #[arg(short = 'm', long)]
     pub monitor: Option<usize>,
 
-    /// Disable audio recording
+    /// Disable system audio in screen recording
     #[arg(long)]
     pub no_audio: bool,
+
+    /// Enable microphone audio recording
+    #[arg(long)]
+    pub mic_audio: bool,
+
+    /// Microphone audio output file path
+    #[arg(long, default_value = "recording.wav")]
+    pub mic_audio_output: PathBuf,
+
+    /// Microphone audio sample rate (Hz)
+    #[arg(long, default_value = "48000")]
+    pub mic_sample_rate: u32,
+
+    /// Microphone device name (None = default)
+    /// Supports ALSA device names like: sysdefault:CARD=Quadcast, hw:CARD=Quadcast,DEV=0
+    #[arg(long)]
+    pub mic_device: Option<String>,
+
+    /// Alias for --mic-device (shorter form)
+    #[arg(long)]
+    pub device: Option<String>,
+
+    /// Path to Whisper model for transcription (required for transcription)
+    #[arg(long)]
+    pub whisper_model: Option<PathBuf>,
 
     /// Database path for storing events
     #[arg(short = 'D', long, default_value = "events.db")]
@@ -123,6 +148,46 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             output_file: args.events.clone(),
             format: args.events_format.clone(),
         },
+        audio_config: if args.mic_audio {
+            // Use provided model path or try default location
+            let model_path = if let Some(ref provided_path) = args.whisper_model {
+                if provided_path.exists() {
+                    Some(provided_path.clone())
+                } else {
+                    eprintln!("⚠️  Warning: Whisper model not found at: {}", provided_path.display());
+                    None
+                }
+            } else {
+                // Try default locations
+                let default_paths = [
+                    PathBuf::from("src/nexus_audio/src/__models__/ggml-base.bin"),
+                    PathBuf::from("models/ggml-base.bin"),
+                    PathBuf::from(".models/ggml-base.bin"),
+                    PathBuf::from("ggml-base.bin"),
+                ];
+                default_paths.iter().find(|p| p.exists()).cloned()
+            };
+
+            let transcribe_enabled = model_path.is_some();
+            if args.mic_audio && !transcribe_enabled {
+                eprintln!("⚠️  Warning: Transcription disabled - no Whisper model found. Use --whisper-model to specify model path.");
+            }
+
+            // Use --device if provided, otherwise fall back to --mic-device
+            let device_name = args.device.clone().or(args.mic_device.clone());
+
+            Some(AudioRecordingConfig {
+                enabled: true,
+                output_path: args.mic_audio_output.clone(),
+                sample_rate: args.mic_sample_rate,
+                channels: 1, // Mono by default
+                device_name,
+                transcribe: transcribe_enabled,
+                transcription_model_path: model_path,
+            })
+        } else {
+            None
+        },
         database_path: args.database.clone(),
         capture_keyboard: !args.no_keyboard,
         capture_mouse: !args.no_mouse,
@@ -156,7 +221,21 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         "   Mouse moves: {}",
         if args.mouse_moves { "✓" } else { "✗" }
     );
-    println!("   Audio: {}", if !args.no_audio { "✓" } else { "✗" });
+    println!("   System audio: {}", if !args.no_audio { "✓" } else { "✗" });
+    println!("   Microphone: {}", if args.mic_audio { "✓" } else { "✗" });
+    if args.mic_audio {
+        println!("     Output: {}", args.mic_audio_output.display());
+        println!("     Sample rate: {} Hz", args.mic_sample_rate);
+        let device_display = args.device.as_ref().or(args.mic_device.as_ref());
+        if let Some(device) = device_display {
+            println!("     Device: {}", device);
+        }
+        if let Some(ref model) = args.whisper_model {
+            println!("     Transcription: ✓ (model: {})", model.display());
+        } else {
+            println!("     Transcription: {}", if args.mic_audio { "checking..." } else { "✗" });
+        }
+    }
     println!(
         "   Timestamp overlay: {}",
         if !args.no_timestamp { "✓" } else { "✗" }
