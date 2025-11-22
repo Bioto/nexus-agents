@@ -135,8 +135,8 @@ pub struct UnifiedRecordingConfig {
     pub screen_config: ScreenRecordingConfig,
     /// Input capture configuration
     pub input_config: InputCaptureConfig,
-    /// Audio recording configuration
-    pub audio_config: Option<AudioRecordingConfig>,
+    /// Audio recording configurations (can have multiple for mic + monitor)
+    pub audio_configs: Vec<AudioRecordingConfig>,
     /// Database path for storing events
     pub database_path: PathBuf,
     /// Whether to capture keyboard events
@@ -240,7 +240,7 @@ impl Default for UnifiedRecordingConfig {
         Self {
             screen_config: ScreenRecordingConfig::default(),
             input_config: InputCaptureConfig::default(),
-            audio_config: None,
+            audio_configs: Vec::new(),
             database_path: PathBuf::from("events.db"),
             capture_keyboard: true,
             capture_mouse: true,
@@ -367,20 +367,17 @@ impl UnifiedRecordingService {
             Self::run_screen_recording_blocking(screen_config, stop_signal_screen)
         });
 
-        // Start audio recording in background if enabled
-        let audio_handle = if let Some(ref audio_config) = self.config.audio_config {
+        // Start audio recording tasks for all enabled audio configs
+        let mut audio_handles = Vec::new();
+        for audio_config in &self.config.audio_configs {
             if audio_config.enabled {
                 let audio_config_clone = audio_config.clone();
                 let stop_signal_audio = stop_signal.clone();
-                Some(tokio::task::spawn_blocking(move || {
+                audio_handles.push(tokio::task::spawn_blocking(move || {
                     Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
-                }))
-            } else {
-                None
+                }));
             }
-        } else {
-            None
-        };
+        }
 
         // Shared storage for overlay labels
         let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
@@ -552,7 +549,7 @@ impl UnifiedRecordingService {
             recording_start,
             input_handle,
             screen_handle,
-            audio_handle,
+            audio_handles,
             process_handle,
             stop_signal,
             overlay_labels,
@@ -898,6 +895,7 @@ impl UnifiedRecordingService {
         model_path: &PathBuf,
         session_id: &str,
         db: &Database,
+        monitor_desktop_audio: bool,
     ) -> Result<()> {
         use std::io::Read;
 
@@ -1025,6 +1023,8 @@ impl UnifiedRecordingService {
                         "segment_index": i,
                         "text": text.clone(),
                         "segment_string": segment_str,
+                        "monitor_desktop_audio": monitor_desktop_audio,
+                        "source": if monitor_desktop_audio { "monitor_output" } else { "microphone" },
                     });
 
                     if let Err(e) = db
@@ -1235,7 +1235,7 @@ pub struct RecordingSession {
     recording_start: DateTime<Utc>,
     input_handle: tokio::task::JoinHandle<Result<()>>,
     screen_handle: tokio::task::JoinHandle<Result<()>>,
-    audio_handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    audio_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
     process_handle: tokio::task::JoinHandle<Result<()>>,
     stop_signal: Arc<AtomicBool>,
     overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
@@ -1252,9 +1252,9 @@ impl RecordingSession {
     /// Wait for the recording session to complete.
     /// This will wait until the stop signal is set (via stop() or duration expires).
     pub async fn wait(self) -> Result<()> {
-        // Store audio recording start event if enabled
+        // Store audio recording start events if enabled
         let db = Database::new().await?;
-        if let Some(ref audio_config) = self.config.audio_config {
+        for audio_config in &self.config.audio_configs {
             if audio_config.enabled {
                 let timestamp = Local::now().to_rfc3339();
                 let metadata = json!({
@@ -1299,13 +1299,13 @@ impl RecordingSession {
         process_result
             .map_err(|e| LoggerError::Other(format!("Event processing task failed: {}", e)))??;
 
-        // Wait for audio recording to complete if enabled
-        if let Some(audio_handle) = self.audio_handle {
+        // Wait for all audio recordings to complete
+        for (idx, audio_handle) in self.audio_handles.into_iter().enumerate() {
             let audio_result = audio_handle.await;
             match audio_result {
                 Ok(Ok(())) => {
-                    // Store audio recording stop event
-                    if let Some(ref audio_config) = self.config.audio_config {
+                    // Get the corresponding audio config
+                    if let Some(audio_config) = self.config.audio_configs.get(idx) {
                         let timestamp = Local::now().to_rfc3339();
                         let metadata = json!({
                             "output_path": audio_config.output_path.to_string_lossy(),
@@ -1332,7 +1332,12 @@ impl RecordingSession {
                         {
                             eprintln!("⚠️  Failed to store audio recording stop event: {}", e);
                         } else {
-                            println!("✅ Audio recording completed: {}", audio_config.output_path.display());
+                            let audio_type = if audio_config.monitor_desktop_audio {
+                                "Desktop audio"
+                            } else {
+                                "Microphone audio"
+                            };
+                            println!("✅ {} recording completed: {}", audio_type, audio_config.output_path.display());
                         }
 
                         // Transcribe audio if enabled
@@ -1349,6 +1354,7 @@ impl RecordingSession {
                                     model_path,
                                     &self.session_id,
                                     &db,
+                                    audio_config.monitor_desktop_audio,
                                 )
                                 .await
                                 {
@@ -1633,28 +1639,54 @@ pub fn print_timeline(
                     // Extract text from metadata
                     if let Some(metadata) = event.metadata.as_object() {
                         if let Some(text) = metadata.get("text").and_then(|v| v.as_str()) {
+                            // Extract source information (monitor_output or microphone)
+                            let source = metadata.get("source")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_else(|| {
+                                    // Fallback: check monitor_desktop_audio flag
+                                    if metadata.get("monitor_desktop_audio")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false)
+                                    {
+                                        "monitor_output"
+                                    } else {
+                                        "microphone"
+                                    }
+                                });
                             timed_events.push(TimedEvent {
                                 timecode: event_timecode,
                                 timestamp: event.timestamp,
                                 event_type: "transcription".to_string(),
-                                data: text.to_string(),
+                                data: format!("[{}] {}", source, text),
                             });
                         } else if let Some(key) = event.key.as_ref() {
                             // Fallback: use key field if metadata doesn't have text
+                            let source = metadata.get("source")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_else(|| {
+                                    if metadata.get("monitor_desktop_audio")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false)
+                                    {
+                                        "monitor_output"
+                                    } else {
+                                        "microphone"
+                                    }
+                                });
                             timed_events.push(TimedEvent {
                                 timecode: event_timecode,
                                 timestamp: event.timestamp,
                                 event_type: "transcription".to_string(),
-                                data: key.clone(),
+                                data: format!("[{}] {}", source, key),
                             });
                         }
                     } else if let Some(key) = event.key.as_ref() {
-                        // Fallback: use key field
+                        // Fallback: use key field (no metadata available, assume microphone)
                         timed_events.push(TimedEvent {
                             timecode: event_timecode,
                             timestamp: event.timestamp,
                             event_type: "transcription".to_string(),
-                            data: key.clone(),
+                            data: format!("[microphone] {}", key),
                         });
                     }
                 }
@@ -1781,20 +1813,46 @@ fn print_timeline_entry(
 
     if !transcriptions.is_empty() {
         for (trans_timecode, trans_text) in transcriptions {
-            // Show timecode for each transcription if different from group timecode
-            let trans_display = if let Some(group_tc) = timecode {
-                if (group_tc - trans_timecode).abs() > 0.1 {
-                    format!("@ {:.2}s: {}", trans_timecode, trans_text)
+            // Parse source from text (format: "[source] text")
+            let (source, text) = if trans_text.starts_with('[') {
+                if let Some(end_bracket) = trans_text.find(']') {
+                    let source_str = &trans_text[1..end_bracket];
+                    let text_part = trans_text[end_bracket + 1..].trim_start();
+                    (source_str, text_part)
                 } else {
-                    trans_text.clone()
+                    ("unknown", trans_text.as_str())
                 }
             } else {
-                format!("@ {:.2}s: {}", trans_timecode, trans_text)
+                ("microphone", trans_text.as_str())
             };
+            
+            // Format source display
+            let source_display = match source {
+                "monitor_output" => "📺 Monitor Output",
+                "microphone" => "🎙️  Microphone",
+                _ => "🎤 Unknown",
+            };
+            
+            // Show timecode for each transcription if different from group timecode
+            let timecode_prefix = if let Some(group_tc) = timecode {
+                if (group_tc - trans_timecode).abs() > 0.1 {
+                    format!("@ {:.2}s: ", trans_timecode)
+                } else {
+                    String::new()
+                }
+            } else {
+                format!("@ {:.2}s: ", trans_timecode)
+            };
+            
             // Wrap long transcriptions
-            let wrapped = wrap_text(&trans_display, 75);
-            for line in wrapped {
-                println!("║ 🎤 Transcription: {}", pad_right(&line, 70));
+            let full_text = format!("{}{}", timecode_prefix, text);
+            let wrapped = wrap_text(&full_text, 75);
+            for (idx, line) in wrapped.iter().enumerate() {
+                if idx == 0 {
+                    println!("║ {} Transcription: {}", source_display, pad_right(&line, 70));
+                } else {
+                    println!("║    {}", pad_right(&line, 75));
+                }
             }
         }
     }

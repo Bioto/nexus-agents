@@ -6,7 +6,7 @@ use crate::services::unified_recording::{
 };
 use chrono::DateTime;
 use clap::Args;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
@@ -153,7 +153,9 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             output_file: args.events.clone(),
             format: args.events_format.clone(),
         },
-        audio_config: if args.mic_audio {
+        audio_configs: {
+            let mut configs = Vec::new();
+            
             // Use provided model path or try default location
             let model_path = if let Some(ref provided_path) = args.whisper_model {
                 if provided_path.exists() {
@@ -178,21 +180,42 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 eprintln!("⚠️  Warning: Transcription disabled - no Whisper model found. Use --whisper-model to specify model path.");
             }
 
-            // Use --device if provided, otherwise fall back to --mic-device
-            let device_name = args.device.clone().or(args.mic_device.clone());
-
-            Some(AudioRecordingConfig {
-                enabled: true,
-                output_path: args.mic_audio_output.clone(),
-                sample_rate: args.mic_sample_rate,
-                channels: if args.monitor_desktop_audio { 2 } else { 1 }, // Stereo for desktop, mono for mic
-                device_name,
-                monitor_desktop_audio: args.monitor_desktop_audio,
-                transcribe: transcribe_enabled,
-                transcription_model_path: model_path,
-            })
-        } else {
-            None
+            // Create monitor desktop audio config if enabled (add first so it's processed first)
+            if args.monitor_desktop_audio {
+                let monitor_output_path = args.mic_audio_output
+                    .parent()
+                    .map(|p| p.join("desktop_audio.wav"))
+                    .unwrap_or_else(|| PathBuf::from("desktop_audio.wav"));
+                
+                configs.push(AudioRecordingConfig {
+                    enabled: true,
+                    output_path: monitor_output_path.clone(),
+                    sample_rate: args.mic_sample_rate,
+                    channels: 2, // Stereo for desktop
+                    device_name: None, // Will use default (monitor source)
+                    monitor_desktop_audio: true,
+                    transcribe: transcribe_enabled,
+                    transcription_model_path: model_path.clone(),
+                });
+            }
+            
+            // Create microphone audio config if enabled
+            if args.mic_audio {
+                // Use --device if provided, otherwise fall back to --mic-device
+                let device_name = args.device.clone().or(args.mic_device.clone());
+                configs.push(AudioRecordingConfig {
+                    enabled: true,
+                    output_path: args.mic_audio_output.clone(),
+                    sample_rate: args.mic_sample_rate,
+                    channels: 1, // Mono for mic
+                    device_name,
+                    monitor_desktop_audio: false,
+                    transcribe: transcribe_enabled,
+                    transcription_model_path: model_path.clone(),
+                });
+            }
+            
+            configs
         },
         database_path: args.database.clone(),
         capture_keyboard: !args.no_keyboard,
