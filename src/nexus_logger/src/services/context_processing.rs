@@ -20,6 +20,9 @@ const FRAME_SYSTEM_PROMPT: &str = "You are an expert UI and user behavior analys
 const SUMMARY_SYSTEM_PROMPT: &str = "\
 You are an expert in interpreting user behavior from UI activity logs. Given a sequence of frame descriptions around a click event, provide a detailed summary of what likely happened, focusing on both the immediate action and surrounding context. Consider user intent, what the user might already know about the navigation target or item, and any visible clues about task progression or discovery. Explain not just what was clicked, but also what the user may have been seeking (e.g., navigating to a new item, reviewing existing information, taking action on a new element, etc.), and how the interface state or prior actions contribute to your reasoning. Write a clear, multi-sentence summary describing both the user’s action and their probable understanding or goal in this context.";
 const FRAME_BATCH_SIZE: usize = 3;
+const CONTEXT_WINDOW_BEFORE: f64 = 2.0; // seconds before frame
+const CONTEXT_WINDOW_AFTER: f64 = 2.0; // seconds after frame
+const KEY_GAP_THRESHOLD_MS: u64 = 500; // milliseconds between keys to detect word boundary
 
 #[derive(Clone)]
 pub struct ProcessingHandle {
@@ -290,6 +293,7 @@ impl ProcessingService {
             Arc::clone(&config),
             &job,
             &frames,
+            Arc::clone(&db),
         )
         .await?;
 
@@ -339,6 +343,7 @@ impl ProcessingService {
         config: Arc<ProcessingConfig>,
         job: &ProcessingJob,
         frames: &[CapturedFrame],
+        db: Arc<Database>,
     ) -> Result<Vec<FrameDescription>> {
         println!(
             "🤖  Analyzing {} frames in batches of {} (batches processed in parallel)...",
@@ -352,9 +357,10 @@ impl ProcessingService {
             let cfg = Arc::clone(&config);
             let job_clone = job.clone();
             let batch_frames: Vec<CapturedFrame> = chunk.to_vec();
+            let db_clone = Arc::clone(&db);
 
             let handle = tokio::spawn(async move {
-                Self::process_batch(api, cfg, job_clone, batch_idx, batch_frames).await
+                Self::process_batch(api, cfg, job_clone, batch_idx, batch_frames, db_clone).await
             });
             handles.push(handle);
         }
@@ -796,6 +802,7 @@ impl ProcessingService {
         job: ProcessingJob,
         batch_index: usize,
         frames: Vec<CapturedFrame>,
+        db: Arc<Database>,
     ) -> Result<BatchResult> {
         println!(
             "\n🧩 Processing batch {} ({} frame{})",
@@ -812,6 +819,7 @@ impl ProcessingService {
                 &job,
                 &descriptions,
                 frame,
+                Some(Arc::clone(&db)),
             )
             .await
             {
@@ -868,17 +876,276 @@ impl ProcessingService {
         })
     }
 
+    /// Reconstruct text from keyboard events, handling backspace and special keys
+    fn reconstruct_text_from_keys(events: &[crate::services::database::TimelineEvent]) -> String {
+        use std::collections::HashMap;
+        
+        let mut text = String::new();
+        let mut modifier_keys: HashMap<String, bool> = HashMap::new();
+        let mut last_key_time: Option<DateTime<Utc>> = None;
+        
+        // Filter to only keyboard press events, sorted by time
+        let mut key_events: Vec<_> = events.iter()
+            .filter(|e| e.event_type == "keyboard" && e.pressed == Some(true))
+            .collect();
+        
+        key_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        
+        for event in key_events {
+            let key = event.key.as_ref().map(|k| k.as_str()).unwrap_or("");
+            
+            // Track modifier keys
+            if key == "LControl" || key == "RControl" || key == "Control" {
+                modifier_keys.insert("Ctrl".to_string(), true);
+                continue;
+            }
+            if key == "LShift" || key == "RShift" || key == "Shift" {
+                modifier_keys.insert("Shift".to_string(), true);
+                continue;
+            }
+            if key == "LAlt" || key == "RAlt" || key == "Alt" {
+                modifier_keys.insert("Alt".to_string(), true);
+                continue;
+            }
+            
+            // Handle special keys
+            match key {
+                "Backspace" => {
+                    text.pop();
+                    modifier_keys.clear();
+                    continue;
+                }
+                "Delete" => {
+                    // Delete removes next char, but we're building forward, so just skip
+                    modifier_keys.clear();
+                    continue;
+                }
+                "Enter" => {
+                    if modifier_keys.contains_key("Ctrl") {
+                        text.push_str("[Ctrl+Enter]");
+                    } else {
+                        text.push_str("\n");
+                    }
+                    modifier_keys.clear();
+                    continue;
+                }
+                "Tab" => {
+                    text.push_str("    "); // 4 spaces for tab
+                    modifier_keys.clear();
+                    continue;
+                }
+                "Space" => {
+                    text.push(' ');
+                    modifier_keys.clear();
+                    last_key_time = Some(event.timestamp);
+                    continue;
+                }
+                "Escape" | "Return" => {
+                    modifier_keys.clear();
+                    continue;
+                }
+                _ => {}
+            }
+            
+            // Handle modifier combinations
+            if modifier_keys.contains_key("Ctrl") {
+                // Common shortcuts
+                match key {
+                    "C" => {
+                        text.push_str("[Ctrl+C]");
+                        modifier_keys.clear();
+                        continue;
+                    }
+                    "V" => {
+                        text.push_str("[Ctrl+V]");
+                        modifier_keys.clear();
+                        continue;
+                    }
+                    "X" => {
+                        text.push_str("[Ctrl+X]");
+                        modifier_keys.clear();
+                        continue;
+                    }
+                    "Z" => {
+                        text.push_str("[Ctrl+Z]");
+                        modifier_keys.clear();
+                        continue;
+                    }
+                    "A" => {
+                        text.push_str("[Ctrl+A]");
+                        modifier_keys.clear();
+                        continue;
+                    }
+                    "S" => {
+                        text.push_str("[Ctrl+S]");
+                        modifier_keys.clear();
+                        continue;
+                    }
+                    _ => {
+                        // Other Ctrl+key combinations
+                        text.push_str(&format!("[Ctrl+{}]", key));
+                        modifier_keys.clear();
+                        continue;
+                    }
+                }
+            }
+            
+            // Regular character - check for word boundary
+            if let Some(last_time) = last_key_time {
+                let gap = event.timestamp.signed_duration_since(last_time);
+                if gap.num_milliseconds() > KEY_GAP_THRESHOLD_MS as i64 {
+                    text.push(' '); // Word boundary
+                }
+            }
+            
+            // Convert key to character (simplified - handles common cases)
+            let ch_opt: Option<char> = if modifier_keys.contains_key("Shift") {
+                // Uppercase or shifted characters
+                match key {
+                    "1" => Some('!'),
+                    "2" => Some('@'),
+                    "3" => Some('#'),
+                    "4" => Some('$'),
+                    "5" => Some('%'),
+                    "6" => Some('^'),
+                    "7" => Some('&'),
+                    "8" => Some('*'),
+                    "9" => Some('('),
+                    "0" => Some(')'),
+                    "-" => Some('_'),
+                    "=" => Some('+'),
+                    "[" => Some('{'),
+                    "]" => Some('}'),
+                    "\\" => Some('|'),
+                    ";" => Some(':'),
+                    "'" => Some('"'),
+                    "," => Some('<'),
+                    "." => Some('>'),
+                    "/" => Some('?'),
+                    _ => {
+                        // Try to get uppercase version
+                        if key.len() == 1 {
+                            key.chars().next().map(|c| c.to_ascii_uppercase())
+                        } else {
+                            None
+                        }
+                    }
+                }
+            } else {
+                // Regular character
+                if key.len() == 1 {
+                    key.chars().next()
+                } else {
+                    None
+                }
+            };
+            
+            // Only add single character keys (filter out multi-char key names)
+            if let Some(ch) = ch_opt {
+                text.push(ch);
+            }
+            
+            modifier_keys.clear();
+            last_key_time = Some(event.timestamp);
+        }
+        
+        text.trim().to_string()
+    }
+    
+    /// Gather context (clicks and keyboard events) for a frame
+    async fn gather_frame_context(
+        db: &Database,
+        session_id: &str,
+        video_timestamp: f64,
+    ) -> Result<(Vec<String>, String)> {
+        // Get events in time window
+        let events = db.get_events_in_window(
+            session_id,
+            video_timestamp,
+            CONTEXT_WINDOW_BEFORE,
+            CONTEXT_WINDOW_AFTER,
+        ).await?;
+        
+        let mut clicks = Vec::new();
+        let mut keyboard_events = Vec::new();
+        
+        for event in &events {
+            match event.event_type.as_str() {
+                "mouse" => {
+                    if event.event_subtype.as_deref() == Some("click") {
+                        let button = event.button.as_deref().unwrap_or("unknown");
+                        let coords = if let (Some(x), Some(y)) = (event.x, event.y) {
+                            format!("({}, {})", x, y)
+                        } else {
+                            String::new()
+                        };
+                        let time_str = if let Some(tc) = event.timecode {
+                            format!("{:.2}s", tc)
+                        } else {
+                            "?".to_string()
+                        };
+                        clicks.push(format!("{} click at {} {}", button, coords, time_str));
+                    }
+                }
+                "keyboard" => {
+                    keyboard_events.push(event.clone());
+                }
+                _ => {}
+            }
+        }
+        
+        // Reconstruct text from keyboard events
+        let reconstructed_text = Self::reconstruct_text_from_keys(&keyboard_events);
+        
+        Ok((clicks, reconstructed_text))
+    }
+
     async fn describe_frame_with_context(
         api_service: Arc<NexusApiService>,
         config: &ProcessingConfig,
         job: &ProcessingJob,
         prior_descriptions: &[FrameDescription],
         frame: &CapturedFrame,
+        db: Option<Arc<Database>>,
     ) -> Result<String> {
         let coordinates = job.coordinates().unwrap_or((0, 0));
+        
+        // Calculate absolute video timestamp for this frame
+        let frame_video_timestamp = if let Some(base) = job.video_timestamp {
+            base + frame.offset_secs
+        } else {
+            // For full video sampling, offset_secs is already absolute
+            frame.offset_secs
+        };
+        
+        // Gather context (clicks and keyboard events) if database is available
+        let mut context_info = String::new();
+        if let Some(db_ref) = db.as_ref() {
+            if let Some(session_id) = &job.session_id {
+                match Self::gather_frame_context(db_ref, session_id, frame_video_timestamp).await {
+                    Ok((clicks, reconstructed_text)) => {
+                        if !clicks.is_empty() || !reconstructed_text.is_empty() {
+                            context_info.push_str("\n\nUser activity in this time window (±2s):");
+                            if !clicks.is_empty() {
+                                context_info.push_str("\n• Clicks: ");
+                                context_info.push_str(&clicks.join(", "));
+                            }
+                            if !reconstructed_text.is_empty() {
+                                context_info.push_str(&format!("\n• Text entered: \"{}\"", reconstructed_text));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Log but don't fail - context is optional
+                        eprintln!("⚠️  Failed to gather frame context: {}", e);
+                    }
+                }
+            }
+        }
+        
         let mut prompt = format!(
-            "Frame captured +{:.2}s from '{}' at ({}, {}).",
-            frame.offset_secs, job.label, coordinates.0, coordinates.1
+            "Frame captured +{:.2}s from '{}' at ({}, {}).{}",
+            frame.offset_secs, job.label, coordinates.0, coordinates.1, context_info
         );
 
         if prior_descriptions.is_empty() {
