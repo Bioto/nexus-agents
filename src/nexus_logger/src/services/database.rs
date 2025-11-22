@@ -426,33 +426,27 @@ impl Database {
         let end_time = Utc::now();
         let end_time_str = end_time.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
-        // Update the session with end_time
-        let _query = format!(
-            "INSERT INTO sessions (id, start_time, end_time) 
-             SELECT id, start_time, '{}' 
-             FROM sessions 
-             WHERE id = '{}' 
-             LIMIT 1",
-            end_time_str,
-            session_id.replace('\'', "''")
-        );
-
         // For ReplacingMergeTree, we need to insert a new row with updated end_time
         // First get the existing start_time
         let block = self
             .service
             .query(&format!(
-                "SELECT start_time FROM sessions WHERE id = '{}' LIMIT 1",
+                "SELECT start_time FROM sessions WHERE id = '{}' ORDER BY created_at DESC LIMIT 1",
                 session_id.replace('\'', "''")
             ))
             .await
             .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
 
         if let Some(row) = block.rows().next() {
-            // Insert updated row
-            let start_time: String = row
-                .get("start_time")
-                .map_err(|_| LoggerError::Other("Failed to get start_time".to_string()))?;
+            // Try to get start_time, with fallback if missing
+            let start_time = match row.get::<String, _>("start_time") {
+                Ok(st) if !st.is_empty() => st,
+                Ok(_) | Err(_) => {
+                    // If start_time is missing or empty, use current time as fallback
+                    // This can happen if the session was created but not properly initialized
+                    Utc::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+                }
+            };
 
             let update_query = format!(
                 "INSERT INTO sessions (id, start_time, end_time) VALUES ('{}', '{}', '{}')",
@@ -465,6 +459,10 @@ impl Database {
                 .insert(&update_query)
                 .await
                 .map_err(|e| LoggerError::Other(format!("Failed to end session: {}", e)))?;
+        } else {
+            // Session not found - this can happen if the session was never properly created
+            // Log a warning but don't fail, as this is a cleanup operation
+            eprintln!("Warning: Session {} not found when ending session", session_id);
         }
 
         Ok(())
