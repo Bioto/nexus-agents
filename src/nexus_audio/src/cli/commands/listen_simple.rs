@@ -90,7 +90,7 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
     // Handle list devices command
     if args.list_devices {
         let recorder = AudioRecorder::new()?;
-        let mut devices = recorder.list_input_devices()?;
+        let devices = recorder.list_input_devices()?;
         
         // Separate CPAL-enumerated devices from ALSA-only devices
         let mut cpal_devices = Vec::new();

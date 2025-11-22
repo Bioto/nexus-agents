@@ -72,6 +72,10 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub whisper_model: Option<PathBuf>,
 
+    /// Disable audio transcription (skips Whisper processing)
+    #[arg(long)]
+    pub no_transcription: bool,
+
     /// Database path for storing events
     #[arg(short = 'D', long, default_value = "events.db")]
     pub database: PathBuf,
@@ -160,16 +164,77 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             let model_path = args.whisper_model.clone().unwrap_or_else(|| {
                 PathBuf::from(".models/ggml-small-fp16.bin")
             });
-            let transcribe_enabled = model_path.exists();
+            
+            // Transcription is enabled if:
+            // 1. --no-transcription flag is NOT set, AND
+            // 2. Model file exists
+            let transcribe_enabled = !args.no_transcription && model_path.exists();
             
             // Check if model exists on startup and print message if not
-            if !transcribe_enabled {
+            if !args.no_transcription && !model_path.exists() {
                 eprintln!("⚠️  Whisper model not found at: {}", model_path.display());
                 eprintln!("   You need to install models using install-models.sh");
                 eprintln!("   Transcription will be disabled.");
+            } else if args.no_transcription {
+                eprintln!("ℹ️  Transcription disabled (--no-transcription flag)");
             }
 
-            // Create monitor desktop audio config if enabled (add first so it's processed first)
+            // Create microphone audio config if enabled (add FIRST so it locks onto real mic before loopback sink is created)
+            // Enabled by default unless --no-mic-audio is specified
+            if !args.no_mic_audio {
+                // Use --device if provided, otherwise fall back to --mic-device
+                // If both are None, pre-select a microphone device NOW (before loopback sink is created)
+                let device_name = args.device.clone().or(args.mic_device.clone()).or_else(|| {
+                    // Pre-select microphone device before desktop audio creates loopback sink
+                    // Prefer "jack" device which CPAL can see and won't fall back to "default"
+                    use nexus_audio::AudioRecorder;
+                    if let Ok(recorder) = AudioRecorder::new() {
+                        if let Ok(devices) = recorder.list_input_devices() {
+                            // First, try to find "jack" device explicitly
+                            if let Some(jack_device) = devices.iter().find(|d| d.name == "jack") {
+                                eprintln!("🎤 Pre-selected microphone device: {} ({})", jack_device.display_name, jack_device.name);
+                                return Some(jack_device.name.clone());
+                            }
+                            
+                            // Otherwise, find first device that's not a monitor/loopback/nexus/pulse/default
+                            if let Some(mic_device) = devices.iter().find(|d| {
+                                let name_lower = d.name.to_lowercase();
+                                !name_lower.contains("monitor") 
+                                    && !name_lower.contains("loopback")
+                                    && !name_lower.contains("dsnoop")
+                                    && !name_lower.contains("nexus") // Exclude our loopback sink
+                                    && d.name != "pulse" // pulse might route to monitor
+                                    && d.name != "default" // default will route to monitor
+                                    && d.name != "pipewire" // might also route to default
+                            }) {
+                                eprintln!("🎤 Pre-selected microphone device: {} ({})", mic_device.display_name, mic_device.name);
+                                Some(mic_device.name.clone())
+                            } else {
+                                eprintln!("⚠️  Could not auto-detect microphone, will use 'jack' as fallback");
+                                Some("jack".to_string()) // Fallback to jack
+                            }
+                        } else {
+                            eprintln!("⚠️  Could not list devices, will use 'jack' as fallback");
+                            Some("jack".to_string()) // Fallback to jack
+                        }
+                    } else {
+                        eprintln!("⚠️  Could not create audio recorder, will use 'jack' as fallback");
+                        Some("jack".to_string()) // Fallback to jack
+                    }
+                });
+                configs.push(AudioRecordingConfig {
+                    enabled: true,
+                    output_path: args.mic_audio_output.clone(),
+                    sample_rate: args.mic_sample_rate,
+                    channels: 1, // Mono for mic
+                    device_name,
+                    monitor_desktop_audio: false,
+                    transcribe: transcribe_enabled,
+                    transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
+                });
+            }
+            
+            // Create monitor desktop audio config if enabled (add AFTER microphone to avoid interference)
             // Enabled by default unless --no-monitor-desktop-audio is specified
             if !args.no_monitor_desktop_audio {
                 let monitor_output_path = args.mic_audio_output
@@ -184,24 +249,6 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     channels: 2, // Stereo for desktop
                     device_name: None, // Will use default (monitor source)
                     monitor_desktop_audio: true,
-                    transcribe: transcribe_enabled,
-                    transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
-                });
-            }
-            
-            // Create microphone audio config if enabled
-            // Enabled by default unless --no-mic-audio is specified
-            if !args.no_mic_audio {
-                // Use --device if provided, otherwise fall back to --mic-device
-                // If both are None, will use system default
-                let device_name = args.device.clone().or(args.mic_device.clone());
-                configs.push(AudioRecordingConfig {
-                    enabled: true,
-                    output_path: args.mic_audio_output.clone(),
-                    sample_rate: args.mic_sample_rate,
-                    channels: 1, // Mono for mic
-                    device_name,
-                    monitor_desktop_audio: false,
                     transcribe: transcribe_enabled,
                     transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
                 });
@@ -249,31 +296,55 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     
     println!("   System audio: {}", if !args.no_audio { "✓" } else { "✗" });
     println!("   Desktop audio monitoring: {}", if !args.no_monitor_desktop_audio { "✓" } else { "✗" });
-    println!("   Microphone: {}", if !args.no_mic_audio { "✓" } else { "✗" });
+    
+    // Display microphone config with actual device selection
     if !args.no_mic_audio {
+        println!("   Microphone: ✓");
         println!("     Output: {}", args.mic_audio_output.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);
-        let device_display = args.device.as_ref().or(args.mic_device.as_ref());
-        if let Some(device) = device_display {
-            println!("     Device: {}", device);
-        } else {
-            println!("     Device: system default");
+        
+        // Find the mic config to show actual device that was selected
+        if let Some(mic_config) = config.audio_configs.iter().find(|c| !c.monitor_desktop_audio) {
+            if let Some(ref device) = mic_config.device_name {
+                println!("     Device: {}", device);
+            } else {
+                println!("     Device: system default (not specified)");
+            }
         }
-        if model_path.exists() {
+        
+        if args.no_transcription {
+            println!("     Transcription: ✗ (disabled)");
+        } else if model_path.exists() {
             println!("     Transcription: ✓ (model: {})", model_path.display());
         } else {
             println!("     Transcription: ✗ (model not found)");
         }
+    } else {
+        println!("   Microphone: ✗");
     }
+    
+    // Display desktop audio monitoring config with actual device selection
     if !args.no_monitor_desktop_audio {
         let monitor_output_path = args.mic_audio_output
             .parent()
             .map(|p| p.join("desktop_audio.wav"))
             .unwrap_or_else(|| PathBuf::from("desktop_audio.wav"));
-        println!("   Desktop audio monitoring:");
+        println!("   Desktop audio monitoring: ✓");
         println!("     Output: {}", monitor_output_path.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);
-        if model_path.exists() {
+        
+        // Find the desktop audio config to show actual device that will be used
+        if let Some(desktop_config) = config.audio_configs.iter().find(|c| c.monitor_desktop_audio) {
+            if let Some(ref device) = desktop_config.device_name {
+                println!("     Device: {} (will be created)", device);
+            } else {
+                println!("     Device: PulseAudio loopback sink (will be auto-created)");
+            }
+        }
+        
+        if args.no_transcription {
+            println!("     Transcription: ✗ (disabled)");
+        } else if model_path.exists() {
             println!("     Transcription: ✓ (model: {})", model_path.display());
         } else {
             println!("     Transcription: ✗ (model not found)");

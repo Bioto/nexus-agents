@@ -343,7 +343,7 @@ impl VoiceListener {
         };
 
         // Start audio stream
-        let (stream, rx) = self.recorder.stream_audio_chunks(config)?;
+        let (stream, rx, _actual_sr, _actual_ch) = self.recorder.stream_audio_chunks(config)?;
         stream
             .play()
             .map_err(|e| VoiceError::Audio(format!("Failed to start stream: {}", e)))?;

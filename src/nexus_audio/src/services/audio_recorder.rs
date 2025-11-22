@@ -217,7 +217,7 @@ impl AudioRecorder {
                         let card_name = line[bracket_start + 1..bracket_start + 1 + bracket_end].trim();
                         
                         // Extract card number (before the bracket)
-                        let card_num = line[..bracket_start].trim();
+                        let _card_num = line[..bracket_start].trim();
                         
                         // Extract full name after the dash
                         let full_name = if let Some(dash_pos) = line.find(" - ") {
@@ -435,7 +435,7 @@ impl AudioRecorder {
         {
             // Create a virtual loopback sink for monitoring
             match Self::create_loopback_sink(None) {
-                Ok((monitor_name, _module_id)) => {
+                Ok((monitor_name, _module_id, _previous_sink)) => {
                     log::info!("Created loopback sink with monitor: {}", monitor_name);
                     return Ok(monitor_name);
                 }
@@ -465,13 +465,16 @@ impl AudioRecorder {
     }
 
     /// Create a virtual loopback sink for monitoring desktop audio
-    /// Returns the monitor source name and module IDs (null sink, loopback) for cleanup
+    /// Returns the monitor source name, module IDs (null sink, loopback), and previous default sink for cleanup
     #[cfg(target_os = "linux")]
-    pub fn create_loopback_sink(sink_name: Option<&str>) -> std::result::Result<(String, Vec<u32>), String> {
+    pub fn create_loopback_sink(sink_name: Option<&str>) -> std::result::Result<(String, Vec<u32>, String), String> {
         use std::process::Command;
         
         let sink_name = sink_name.unwrap_or("nexus_audio_monitor");
         let mut module_ids = Vec::new();
+        
+        // Get current default sink to restore later
+        let previous_default_sink = Self::get_default_sink().unwrap_or_default();
         
         // Check if sink already exists
         let list_output = Command::new("pactl")
@@ -521,6 +524,7 @@ impl AudioRecorder {
         }
         
         let default_sink = String::from_utf8_lossy(&default_sink_output.stdout).trim().to_string();
+        eprintln!("📺 Default output sink detected: {}", default_sink);
         
         // Check if loopback already exists
         let list_modules_output = Command::new("pactl")
@@ -531,37 +535,47 @@ impl AudioRecorder {
             .map_err(|e| format!("Failed to list modules: {}", e))?;
         
         let modules = String::from_utf8_lossy(&list_modules_output.stdout);
+        let default_sink_monitor = format!("{}.monitor", default_sink);
         let loopback_exists = modules.lines().any(|line| {
             line.contains("module-loopback") 
                 && line.contains(&format!("sink={}", sink_name))
-                && line.contains(&format!("source={}", default_sink))
+                && line.contains(&format!("source={}", default_sink_monitor))
         });
         
         if !loopback_exists {
-            // Create loopback from default sink's monitor to null sink
-            let default_sink_monitor = format!("{}.monitor", default_sink);
-            let loopback_output = Command::new("pactl")
+            // Use combine-sink to route audio to BOTH original output AND our null sink
+            // This way audio still plays through your speakers/headphones AND we can record it
+            eprintln!("📺 Creating combine-sink to route audio to both {} and {}", default_sink, sink_name);
+            let combine_output = Command::new("pactl")
                 .arg("load-module")
-                .arg("module-loopback")
-                .arg(&format!("source={}", default_sink_monitor))
-                .arg(&format!("sink={}", sink_name))
-                .arg("latency_msec=1")
+                .arg("module-combine-sink")
+                .arg(&format!("sink_name={}_combined", sink_name))
+                .arg(&format!("slaves={},{}", default_sink, sink_name))
                 .output()
-                .map_err(|e| format!("Failed to create loopback: {}", e))?;
+                .map_err(|e| format!("Failed to create combine-sink: {}", e))?;
             
-            if !loopback_output.status.success() {
-                let error = String::from_utf8_lossy(&loopback_output.stderr);
-                return Err(format!("Failed to create loopback: {}", error));
+            if !combine_output.status.success() {
+                let error = String::from_utf8_lossy(&combine_output.stderr);
+                return Err(format!("Failed to create combine-sink: {}", error));
             }
             
-            let module_id_str = String::from_utf8_lossy(&loopback_output.stdout);
+            let module_id_str = String::from_utf8_lossy(&combine_output.stdout);
             let module_id_str = module_id_str.trim();
             if let Ok(module_id) = module_id_str.parse::<u32>() {
-                log::info!("Created loopback module with ID: {} (duplicates audio to null sink)", module_id);
+                eprintln!("✅ Combine-sink module created (ID: {}) - routing audio to both {} and {}", module_id, default_sink, sink_name);
                 module_ids.push(module_id);
+                
+                // Set the combine-sink as default OUTPUT so all applications route through it
+                // This ensures all audio goes to both the original output AND our null sink
+                if let Err(e) = Self::set_default_sink(&format!("{}_combined", sink_name)) {
+                    eprintln!("⚠️  Could not set combine-sink as default: {}", e);
+                    eprintln!("   Audio may not route correctly");
+                } else {
+                    eprintln!("✅ Set combine-sink as default output - all audio will route through it");
+                }
             }
         } else {
-            log::info!("Loopback already exists");
+            eprintln!("ℹ️  Combine-sink already exists");
         }
         
         // Get the monitor source name
@@ -577,33 +591,46 @@ impl AudioRecorder {
         
         let sources = String::from_utf8_lossy(&sources_output.stdout);
         if sources.lines().any(|line| line.contains(&monitor_name)) {
-            Ok((monitor_name, module_ids))
+            Ok((monitor_name, module_ids, previous_default_sink))
         } else {
             Err(format!("Monitor source {} not found", monitor_name))
         }
     }
     
     #[cfg(not(target_os = "linux"))]
-    pub fn create_loopback_sink(_sink_name: Option<&str>) -> std::result::Result<(String, Vec<u32>), String> {
+    pub fn create_loopback_sink(_sink_name: Option<&str>) -> std::result::Result<(String, Vec<u32>, String), String> {
         Err("Loopback sinks only available on Linux".to_string())
     }
     
     /// Set the default PulseAudio source
     #[cfg(target_os = "linux")]
-    pub fn set_default_source(source_name: &str) -> std::result::Result<String, String> {
+    /// Get the current default source
+    pub fn get_default_source() -> std::result::Result<String, String> {
         use std::process::Command;
         
-        // Get current default source to restore later
-        let current_output = Command::new("pactl")
+        let output = Command::new("pactl")
             .arg("get-default-source")
             .output()
             .map_err(|e| format!("Failed to get default source: {}", e))?;
         
-        let current_source = if current_output.status.success() {
-            String::from_utf8_lossy(&current_output.stdout).trim().to_string()
+        if output.status.success() {
+            let source = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !source.is_empty() {
+                Ok(source)
+            } else {
+                Err("Default source is empty".to_string())
+            }
         } else {
-            String::new()
-        };
+            let error = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to get default source: {}", error))
+        }
+    }
+    
+    pub fn set_default_source(source_name: &str) -> std::result::Result<String, String> {
+        use std::process::Command;
+        
+        // Get current default source to restore later
+        let current_source = Self::get_default_source().unwrap_or_default();
         
         // Set new default source
         let output = Command::new("pactl")
@@ -622,8 +649,70 @@ impl AudioRecorder {
     }
     
     #[cfg(not(target_os = "linux"))]
+    pub fn get_default_source() -> std::result::Result<String, String> {
+        Err("Getting default source only available on Linux".to_string())
+    }
+    
+    #[cfg(not(target_os = "linux"))]
     pub fn set_default_source(_source_name: &str) -> std::result::Result<String, String> {
         Err("Setting default source only available on Linux".to_string())
+    }
+    
+    /// Get the current default output sink
+    #[cfg(target_os = "linux")]
+    pub fn get_default_sink() -> std::result::Result<String, String> {
+        use std::process::Command;
+        
+        let output = Command::new("pactl")
+            .arg("get-default-sink")
+            .output()
+            .map_err(|e| format!("Failed to get default sink: {}", e))?;
+        
+        if output.status.success() {
+            let sink = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !sink.is_empty() {
+                Ok(sink)
+            } else {
+                Err("Default sink is empty".to_string())
+            }
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to get default sink: {}", error))
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn get_default_sink() -> std::result::Result<String, String> {
+        Err("Getting default sink only available on Linux".to_string())
+    }
+    
+    /// Set the default output sink
+    #[cfg(target_os = "linux")]
+    pub fn set_default_sink(sink_name: &str) -> std::result::Result<String, String> {
+        use std::process::Command;
+        
+        // Get current default sink to restore later
+        let current_sink = Self::get_default_sink().unwrap_or_default();
+        
+        // Set new default sink
+        let output = Command::new("pactl")
+            .arg("set-default-sink")
+            .arg(sink_name)
+            .output()
+            .map_err(|e| format!("Failed to set default sink: {}", e))?;
+        
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to set default sink to {}: {}", sink_name, error));
+        }
+        
+        log::info!("Set default sink to: {} (previous: {})", sink_name, current_sink);
+        Ok(current_sink)
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn set_default_sink(_sink_name: &str) -> std::result::Result<String, String> {
+        Err("Setting default sink only available on Linux".to_string())
     }
     
     /// Remove a PulseAudio module by ID
@@ -747,6 +836,8 @@ impl AudioRecorder {
             }
             
             if let Some(device) = matched_device {
+                let actual_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+                eprintln!("✅ Found requested device: '{}' (actual name: '{}')", device_name, actual_name);
                 return Ok(device.clone());
             }
             
@@ -756,8 +847,8 @@ impl AudioRecorder {
                 .filter_map(|d| d.name().ok())
                 .collect();
             
-            log::warn!(
-                "Device '{}' not found. Available devices: {}. Falling back to default input device.",
+            eprintln!(
+                "⚠️  Device '{}' not found. Available devices: {}",
                 device_name,
                 if available_devices.is_empty() {
                     "none".to_string()
@@ -765,6 +856,7 @@ impl AudioRecorder {
                     available_devices.join(", ")
                 }
             );
+            eprintln!("⚠️  Falling back to default input device");
             
             // Fall back to default device instead of failing
             self.default_input_device()
@@ -1106,7 +1198,7 @@ impl AudioRecorder {
     pub fn stream_audio_chunks(
         &self,
         config: RecordingConfig,
-    ) -> Result<(cpal::Stream, mpsc::Receiver<Vec<f32>>)> {
+    ) -> Result<(cpal::Stream, mpsc::Receiver<Vec<f32>>, u32, u16)> {
         let device = self.get_input_device(&config)?;
         let supported_config = self.get_supported_config(&device, &config)?;
 
@@ -1143,7 +1235,7 @@ impl AudioRecorder {
             sample_format
         );
 
-        Ok((stream, rx))
+        Ok((stream, rx, actual_sample_rate, actual_channels))
     }
 
     /// Build streaming stream helper

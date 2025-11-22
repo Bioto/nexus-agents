@@ -368,11 +368,88 @@ impl UnifiedRecordingService {
         });
 
         // Start audio recording tasks for all enabled audio configs
+        // CRITICAL: Desktop audio MUST start first to set up loopback sink and default source
+        // before microphone recording tries to connect to its device
         let mut audio_handles = Vec::new();
-        for audio_config in &self.config.audio_configs {
-            if audio_config.enabled {
+        
+        // Start desktop audio monitoring tasks first (they set up the loopback and default source)
+        // CRITICAL: We need to set the monitor as default source BEFORE starting the recording
+        // so that pipewire/pulse devices route to it
+        #[cfg(target_os = "linux")]
+        let mut previous_default_source: Option<String> = None;
+        #[cfg(target_os = "linux")]
+        let mut previous_default_sink: Option<String> = None;
+        #[cfg(target_os = "linux")]
+        let mut loopback_module_ids: Vec<u32> = Vec::new();
+        #[cfg(not(target_os = "linux"))]
+        let previous_default_source: Option<String> = None;
+        #[cfg(not(target_os = "linux"))]
+        let previous_default_sink: Option<String> = None;
+        #[cfg(not(target_os = "linux"))]
+        let loopback_module_ids: Vec<u32> = Vec::new();
+        
+        for audio_config in self.config.audio_configs.iter() {
+            if audio_config.enabled && audio_config.monitor_desktop_audio {
+                // Set up loopback sink and default source BEFORE starting recording
+                #[cfg(target_os = "linux")]
+                {
+                    use nexus_audio::AudioRecorder;
+                    eprintln!("📺 Setting up desktop audio monitoring...");
+                    
+                    // Capture current default source
+                    if let Ok(current_source) = AudioRecorder::get_default_source() {
+                        eprintln!("📝 Current default source: {}", current_source);
+                        previous_default_source = Some(current_source);
+                    }
+                    
+                    // Create loopback sink (this also sets combine-sink as default output)
+                    match AudioRecorder::create_loopback_sink(None) {
+                        Ok((monitor_name, module_ids, prev_sink)) => {
+                            eprintln!("✅ Created loopback sink: {}", monitor_name);
+                            loopback_module_ids.extend(module_ids);
+                            previous_default_sink = Some(prev_sink);
+                            
+                            // Set monitor as default source so pipewire/pulse routes to it
+                            match AudioRecorder::set_default_source(&monitor_name) {
+                                Ok(_) => {
+                                    eprintln!("✅ Set {} as default source for desktop audio", monitor_name);
+                                }
+                                Err(e) => {
+                                    eprintln!("⚠️  Could not set default source: {}", e);
+                                    eprintln!("   Desktop audio may record from wrong source");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Failed to create loopback sink: {}", e);
+                            return Err(LoggerError::Other(format!(
+                                "Failed to create loopback sink: {}", e
+                            )));
+                        }
+                    }
+                    
+                    // Give a moment for the default source change to propagate
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                
                 let audio_config_clone = audio_config.clone();
                 let stop_signal_audio = stop_signal.clone();
+                
+                audio_handles.push(tokio::task::spawn_blocking(move || {
+                    Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
+                }));
+                
+                // Give desktop audio 500ms to start recording before microphone tries to connect
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+        
+        // Then start microphone tasks (they use explicit device names)
+        for audio_config in self.config.audio_configs.iter() {
+            if audio_config.enabled && !audio_config.monitor_desktop_audio {
+                let audio_config_clone = audio_config.clone();
+                let stop_signal_audio = stop_signal.clone();
+                
                 audio_handles.push(tokio::task::spawn_blocking(move || {
                     Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
                 }));
@@ -555,6 +632,9 @@ impl UnifiedRecordingService {
             overlay_labels,
             config: self.config.clone(),
             click_context,
+            previous_default_source,
+            previous_default_sink,
+            loopback_module_ids,
         })
     }
 
@@ -744,65 +824,87 @@ impl UnifiedRecordingService {
         let recorder = AudioRecorder::new()?;
 
         // Handle desktop audio monitoring
+        // NOTE: Loopback sink is created in start_recording() before this function is called
+        // We just need to verify it exists and get the monitor name
         #[cfg(target_os = "linux")]
-        let (module_ids, previous_source) = if config.monitor_desktop_audio {
-            // Create loopback sink for desktop audio monitoring
-            match AudioRecorder::create_loopback_sink(None) {
-                Ok((monitor_name, module_ids)) => {
-                    log::info!("Created loopback sink for desktop audio monitoring: {}", monitor_name);
-                    // Set the monitor source as default so CPAL can access it
-                    match AudioRecorder::set_default_source(&monitor_name) {
-                        Ok(prev_source) => {
-                            log::info!("Set monitor source as default input (will restore: {})", prev_source);
-                            (module_ids, Some(prev_source))
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to set default source: {}, continuing anyway", e);
-                            (module_ids, None)
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!("Failed to create loopback sink: {}", e);
-                    return Err(LoggerError::Other(format!(
-                        "Failed to create loopback sink for desktop audio monitoring: {}",
-                        e
-                    )));
-                }
-            }
+        let (_module_ids, _monitor_source_name, _previous_default_source) = if config.monitor_desktop_audio {
+            // Loopback sink should already exist (created in start_recording)
+            // Just verify and get the monitor name - don't create again
+            let monitor_name = "nexus_audio_monitor.monitor".to_string();
+            eprintln!("📺 Using existing loopback sink: {}", monitor_name);
+            // Module IDs will be cleaned up in wait() method, not here
+            (Vec::<u32>::new(), Some(monitor_name), None::<String>)
         } else {
-            (Vec::new(), None)
+            (Vec::new(), None, None)
         };
         #[cfg(not(target_os = "linux"))]
-        let (module_ids, previous_source) = if config.monitor_desktop_audio {
+        let (module_ids, _monitor_source_name, _previous_default_source) = if config.monitor_desktop_audio {
             log::warn!("Desktop audio monitoring is only supported on Linux");
             return Err(LoggerError::Other(
                 "Desktop audio monitoring is only supported on Linux".to_string(),
             ));
         } else {
-            (Vec::new(), None)
+            (Vec::new(), None, None)
+        };
+
+        // For microphone: use the device_name that was pre-selected (if any)
+        // The device_name should already be set in the config before this function is called
+        // This avoids interference from the loopback sink created by desktop audio
+        let mic_device_name = if !config.monitor_desktop_audio {
+            if let Some(ref device_name) = config.device_name {
+                log::info!("🎤 Using pre-selected microphone device: {}", device_name);
+            } else {
+                log::warn!("⚠️  No microphone device specified, using system default (may pick wrong device!)");
+            }
+            config.device_name.clone()
+        } else {
+            config.device_name.clone()
         };
 
         // Convert our config to nexus_audio's RecordingConfig
-        // If monitoring desktop audio, use None for device_name to use default (which we set to monitor source)
-        let recording_config = NexusAudioRecordingConfig {
-            sample_rate: config.sample_rate,
-            channels: if config.monitor_desktop_audio { 2 } else { config.channels }, // Desktop audio is typically stereo
-            duration: None, // We'll control duration via stop_signal
-            device_name: if config.monitor_desktop_audio {
-                None // Use default device (which is now our monitor source)
-            } else {
-                config.device_name.clone()
-            },
+        // For desktop audio: try "pipewire" device for direct monitor access
+        // For microphone: use the device name we determined above
+        let recording_config = if config.monitor_desktop_audio {
+            // Try "pipewire" device which might have better routing to monitors
+            // without needing to change default source
+            NexusAudioRecordingConfig {
+                sample_rate: config.sample_rate,
+                channels: 2, // Desktop audio is typically stereo
+                duration: None,
+                device_name: Some("pipewire".to_string()), // Try pipewire for better monitor routing
+            }
+        } else {
+            NexusAudioRecordingConfig {
+                sample_rate: config.sample_rate,
+                channels: config.channels,
+                duration: None,
+                device_name: mic_device_name,
+            }
         };
 
-        // Use streaming API to have control over stop signal
-        let (stream, rx) = recorder.stream_audio_chunks(recording_config)?;
+        // Log device selection for debugging
+        let device_type = if config.monitor_desktop_audio {
+            "📺 Desktop audio monitor"
+        } else {
+            "🎤 Microphone"
+        };
+        
+        let device_name_display = recording_config.device_name.as_ref()
+            .map(|d| d.as_str())
+            .unwrap_or("system default");
+        
+        eprintln!("{} starting: device='{}' (requested {} Hz, {} channels)", 
+            device_type, device_name_display, 
+            recording_config.sample_rate, recording_config.channels);
 
-        // Get actual sample rate and channels from the stream
-        // We'll use the config values, but the actual values might differ
-        let actual_sample_rate = config.sample_rate;
-        let actual_channels = config.channels;
+        // Use streaming API to have control over stop signal
+        // This will return the actual sample rate and channels from the device
+        let (stream, rx, actual_sample_rate, actual_channels) = recorder.stream_audio_chunks(recording_config.clone())?;
+
+        eprintln!("{} opened: device='{}' (actual {} Hz, {} channels) -> {}", 
+            device_type, device_name_display,
+            actual_sample_rate, actual_channels,
+            config.output_path.display());
 
         // Create WAV file
         let spec = WavSpec {
@@ -826,17 +928,34 @@ impl UnifiedRecordingService {
         })?;
 
         // Record audio chunks until stop signal
+        // For stereo, samples come interleaved: [L, R, L, R, ...]
+        // For mono, samples come as: [M, M, M, ...]
         while !stop_signal.load(Ordering::SeqCst) {
             // Try to receive audio chunk with timeout to allow periodic stop signal checks
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(samples) => {
                     // Write samples to WAV file (convert f32 to i16)
-                    for sample in samples {
-                        let clamped = sample.clamp(-1.0, 1.0);
-                        let sample_i16 = (clamped * 32767.0).round() as i16;
-                        if let Err(e) = wav_writer.write_sample(sample_i16) {
-                            log::error!("Error writing audio sample: {}", e);
-                            break;
+                    // For stereo, write interleaved samples correctly
+                    // For mono, write samples directly
+                    if actual_channels == 2 {
+                        // Stereo: samples are already interleaved [L, R, L, R, ...]
+                        for sample in samples {
+                            let clamped = sample.clamp(-1.0, 1.0);
+                            let sample_i16 = (clamped * 32767.0).round() as i16;
+                            if let Err(e) = wav_writer.write_sample(sample_i16) {
+                                log::error!("Error writing audio sample: {}", e);
+                                break;
+                            }
+                        }
+                    } else {
+                        // Mono: write samples directly
+                        for sample in samples {
+                            let clamped = sample.clamp(-1.0, 1.0);
+                            let sample_i16 = (clamped * 32767.0).round() as i16;
+                            if let Err(e) = wav_writer.write_sample(sample_i16) {
+                                log::error!("Error writing audio sample: {}", e);
+                                break;
+                            }
                         }
                     }
                 }
@@ -863,28 +982,8 @@ impl UnifiedRecordingService {
             LoggerError::Other(format!("Failed to finalize WAV file: {}", e))
         })?;
 
-        // Clean up desktop audio monitoring resources
-        #[cfg(target_os = "linux")]
-        {
-            // Restore previous default source if we changed it
-            if let Some(ref prev_source) = previous_source {
-                if let Err(e) = AudioRecorder::set_default_source(prev_source) {
-                    log::warn!("Failed to restore previous default source: {}", e);
-                } else {
-                    log::info!("Restored previous default source: {}", prev_source);
-                }
-            }
-            // Clean up PulseAudio modules
-            for module_id in &module_ids {
-                if *module_id > 0 {
-                    if let Err(e) = AudioRecorder::remove_pulseaudio_module(*module_id) {
-                        log::warn!("Failed to remove PulseAudio module {}: {}", module_id, e);
-                    } else {
-                        log::info!("Cleaned up PulseAudio module {}", module_id);
-                    }
-                }
-            }
-        }
+        // NOTE: Desktop audio loopback sink cleanup is handled in RecordingSession::wait()
+        // to ensure proper ordering (restore default source before removing modules)
 
         Ok(())
     }
@@ -1241,6 +1340,9 @@ pub struct RecordingSession {
     overlay_labels: Arc<std::sync::Mutex<Vec<OverlayLabel>>>,
     config: UnifiedRecordingConfig,
     click_context: Option<ClickContextHandle>,
+    previous_default_source: Option<String>,
+    previous_default_sink: Option<String>,
+    loopback_module_ids: Vec<u32>,
 }
 
 impl RecordingSession {
@@ -1387,6 +1489,46 @@ impl RecordingSession {
             }
         }
 
+        // Restore previous default source/sink and clean up loopback modules
+        #[cfg(target_os = "linux")]
+        {
+            use nexus_audio::AudioRecorder;
+            
+            // Restore default sink FIRST (before removing modules)
+            if let Some(ref prev_sink) = self.previous_default_sink {
+                eprintln!("🔄 Restoring previous default sink...");
+                if let Err(e) = AudioRecorder::set_default_sink(prev_sink) {
+                    eprintln!("⚠️  Failed to restore previous default sink: {}", e);
+                } else {
+                    eprintln!("✅ Restored previous default sink: {}", prev_sink);
+                }
+            }
+            
+            // Restore default source
+            if let Some(ref prev_source) = self.previous_default_source {
+                eprintln!("🔄 Restoring previous default source...");
+                if let Err(e) = AudioRecorder::set_default_source(prev_source) {
+                    eprintln!("⚠️  Failed to restore previous default source: {}", e);
+                } else {
+                    eprintln!("✅ Restored previous default source: {}", prev_source);
+                }
+            }
+            
+            // Clean up loopback modules (after restoring defaults)
+            if !self.loopback_module_ids.is_empty() {
+                eprintln!("🧹 Cleaning up PulseAudio loopback sink...");
+                for module_id in &self.loopback_module_ids {
+                    if *module_id > 0 {
+                        if let Err(e) = AudioRecorder::remove_pulseaudio_module(*module_id) {
+                            eprintln!("⚠️  Failed to remove PulseAudio module {}: {}", module_id, e);
+                        } else {
+                            eprintln!("✅ Removed PulseAudio module {}", module_id);
+                        }
+                    }
+                }
+            }
+        }
+
         // Now that screen recording is complete, apply overlays
         let labels = self.overlay_labels.lock().unwrap().clone();
         println!("📝 Applying overlays: {} labels collected", labels.len());
@@ -1491,7 +1633,6 @@ pub fn print_timeline(
     #[derive(Clone)]
     struct TimedEvent {
         timecode: f64, // Always has a value now
-        timestamp: DateTime<Utc>,
         event_type: String,
         data: String,
     }
@@ -1581,7 +1722,6 @@ pub fn print_timeline(
                                     
                                     timed_events.push(TimedEvent {
                                         timecode: frame_timecode,
-                                        timestamp: event.timestamp,
                                         event_type: "frame".to_string(),
                                         data: format!("{} {}", offset_str, desc),
                                     });
@@ -1599,7 +1739,6 @@ pub fn print_timeline(
                         
                         timed_events.push(TimedEvent {
                             timecode: summary_timecode,
-                            timestamp: event.timestamp,
                             event_type: "summary".to_string(),
                             data: format!("Summary: {}", summary),
                         });
@@ -1611,7 +1750,6 @@ pub fn print_timeline(
                     if event.pressed.unwrap_or(false) {
                         timed_events.push(TimedEvent {
                             timecode: event_timecode,
-                            timestamp: event.timestamp,
                             event_type: "key".to_string(),
                             data: key.clone(),
                         });
@@ -1628,7 +1766,6 @@ pub fn print_timeline(
                     };
                     timed_events.push(TimedEvent {
                         timecode: event_timecode,
-                        timestamp: event.timestamp,
                         event_type: "click".to_string(),
                         data: format!("{} {}", button, coords),
                     });
@@ -1655,7 +1792,6 @@ pub fn print_timeline(
                                 });
                             timed_events.push(TimedEvent {
                                 timecode: event_timecode,
-                                timestamp: event.timestamp,
                                 event_type: "transcription".to_string(),
                                 data: format!("[{}] {}", source, text),
                             });
@@ -1675,7 +1811,6 @@ pub fn print_timeline(
                                 });
                             timed_events.push(TimedEvent {
                                 timecode: event_timecode,
-                                timestamp: event.timestamp,
                                 event_type: "transcription".to_string(),
                                 data: format!("[{}] {}", source, key),
                             });
@@ -1684,7 +1819,6 @@ pub fn print_timeline(
                         // Fallback: use key field (no metadata available, assume microphone)
                         timed_events.push(TimedEvent {
                             timecode: event_timecode,
-                            timestamp: event.timestamp,
                             event_type: "transcription".to_string(),
                             data: format!("[microphone] {}", key),
                         });

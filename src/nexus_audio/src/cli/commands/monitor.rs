@@ -83,35 +83,37 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
     };
 
     // Determine monitor device - create loopback sink if not specified
-    let (monitor_device, module_ids, previous_source) = if let Some(device) = args.device {
-        (Some(device), Vec::new(), None)
+    let (monitor_device, module_ids, previous_source, previous_sink) = if let Some(device) = args.device {
+        (Some(device), Vec::new(), None, None)
     } else {
         // Create virtual loopback sink for monitoring
         #[cfg(target_os = "linux")]
         {
             // Create loopback sink and set it as default source (so CPAL can access it via default device)
             match AudioRecorder::create_loopback_sink(None) {
-                Ok((monitor_name, module_ids)) => {
+                Ok((monitor_name, module_ids, prev_sink)) => {
                     println!("✅ Created virtual loopback sink");
                     println!("   Monitor source: {} (created in PulseAudio)", monitor_name);
+                    println!("   Previous default sink: {} (will be restored after recording)", prev_sink);
                     // Set the monitor source as default so CPAL can access it via default input device
                     match AudioRecorder::set_default_source(&monitor_name) {
                         Ok(prev_source) => {
                             println!("   Set as default source (will be restored after recording)");
                             // Use None to use default input device, which will now be our monitor source
-                            (None, module_ids, Some(prev_source))
+                            // Store both previous source and sink for restoration
+                            (None, module_ids, Some(prev_source), Some(prev_sink))
                         }
                         Err(e) => {
                             println!("⚠️  Warning: Could not set default source: {}", e);
                             println!("   Trying 'pulse' device as fallback...");
-                            (Some("pulse".to_string()), module_ids, None)
+                            (Some("pulse".to_string()), module_ids, None, Some(prev_sink))
                         }
                     }
                 }
                 Err(e) => {
                     println!("⚠️  Warning: Could not create loopback sink: {}", e);
                     println!("   Trying 'pulse' device as fallback...");
-                    (Some("pulse".to_string()), Vec::new(), None)
+                    (Some("pulse".to_string()), Vec::new(), None, None)
                 }
             }
         }
@@ -150,17 +152,24 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
     let module_ids_for_cleanup = module_ids.clone();
     #[cfg(target_os = "linux")]
     let previous_source_for_cleanup = previous_source.clone();
+    let previous_sink_for_cleanup = previous_sink.clone();
     
     // Handle Ctrl+C gracefully and clean up loopback sink
     if config.duration.is_none() {
         let module_ids_clone = module_ids_for_cleanup.clone();
         #[cfg(target_os = "linux")]
         let previous_source_clone = previous_source_for_cleanup.clone();
+        #[cfg(target_os = "linux")]
+        let previous_sink_clone = previous_sink_for_cleanup.clone();
         ctrlc::set_handler(move || {
             println!("\n\n🛑 Stopping recording...");
-            // Clean up PulseAudio modules and restore default source
+            // Clean up PulseAudio modules and restore default source/sink
             #[cfg(target_os = "linux")]
             {
+                // Restore previous default sink FIRST
+                if let Some(ref prev_sink) = previous_sink_clone {
+                    let _ = AudioRecorder::set_default_sink(prev_sink);
+                }
                 // Restore previous default source if we changed it
                 if let Some(ref prev_source) = previous_source_clone {
                     let _ = AudioRecorder::set_default_source(prev_source);
@@ -182,9 +191,14 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
     // Start recording
     let result = recorder.record_to_file(config, &output_path);
 
-    // Clean up PulseAudio modules and restore default source after recording
+    // Clean up PulseAudio modules and restore default source/sink after recording
     #[cfg(target_os = "linux")]
     {
+        // Restore previous default sink FIRST
+        if let Some(ref prev_sink) = previous_sink_for_cleanup {
+            let _ = AudioRecorder::set_default_sink(prev_sink);
+            println!("🔄 Restored previous default sink: {}", prev_sink);
+        }
         // Restore previous default source if we changed it
         if let Some(ref prev_source) = previous_source_for_cleanup {
             let _ = AudioRecorder::set_default_source(prev_source);
@@ -207,4 +221,5 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
         Err(e) => Err(e),
     }
 }
+
 
