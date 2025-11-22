@@ -16,6 +16,8 @@ pub struct Cli {
 pub enum Commands {
     /// Record audio to a WAV file
     Record(commands::record::RecordArgs),
+    /// Monitor and record desktop audio output
+    Monitor(commands::monitor::MonitorArgs),
     /// Continuously listen and transcribe speech using Whisper
     Listen(commands::listen_simple::ListenArgs),
     /// Convert text to speech and play it
@@ -26,6 +28,7 @@ pub enum Commands {
 
 // Re-export command handlers for convenience
 pub use commands::record::run_record;
+pub use commands::monitor::run_monitor;
 // pub use commands::listen::run_listen;  // Temporarily using simple version
 pub use commands::listen_simple::run_listen;
 pub use commands::speak::run_speak;

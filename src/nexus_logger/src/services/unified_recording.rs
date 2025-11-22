@@ -207,10 +207,13 @@ pub struct AudioRecordingConfig {
     pub output_path: PathBuf,
     /// Sample rate in Hz (default 48000)
     pub sample_rate: u32,
-    /// Number of channels (1 = mono, 2 = stereo, default 1)
+    /// Number of channels (1 = mono, 2 = stereo, default 1 for mic, 2 for desktop)
     pub channels: u16,
     /// Specific microphone device name (None = default device)
     pub device_name: Option<String>,
+    /// Whether to monitor desktop audio output (creates virtual loopback sink)
+    /// When true, records desktop audio instead of microphone input
+    pub monitor_desktop_audio: bool,
     /// Whether to transcribe audio (future feature)
     pub transcribe: bool,
     /// Path to Whisper model if transcribing (None = disabled)
@@ -225,6 +228,7 @@ impl Default for AudioRecordingConfig {
             sample_rate: 48000,
             channels: 1,
             device_name: None,
+            monitor_desktop_audio: false,
             transcribe: false,
             transcription_model_path: None,
         }
@@ -742,16 +746,61 @@ impl UnifiedRecordingService {
         // Create audio recorder
         let recorder = AudioRecorder::new()?;
 
+        // Handle desktop audio monitoring
+        #[cfg(target_os = "linux")]
+        let (module_ids, previous_source) = if config.monitor_desktop_audio {
+            // Create loopback sink for desktop audio monitoring
+            match AudioRecorder::create_loopback_sink(None) {
+                Ok((monitor_name, module_ids)) => {
+                    log::info!("Created loopback sink for desktop audio monitoring: {}", monitor_name);
+                    // Set the monitor source as default so CPAL can access it
+                    match AudioRecorder::set_default_source(&monitor_name) {
+                        Ok(prev_source) => {
+                            log::info!("Set monitor source as default input (will restore: {})", prev_source);
+                            (module_ids, Some(prev_source))
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to set default source: {}, continuing anyway", e);
+                            (module_ids, None)
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("Failed to create loopback sink: {}", e);
+                    return Err(LoggerError::Other(format!(
+                        "Failed to create loopback sink for desktop audio monitoring: {}",
+                        e
+                    )));
+                }
+            }
+        } else {
+            (Vec::new(), None)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let (module_ids, previous_source) = if config.monitor_desktop_audio {
+            log::warn!("Desktop audio monitoring is only supported on Linux");
+            return Err(LoggerError::Other(
+                "Desktop audio monitoring is only supported on Linux".to_string(),
+            ));
+        } else {
+            (Vec::new(), None)
+        };
+
         // Convert our config to nexus_audio's RecordingConfig
+        // If monitoring desktop audio, use None for device_name to use default (which we set to monitor source)
         let recording_config = NexusAudioRecordingConfig {
             sample_rate: config.sample_rate,
-            channels: config.channels,
+            channels: if config.monitor_desktop_audio { 2 } else { config.channels }, // Desktop audio is typically stereo
             duration: None, // We'll control duration via stop_signal
-            device_name: config.device_name.clone(),
+            device_name: if config.monitor_desktop_audio {
+                None // Use default device (which is now our monitor source)
+            } else {
+                config.device_name.clone()
+            },
         };
 
         // Use streaming API to have control over stop signal
-        let (stream, mut rx) = recorder.stream_audio_chunks(recording_config)?;
+        let (stream, rx) = recorder.stream_audio_chunks(recording_config)?;
 
         // Get actual sample rate and channels from the stream
         // We'll use the config values, but the actual values might differ
@@ -816,6 +865,29 @@ impl UnifiedRecordingService {
         wav_writer.finalize().map_err(|e| {
             LoggerError::Other(format!("Failed to finalize WAV file: {}", e))
         })?;
+
+        // Clean up desktop audio monitoring resources
+        #[cfg(target_os = "linux")]
+        {
+            // Restore previous default source if we changed it
+            if let Some(ref prev_source) = previous_source {
+                if let Err(e) = AudioRecorder::set_default_source(prev_source) {
+                    log::warn!("Failed to restore previous default source: {}", e);
+                } else {
+                    log::info!("Restored previous default source: {}", prev_source);
+                }
+            }
+            // Clean up PulseAudio modules
+            for module_id in &module_ids {
+                if *module_id > 0 {
+                    if let Err(e) = AudioRecorder::remove_pulseaudio_module(*module_id) {
+                        log::warn!("Failed to remove PulseAudio module {}: {}", module_id, e);
+                    } else {
+                        log::info!("Cleaned up PulseAudio module {}", module_id);
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1190,6 +1262,7 @@ impl RecordingSession {
                     "sample_rate": audio_config.sample_rate,
                     "channels": audio_config.channels,
                     "device_name": audio_config.device_name,
+                    "monitor_desktop_audio": audio_config.monitor_desktop_audio,
                 });
                 if let Err(e) = db
                     .insert_event(
@@ -1238,6 +1311,7 @@ impl RecordingSession {
                             "output_path": audio_config.output_path.to_string_lossy(),
                             "sample_rate": audio_config.sample_rate,
                             "channels": audio_config.channels,
+                            "monitor_desktop_audio": audio_config.monitor_desktop_audio,
                         });
                         if let Err(e) = db
                             .insert_event(
@@ -1264,7 +1338,12 @@ impl RecordingSession {
                         // Transcribe audio if enabled
                         if audio_config.transcribe {
                             if let Some(ref model_path) = audio_config.transcription_model_path {
-                                println!("🎤 Transcribing audio with model: {}...", model_path.display());
+                                let audio_type = if audio_config.monitor_desktop_audio {
+                                    "desktop audio"
+                                } else {
+                                    "microphone audio"
+                                };
+                                println!("🎤 Transcribing {} with model: {}...", audio_type, model_path.display());
                                 match UnifiedRecordingService::transcribe_wav_file(
                                     &audio_config.output_path,
                                     model_path,
@@ -1274,17 +1353,22 @@ impl RecordingSession {
                                 .await
                                 {
                                     Ok(()) => {
-                                        println!("✅ Audio transcription completed");
+                                        println!("✅ {} transcription completed", audio_type);
                                     }
                                     Err(e) => {
-                                        eprintln!("⚠️  Audio transcription failed: {}", e);
+                                        eprintln!("⚠️  {} transcription failed: {}", audio_type, e);
                                     }
                                 }
                             } else {
                                 eprintln!("⚠️  Transcription enabled but no model path specified");
                             }
                         } else {
-                            println!("ℹ️  Transcription disabled (no Whisper model found or specified)");
+                            let audio_type = if audio_config.monitor_desktop_audio {
+                                "desktop audio"
+                            } else {
+                                "microphone audio"
+                            };
+                            println!("ℹ️  {} transcription disabled (no Whisper model found or specified)", audio_type);
                         }
                     }
                 }

@@ -81,9 +81,11 @@ impl ClickHouseConfig {
                 .unwrap_or(9000),
             database: std::env::var("CLICKHOUSE_DATABASE")
                 .unwrap_or_else(|_| "default".to_string()),
-            username: std::env::var("CLICKHOUSE_USERNAME")
+            username: std::env::var("CLICKHOUSE_USER")
+                .or_else(|_| std::env::var("CLICKHOUSE_USERNAME"))
                 .unwrap_or_else(|_| "default".to_string()),
-            password: std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default(),
+            password: std::env::var("CLICKHOUSE_PASSWORD")
+                .unwrap_or_else(|_| "default".to_string()),
             pool_size: std::env::var("CLICKHOUSE_POOL_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -427,13 +429,15 @@ mod tests {
         let original_host = std::env::var("CLICKHOUSE_HOST").ok();
         let original_port = std::env::var("CLICKHOUSE_PORT").ok();
         let original_db = std::env::var("CLICKHOUSE_DATABASE").ok();
-        let original_user = std::env::var("CLICKHOUSE_USERNAME").ok();
+        let original_user = std::env::var("CLICKHOUSE_USER").ok();
+        let original_username = std::env::var("CLICKHOUSE_USERNAME").ok();
         let original_pass = std::env::var("CLICKHOUSE_PASSWORD").ok();
 
         // Clear environment variables
         std::env::remove_var("CLICKHOUSE_HOST");
         std::env::remove_var("CLICKHOUSE_PORT");
         std::env::remove_var("CLICKHOUSE_DATABASE");
+        std::env::remove_var("CLICKHOUSE_USER");
         std::env::remove_var("CLICKHOUSE_USERNAME");
         std::env::remove_var("CLICKHOUSE_PASSWORD");
 
@@ -442,6 +446,7 @@ mod tests {
         assert_eq!(config.port, 9000);
         assert_eq!(config.database, "default");
         assert_eq!(config.username, "default");
+        assert_eq!(config.password, "default");
 
         // Restore original values
         if let Some(host) = original_host {
@@ -454,7 +459,10 @@ mod tests {
             std::env::set_var("CLICKHOUSE_DATABASE", db);
         }
         if let Some(user) = original_user {
-            std::env::set_var("CLICKHOUSE_USERNAME", user);
+            std::env::set_var("CLICKHOUSE_USER", user);
+        }
+        if let Some(username) = original_username {
+            std::env::set_var("CLICKHOUSE_USERNAME", username);
         }
         if let Some(pass) = original_pass {
             std::env::set_var("CLICKHOUSE_PASSWORD", pass);

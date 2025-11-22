@@ -63,6 +63,11 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub device: Option<String>,
 
+    /// Monitor desktop audio output instead of microphone input
+    /// Creates a virtual loopback sink to capture system audio (Linux only)
+    #[arg(long)]
+    pub monitor_desktop_audio: bool,
+
     /// Path to Whisper model for transcription (required for transcription)
     #[arg(long)]
     pub whisper_model: Option<PathBuf>,
@@ -180,8 +185,9 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 enabled: true,
                 output_path: args.mic_audio_output.clone(),
                 sample_rate: args.mic_sample_rate,
-                channels: 1, // Mono by default
+                channels: if args.monitor_desktop_audio { 2 } else { 1 }, // Stereo for desktop, mono for mic
                 device_name,
+                monitor_desktop_audio: args.monitor_desktop_audio,
                 transcribe: transcribe_enabled,
                 transcription_model_path: model_path,
             })

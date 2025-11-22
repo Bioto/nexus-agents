@@ -227,6 +227,95 @@ impl AudioRecorder {
         devices
     }
 
+    /// List all available output devices
+    pub fn list_output_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let default_device = self
+            .host
+            .default_output_device()
+            .map(|d| d.name().unwrap_or_else(|_| "Unknown".to_string()));
+
+        let devices: Result<Vec<_>> = self
+            .host
+            .output_devices()?
+            .map(|device| {
+                let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+                let display_name = DeviceInfo::parse_device_name(&name);
+                let is_default = default_device.as_ref().map(|d| d == &name).unwrap_or(false);
+                Ok(DeviceInfo {
+                    name,
+                    display_name,
+                    default: is_default,
+                })
+            })
+            .collect();
+
+        devices
+    }
+
+    /// List all available monitor/loopback devices (for capturing desktop audio output)
+    /// On Linux, these are typically PulseAudio/PipeWire monitor sources
+    pub fn list_monitor_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let mut monitor_devices = Vec::new();
+        
+        // First, get all input devices and filter for monitor patterns
+        let input_devices = self.list_input_devices()?;
+        for device in input_devices {
+            let name_lower = device.name.to_lowercase();
+            let display_lower = device.display_name.to_lowercase();
+            
+            if name_lower.contains("monitor")
+                || display_lower.contains("monitor")
+                || name_lower.contains("loopback")
+                || display_lower.contains("loopback")
+                || name_lower.contains("dsnoop") // ALSA loopback
+            {
+                monitor_devices.push(device);
+            }
+        }
+        
+        // Second, list output devices and try to find their monitor sources
+        let output_devices = self.list_output_devices()?;
+        let all_input_devices = self.list_input_devices()?;
+        
+        for output_device in output_devices {
+            // Construct possible monitor source names
+            let monitor_name = format!("Monitor of {}", output_device.name);
+            let monitor_display = format!("Monitor of {}", output_device.display_name);
+            
+            // Check if this monitor exists as an input device
+            if let Some(monitor_input) = all_input_devices.iter().find(|d| {
+                d.name == monitor_name
+                    || d.name.contains(&monitor_name)
+                    || d.display_name == monitor_display
+                    || d.display_name.contains(&monitor_display)
+            }) {
+                if !monitor_devices.iter().any(|d| d.name == monitor_input.name) {
+                    monitor_devices.push(monitor_input.clone());
+                }
+            }
+        }
+        
+        // Also check for common PulseAudio monitor patterns
+        let pulse_monitor_patterns = [
+            "pulse",
+            "Monitor of PulseAudio",
+            "Monitor of PipeWire",
+        ];
+        
+        for pattern in &pulse_monitor_patterns {
+            if let Some(device) = all_input_devices.iter().find(|d| {
+                d.name.to_lowercase().contains(&pattern.to_lowercase())
+                    || d.display_name.to_lowercase().contains(&pattern.to_lowercase())
+            }) {
+                if !monitor_devices.iter().any(|d| d.name == device.name) {
+                    monitor_devices.push(device.clone());
+                }
+            }
+        }
+
+        Ok(monitor_devices)
+    }
+
     /// Find an input device by name
     pub fn find_input_device(&self, name: &str) -> Result<Option<Device>> {
         let devices = self.host.input_devices()?;
@@ -247,11 +336,322 @@ impl AudioRecorder {
             .ok_or_else(|| VoiceError::Audio("No default input device available".to_string()))
     }
 
+    /// Get the default output device's monitor source name
+    /// Returns the monitor source name for the default output device
+    /// On Linux, creates a virtual loopback sink and returns its monitor source
+    pub fn default_output_monitor_name(&self) -> Result<String> {
+        #[cfg(target_os = "linux")]
+        {
+            // Create a virtual loopback sink for monitoring
+            match Self::create_loopback_sink(None) {
+                Ok((monitor_name, _module_id)) => {
+                    log::info!("Created loopback sink with monitor: {}", monitor_name);
+                    return Ok(monitor_name);
+                }
+                Err(e) => {
+                    log::warn!("Failed to create loopback sink: {}", e);
+                    // Fall through to try existing monitor sources
+                }
+            }
+            
+            // Fallback: try to get existing monitor source
+            if let Ok(pulse_monitor_name) = Self::get_pulseaudio_monitor_source() {
+                log::info!("Using existing PulseAudio monitor source: {}", pulse_monitor_name);
+                return Ok(pulse_monitor_name);
+            }
+        }
+        
+        // Fallback: construct monitor name from output device
+        let default_output = self
+            .host
+            .default_output_device()
+            .ok_or_else(|| VoiceError::Audio("No default output device available".to_string()))?;
+        
+        let output_name = default_output.name()
+            .map_err(|_| VoiceError::Audio("Failed to get default output device name".to_string()))?;
+        
+        Ok(format!("Monitor of {}", output_name))
+    }
+
+    /// Create a virtual loopback sink for monitoring desktop audio
+    /// Returns the monitor source name and module IDs (null sink, loopback) for cleanup
+    #[cfg(target_os = "linux")]
+    pub fn create_loopback_sink(sink_name: Option<&str>) -> std::result::Result<(String, Vec<u32>), String> {
+        use std::process::Command;
+        
+        let sink_name = sink_name.unwrap_or("nexus_audio_monitor");
+        let mut module_ids = Vec::new();
+        
+        // Check if sink already exists
+        let list_output = Command::new("pactl")
+            .arg("list")
+            .arg("sinks")
+            .arg("short")
+            .output()
+            .map_err(|e| format!("Failed to list sinks: {}", e))?;
+        
+        let sinks = String::from_utf8_lossy(&list_output.stdout);
+        if sinks.lines().any(|line| line.contains(sink_name)) {
+            log::info!("Loopback sink '{}' already exists", sink_name);
+        } else {
+            // Create null sink (virtual loopback)
+            let create_output = Command::new("pactl")
+                .arg("load-module")
+                .arg("module-null-sink")
+                .arg(&format!("sink_name={}", sink_name))
+                .arg("sink_properties=device.description=\"Nexus Audio Monitor\"")
+                .output()
+                .map_err(|e| format!("Failed to create loopback sink: {}", e))?;
+            
+            if !create_output.status.success() {
+                let error = String::from_utf8_lossy(&create_output.stderr);
+                return Err(format!("Failed to create loopback sink: {}", error));
+            }
+            
+            // Get the module ID from output
+            let module_id_str = String::from_utf8_lossy(&create_output.stdout);
+            let module_id_str = module_id_str.trim();
+            if let Ok(module_id) = module_id_str.parse::<u32>() {
+                log::info!("Created loopback sink '{}' with module ID: {}", sink_name, module_id);
+                module_ids.push(module_id);
+            } else {
+                log::warn!("Could not parse module ID from: {}", module_id_str);
+            }
+        }
+        
+        // Create loopback from default sink to our null sink
+        let default_sink_output = Command::new("pactl")
+            .arg("get-default-sink")
+            .output()
+            .map_err(|e| format!("Failed to get default sink: {}", e))?;
+        
+        if !default_sink_output.status.success() {
+            return Err("Failed to get default sink".to_string());
+        }
+        
+        let default_sink = String::from_utf8_lossy(&default_sink_output.stdout).trim().to_string();
+        
+        // Check if loopback already exists
+        let list_modules_output = Command::new("pactl")
+            .arg("list")
+            .arg("modules")
+            .arg("short")
+            .output()
+            .map_err(|e| format!("Failed to list modules: {}", e))?;
+        
+        let modules = String::from_utf8_lossy(&list_modules_output.stdout);
+        let loopback_exists = modules.lines().any(|line| {
+            line.contains("module-loopback") 
+                && line.contains(&format!("sink={}", sink_name))
+                && line.contains(&format!("source={}", default_sink))
+        });
+        
+        if !loopback_exists {
+            // Create loopback from default sink's monitor to null sink
+            let default_sink_monitor = format!("{}.monitor", default_sink);
+            let loopback_output = Command::new("pactl")
+                .arg("load-module")
+                .arg("module-loopback")
+                .arg(&format!("source={}", default_sink_monitor))
+                .arg(&format!("sink={}", sink_name))
+                .arg("latency_msec=1")
+                .output()
+                .map_err(|e| format!("Failed to create loopback: {}", e))?;
+            
+            if !loopback_output.status.success() {
+                let error = String::from_utf8_lossy(&loopback_output.stderr);
+                return Err(format!("Failed to create loopback: {}", error));
+            }
+            
+            let module_id_str = String::from_utf8_lossy(&loopback_output.stdout);
+            let module_id_str = module_id_str.trim();
+            if let Ok(module_id) = module_id_str.parse::<u32>() {
+                log::info!("Created loopback module with ID: {} (duplicates audio to null sink)", module_id);
+                module_ids.push(module_id);
+            }
+        } else {
+            log::info!("Loopback already exists");
+        }
+        
+        // Get the monitor source name
+        let monitor_name = format!("{}.monitor", sink_name);
+        
+        // Verify it exists
+        let sources_output = Command::new("pactl")
+            .arg("list")
+            .arg("sources")
+            .arg("short")
+            .output()
+            .map_err(|e| format!("Failed to list sources: {}", e))?;
+        
+        let sources = String::from_utf8_lossy(&sources_output.stdout);
+        if sources.lines().any(|line| line.contains(&monitor_name)) {
+            Ok((monitor_name, module_ids))
+        } else {
+            Err(format!("Monitor source {} not found", monitor_name))
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn create_loopback_sink(_sink_name: Option<&str>) -> std::result::Result<(String, Vec<u32>), String> {
+        Err("Loopback sinks only available on Linux".to_string())
+    }
+    
+    /// Set the default PulseAudio source
+    #[cfg(target_os = "linux")]
+    pub fn set_default_source(source_name: &str) -> std::result::Result<String, String> {
+        use std::process::Command;
+        
+        // Get current default source to restore later
+        let current_output = Command::new("pactl")
+            .arg("get-default-source")
+            .output()
+            .map_err(|e| format!("Failed to get default source: {}", e))?;
+        
+        let current_source = if current_output.status.success() {
+            String::from_utf8_lossy(&current_output.stdout).trim().to_string()
+        } else {
+            String::new()
+        };
+        
+        // Set new default source
+        let output = Command::new("pactl")
+            .arg("set-default-source")
+            .arg(source_name)
+            .output()
+            .map_err(|e| format!("Failed to set default source: {}", e))?;
+        
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to set default source to {}: {}", source_name, error));
+        }
+        
+        log::info!("Set default source to: {} (previous: {})", source_name, current_source);
+        Ok(current_source)
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn set_default_source(_source_name: &str) -> std::result::Result<String, String> {
+        Err("Setting default source only available on Linux".to_string())
+    }
+    
+    /// Remove a PulseAudio module by ID
+    #[cfg(target_os = "linux")]
+    pub fn remove_pulseaudio_module(module_id: u32) -> std::result::Result<(), String> {
+        use std::process::Command;
+        
+        if module_id == 0 {
+            return Ok(()); // Nothing to remove
+        }
+        
+        let output = Command::new("pactl")
+            .arg("unload-module")
+            .arg(module_id.to_string())
+            .output()
+            .map_err(|e| format!("Failed to unload module: {}", e))?;
+        
+        if !output.status.success() {
+            let error = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to unload module {}: {}", module_id, error))
+        } else {
+            log::info!("Unloaded PulseAudio module {}", module_id);
+            Ok(())
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn remove_pulseaudio_module(_module_id: u32) -> std::result::Result<(), String> {
+        Ok(())
+    }
+    
+    /// Query PulseAudio/PipeWire for the monitor source of the default sink
+    #[cfg(target_os = "linux")]
+    fn get_pulseaudio_monitor_source() -> std::result::Result<String, String> {
+        use std::process::Command;
+        
+        // Get the default sink name
+        let sink_output = Command::new("pactl")
+            .arg("get-default-sink")
+            .output()
+            .map_err(|e| format!("Failed to run pactl: {}", e))?;
+        
+        if !sink_output.status.success() {
+            return Err("pactl get-default-sink failed".to_string());
+        }
+        
+        let sink_name = String::from_utf8_lossy(&sink_output.stdout).trim().to_string();
+        if sink_name.is_empty() {
+            return Err("No default sink found".to_string());
+        }
+        
+        // Construct monitor source name: <sink_name>.monitor
+        let monitor_name = format!("{}.monitor", sink_name);
+        
+        // Verify the monitor source exists
+        let list_output = Command::new("pactl")
+            .arg("list")
+            .arg("sources")
+            .arg("short")
+            .output()
+            .map_err(|e| format!("Failed to list sources: {}", e))?;
+        
+        let sources = String::from_utf8_lossy(&list_output.stdout);
+        if sources.lines().any(|line| line.contains(&monitor_name)) {
+            Ok(monitor_name)
+        } else {
+            Err(format!("Monitor source {} not found in PulseAudio", monitor_name))
+        }
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    fn get_pulseaudio_monitor_source() -> std::result::Result<String, String> {
+        Err("PulseAudio monitor sources only available on Linux".to_string())
+    }
+
     /// Get the input device based on configuration
     fn get_input_device(&self, config: &RecordingConfig) -> Result<Device> {
         if let Some(ref device_name) = config.device_name {
-            self.find_input_device(device_name)?
-                .ok_or_else(|| VoiceError::Audio(format!("Device '{}' not found", device_name)))
+            // Try to find the device - check exact match first
+            let devices: Vec<_> = self.host.input_devices()?.collect();
+            let mut matched_device = None;
+            
+            for device in &devices {
+                if let Ok(name) = device.name() {
+                    // Exact match (case-sensitive)
+                    if name == *device_name {
+                        matched_device = Some(device);
+                        break;
+                    }
+                    // Case-insensitive match
+                    if name.eq_ignore_ascii_case(device_name) {
+                        matched_device = Some(device);
+                        break;
+                    }
+                }
+            }
+            
+            if let Some(device) = matched_device {
+                return Ok(device.clone());
+            }
+            
+            // If still not found, log a warning and fall back to default device
+            let available_devices: Vec<String> = devices
+                .iter()
+                .filter_map(|d| d.name().ok())
+                .collect();
+            
+            log::warn!(
+                "Device '{}' not found. Available devices: {}. Falling back to default input device.",
+                device_name,
+                if available_devices.is_empty() {
+                    "none".to_string()
+                } else {
+                    available_devices.join(", ")
+                }
+            );
+            
+            // Fall back to default device instead of failing
+            self.default_input_device()
         } else {
             self.default_input_device()
         }

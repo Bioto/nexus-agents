@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Record(args) => cli::run_record(args)?,
+        Commands::Monitor(args) => cli::run_monitor(args)?,
         Commands::Listen(args) => cli::run_listen(args)?,
         Commands::Speak(args) => cli::run_speak(args).await?,
         Commands::TestVoice(args) => cli::run_test_voice(args).await?,
