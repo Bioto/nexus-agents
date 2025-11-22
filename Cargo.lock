@@ -3937,12 +3937,15 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "cpal",
  "crossbeam-channel",
  "ctrlc",
  "device_query",
  "gtk",
+ "hound",
  "image",
  "log",
+ "nexus-audio",
  "nexus-core",
  "nexus-screen",
  "reqwest",
@@ -3953,6 +3956,7 @@ dependencies = [
  "tokio",
  "tray-icon",
  "uuid",
+ "whisper-rs",
 ]
 
 [[package]]
