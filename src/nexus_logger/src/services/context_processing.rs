@@ -2,12 +2,14 @@ use crate::error::{LoggerError, Result};
 use crate::services::database::Database;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Local, Utc};
+use image::ImageReader;
 use nexus_core::models::{ContentPart, ImageUrl};
 use nexus_core::{ChatCompletionRequest, Message, MessageContent, NexusApiService};
 use nexus_screen::ScreenRecorder;
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -272,7 +274,7 @@ impl ProcessingService {
                 "🎬 Extracting frames for '{}' ({}) at {:.2} fps across full video...",
                 job.kind, job.label, fps
             );
-            Self::extract_frames_full_video(&config, &job, fps).await?
+            Self::extract_frames_full_video(&config, &job, fps, Arc::clone(&db)).await?
         } else {
             if job.video_timestamp.is_none() {
                 return Err(LoggerError::Other(
@@ -280,7 +282,7 @@ impl ProcessingService {
                 ));
             }
             println!("🎬 Extracting frames for '{}' ({})...", job.kind, job.label);
-            Self::extract_frames_from_video(&config, &job).await?
+            Self::extract_frames_from_video(&config, &job, Arc::clone(&db)).await?
         };
 
         println!(
@@ -426,6 +428,7 @@ impl ProcessingService {
     async fn extract_frames_from_video(
         config: &ProcessingConfig,
         job: &ProcessingJob,
+        db: Arc<Database>,
     ) -> Result<Vec<CapturedFrame>> {
         let video_path = job.video_path.as_ref().ok_or_else(|| {
             LoggerError::Other("Video path not provided for frame extraction".to_string())
@@ -516,7 +519,63 @@ impl ProcessingService {
             match task.await {
                 Ok(Ok(path)) => {
                     let data = tokio::fs::read(&path).await?;
-                    let base64 = BASE64.encode(data);
+                    let base64 = BASE64.encode(&data);
+                    
+                    // Get image dimensions and store screenshot
+                    if let Some(session_id) = &job.session_id {
+                        let frame_timestamp = base_timestamp + offset_secs;
+                        let frame_number = frames.len() as u64;
+                        let db_clone = Arc::clone(&db);
+                        let path_str = path.to_string_lossy().to_string();
+                        let session_id_clone = session_id.clone();
+                        
+                        // Get image dimensions
+                        let (width, height) = tokio::task::spawn_blocking({
+                            let path_clone = path.clone();
+                            move || -> Result<(u32, u32)> {
+                                let reader = ImageReader::new(BufReader::new(
+                                    std::fs::File::open(&path_clone).map_err(LoggerError::Io)?
+                                ));
+                                let img = reader.decode().map_err(|e| {
+                                    LoggerError::Other(format!("Failed to decode image: {}", e))
+                                })?;
+                                Ok((img.width(), img.height()))
+                            }
+                        })
+                        .await
+                        .map_err(|e| LoggerError::Other(format!("Image decode task failed: {}", e)))??;
+                        
+                        // Store screenshot in database
+                        let timestamp_utc = Utc::now();
+                        let click_x = job.x;
+                        let click_y = job.y;
+                        let job_id = job.id.clone();
+                        let job_kind = job.kind.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = db_clone
+                                .insert_screenshot(
+                                    &session_id_clone,
+                                    timestamp_utc,
+                                    frame_number,
+                                    &path_str,
+                                    width,
+                                    height,
+                                    click_x,
+                                    click_y,
+                                    Some(json!({
+                                        "offset_secs": offset_secs,
+                                        "video_timestamp": frame_timestamp,
+                                        "job_id": job_id,
+                                        "job_kind": job_kind,
+                                    })),
+                                )
+                                .await
+                            {
+                                eprintln!("⚠️  Failed to store screenshot in database: {}", e);
+                            }
+                        });
+                    }
+                    
                     frames.push(CapturedFrame {
                         offset_secs: offset_secs,
                         base64_image: base64,
@@ -542,6 +601,7 @@ impl ProcessingService {
         config: &ProcessingConfig,
         job: &ProcessingJob,
         frames_per_second: f64,
+        db: Arc<Database>,
     ) -> Result<Vec<CapturedFrame>> {
         let video_path = job.video_path.as_ref().ok_or_else(|| {
             LoggerError::Other("Video path not provided for frame extraction".to_string())
@@ -604,15 +664,71 @@ impl ProcessingService {
                 Self::extract_single_frame(&video_path_clone, ts, &output_path)?;
                 Ok(output_path)
             });
-            extract_tasks.push((ts, task));
+            extract_tasks.push((ts, idx, task));
         }
 
         let mut frames = Vec::new();
-        for (timestamp, task) in extract_tasks {
+        for (timestamp, frame_idx, task) in extract_tasks {
             match task.await {
                 Ok(Ok(path)) => {
                     let data = tokio::fs::read(&path).await?;
-                    let base64 = BASE64.encode(data);
+                    let base64 = BASE64.encode(&data);
+                    
+                    // Get image dimensions and store screenshot
+                    if let Some(session_id) = &job.session_id {
+                        let frame_number = frame_idx as u64;
+                        let db_clone = Arc::clone(&db);
+                        let path_str = path.to_string_lossy().to_string();
+                        let session_id_clone = session_id.clone();
+                        
+                        // Get image dimensions
+                        let (width, height) = tokio::task::spawn_blocking({
+                            let path_clone = path.clone();
+                            move || -> Result<(u32, u32)> {
+                                let reader = ImageReader::new(BufReader::new(
+                                    std::fs::File::open(&path_clone).map_err(LoggerError::Io)?
+                                ));
+                                let img = reader.decode().map_err(|e| {
+                                    LoggerError::Other(format!("Failed to decode image: {}", e))
+                                })?;
+                                Ok((img.width(), img.height()))
+                            }
+                        })
+                        .await
+                        .map_err(|e| LoggerError::Other(format!("Image decode task failed: {}", e)))??;
+                        
+                        // Store screenshot in database
+                        let timestamp_utc = Utc::now();
+                        let click_x = job.x;
+                        let click_y = job.y;
+                        let job_id = job.id.clone();
+                        let job_kind = job.kind.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = db_clone
+                                .insert_screenshot(
+                                    &session_id_clone,
+                                    timestamp_utc,
+                                    frame_number,
+                                    &path_str,
+                                    width,
+                                    height,
+                                    click_x,
+                                    click_y,
+                                    Some(json!({
+                                        "offset_secs": timestamp,
+                                        "video_timestamp": timestamp,
+                                        "job_id": job_id,
+                                        "job_kind": job_kind,
+                                        "full_video_sampling": true,
+                                    })),
+                                )
+                                .await
+                            {
+                                eprintln!("⚠️  Failed to store screenshot in database: {}", e);
+                            }
+                        });
+                    }
+                    
                     frames.push(CapturedFrame {
                         offset_secs: timestamp,
                         base64_image: base64,

@@ -5,7 +5,7 @@ pub mod error;
 pub mod services;
 
 /// CLI entry points and argument parsers.
-pub use cli::{run_capture, run_log, run_unified, Cli, Commands};
+pub use cli::{run_capture, run_log, run_report, run_unified, Cli, Commands};
 
 /// Custom error types and Result alias for the crate.
 pub use error::{LoggerError, Result};

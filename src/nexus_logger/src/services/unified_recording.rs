@@ -506,12 +506,50 @@ impl UnifiedRecordingService {
 
                 // Collect overlay labels if provided
                 if let Some(label) = overlay_label {
-                    overlay_labels_clone.lock().unwrap().push(label);
+                    overlay_labels_clone.lock().unwrap().push(label.clone());
+                    
+                    // Log overlay label to database
+                    let db_for_label = db_clone.clone();
+                    let session_id_for_label = session_id_clone.clone();
+                    let label_text = label.text.clone();
+                    let label_timestamp = label.timestamp;
+                    let label_duration = label.duration;
+                    let label_x = label.x;
+                    let label_y = label.y;
+                    let timestamp_for_label = Local::now().to_rfc3339();
+                    tokio::spawn(async move {
+                        let metadata = json!({
+                            "text": label_text,
+                            "duration": label_duration,
+                            "x": label_x,
+                            "y": label_y,
+                        });
+                        if let Err(e) = db_for_label
+                            .insert_event(
+                                &session_id_for_label,
+                                "overlay",
+                                Some("label"),
+                                None,
+                                None,
+                                label_x.map(|x| x as i32),
+                                label_y.map(|y| y as i32),
+                                None,
+                                &timestamp_for_label,
+                                Some(label_timestamp), // timecode - video timestamp when label appears
+                                Some(metadata),
+                                None, // screenshot_id
+                            )
+                            .await
+                        {
+                            eprintln!("⚠️  Failed to store overlay label in database: {}", e);
+                        }
+                    });
                 }
 
                 if should_store {
                     // Store in database (errors are logged but don't stop recording)
                     let timestamp = Local::now().to_rfc3339();
+                    let video_timestamp_for_db = video_timestamp; // Capture video timestamp for database
                     match &event {
                         InputEvent::Keyboard { key, pressed, .. } => {
                             let db_for_event = db_clone.clone();
@@ -535,7 +573,7 @@ impl UnifiedRecordingService {
                                         None,
                                         Some(pressed_for_event),
                                         &timestamp_for_event,
-                                        None, // timecode
+                                        Some(video_timestamp_for_db), // timecode - store video timestamp
                                         None, // metadata
                                         None, // screenshot_id
                                     )
@@ -583,7 +621,7 @@ impl UnifiedRecordingService {
                                         y_for_event,
                                         None,
                                         &timestamp_for_event,
-                                        None, // timecode
+                                        Some(video_timestamp_for_db), // timecode - store video timestamp
                                         None, // metadata
                                         None, // screenshot_id
                                     )

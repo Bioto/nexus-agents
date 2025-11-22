@@ -1185,7 +1185,7 @@ impl AudioRecorder {
 
         // Spawn thread to read raw PCM data from the temporary file as it's being written
         let tx_clone = tx.clone();
-        let channels_clone = channels;
+        let _channels_clone = channels;
         let temp_file_clone = temp_file.clone();
         let read_handle = std::thread::spawn(move || -> Result<()> {
             eprintln!("📺 parecord reader thread started, reading from: {}", temp_file_clone.display());
