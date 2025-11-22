@@ -46,7 +46,7 @@ pub struct TestVoiceArgs {
     #[arg(
         short,
         long,
-        default_value = "src/nexus_audio/src/__models__/ggml-base.bin"
+        default_value = ".models/ggml-small-fp16.bin"
     )]
     pub model: PathBuf,
 

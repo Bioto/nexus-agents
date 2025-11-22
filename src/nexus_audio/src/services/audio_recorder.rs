@@ -202,6 +202,57 @@ impl AudioRecorder {
         Ok(Self { host })
     }
 
+    /// List all available ALSA devices directly from system (Linux only)
+    /// This shows devices that might not be enumerated by CPAL
+    #[cfg(target_os = "linux")]
+    pub fn list_alsa_devices() -> Vec<DeviceInfo> {
+        let mut alsa_devices = Vec::new();
+        
+        // Read from /proc/asound/cards
+        if let Ok(content) = std::fs::read_to_string("/proc/asound/cards") {
+            for line in content.lines() {
+                // Format: " 0 [Quadcast        ]: USB-Audio - HyperX Quadcast"
+                if let Some(bracket_start) = line.find('[') {
+                    if let Some(bracket_end) = line[bracket_start + 1..].find(']') {
+                        let card_name = line[bracket_start + 1..bracket_start + 1 + bracket_end].trim();
+                        
+                        // Extract card number (before the bracket)
+                        let card_num = line[..bracket_start].trim();
+                        
+                        // Extract full name after the dash
+                        let full_name = if let Some(dash_pos) = line.find(" - ") {
+                            line[dash_pos + 3..].trim().to_string()
+                        } else {
+                            card_name.to_string()
+                        };
+                        
+                        // Generate the most common ALSA device name format
+                        // Users can also try: hw:CARD=..., plughw:CARD=..., etc.
+                        let device_name = format!("sysdefault:CARD={}", card_name);
+                        let display_name = DeviceInfo::parse_device_name(&device_name);
+                        
+                        alsa_devices.push(DeviceInfo {
+                            name: device_name,
+                            display_name: if display_name != full_name {
+                                format!("{} ({})", full_name, display_name)
+                            } else {
+                                full_name
+                            },
+                            default: false,
+                        });
+                    }
+                }
+            }
+        }
+        
+        alsa_devices
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    pub fn list_alsa_devices() -> Vec<DeviceInfo> {
+        Vec::new()
+    }
+
     /// List all available input devices
     pub fn list_input_devices(&self) -> Result<Vec<DeviceInfo>> {
         let default_device = self
@@ -209,7 +260,7 @@ impl AudioRecorder {
             .default_input_device()
             .map(|d| d.name().unwrap_or_else(|_| "Unknown".to_string()));
 
-        let devices: Result<Vec<_>> = self
+        let mut devices: Vec<DeviceInfo> = self
             .host
             .input_devices()?
             .map(|device| {
@@ -222,9 +273,21 @@ impl AudioRecorder {
                     default: is_default,
                 })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
+        
+        // Also include ALSA devices that might not be enumerated by CPAL
+        #[cfg(target_os = "linux")]
+        {
+            let alsa_devices = Self::list_alsa_devices();
+            for alsa_device in alsa_devices {
+                // Only add if not already present (check by name)
+                if !devices.iter().any(|d| d.name == alsa_device.name) {
+                    devices.push(alsa_device);
+                }
+            }
+        }
 
-        devices
+        Ok(devices)
     }
 
     /// List all available output devices
@@ -318,11 +381,39 @@ impl AudioRecorder {
 
     /// Find an input device by name
     pub fn find_input_device(&self, name: &str) -> Result<Option<Device>> {
-        let devices = self.host.input_devices()?;
-        for device in devices {
+        let devices: Vec<_> = self.host.input_devices()?.collect();
+        
+        // Extract card name from ALSA device name if present
+        let requested_card_name = DeviceInfo::extract_card_name(name);
+        
+        for device in &devices {
             if let Ok(device_name) = device.name() {
+                // Exact match (case-sensitive)
                 if device_name == name {
-                    return Ok(Some(device));
+                    return Ok(Some(device.clone()));
+                }
+                // Case-insensitive match
+                if device_name.eq_ignore_ascii_case(name) {
+                    return Ok(Some(device.clone()));
+                }
+                
+                // If we have a card name from the requested device, try matching by card name
+                if let Some(ref requested_card) = requested_card_name {
+                    if let Some(device_card) = DeviceInfo::extract_card_name(&device_name) {
+                        if device_card.eq_ignore_ascii_case(requested_card) {
+                            return Ok(Some(device.clone()));
+                        }
+                    }
+                    // Also try substring matching on the device name itself
+                    if device_name.to_lowercase().contains(&requested_card.to_lowercase()) {
+                        return Ok(Some(device.clone()));
+                    }
+                }
+                
+                // Substring match (case-insensitive)
+                if device_name.to_lowercase().contains(&name.to_lowercase()) 
+                    || name.to_lowercase().contains(&device_name.to_lowercase()) {
+                    return Ok(Some(device.clone()));
                 }
             }
         }
@@ -615,6 +706,9 @@ impl AudioRecorder {
             let devices: Vec<_> = self.host.input_devices()?.collect();
             let mut matched_device = None;
             
+            // Extract card name from ALSA device name if present (e.g., "sysdefault:CARD=Quadcast" -> "Quadcast")
+            let requested_card_name = DeviceInfo::extract_card_name(device_name);
+            
             for device in &devices {
                 if let Ok(name) = device.name() {
                     // Exact match (case-sensitive)
@@ -624,6 +718,28 @@ impl AudioRecorder {
                     }
                     // Case-insensitive match
                     if name.eq_ignore_ascii_case(device_name) {
+                        matched_device = Some(device);
+                        break;
+                    }
+                    
+                    // If we have a card name from the requested device, try matching by card name
+                    if let Some(ref requested_card) = requested_card_name {
+                        if let Some(device_card) = DeviceInfo::extract_card_name(&name) {
+                            if device_card.eq_ignore_ascii_case(requested_card) {
+                                matched_device = Some(device);
+                                break;
+                            }
+                        }
+                        // Also try substring matching on the device name itself
+                        if name.to_lowercase().contains(&requested_card.to_lowercase()) {
+                            matched_device = Some(device);
+                            break;
+                        }
+                    }
+                    
+                    // Substring match (case-insensitive) - useful if device name contains the requested string
+                    if name.to_lowercase().contains(&device_name.to_lowercase()) 
+                        || device_name.to_lowercase().contains(&name.to_lowercase()) {
                         matched_device = Some(device);
                         break;
                     }

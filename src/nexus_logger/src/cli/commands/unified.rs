@@ -42,9 +42,9 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub no_audio: bool,
 
-    /// Enable microphone audio recording
+    /// Disable microphone audio recording
     #[arg(long)]
-    pub mic_audio: bool,
+    pub no_mic_audio: bool,
 
     /// Microphone audio output file path
     #[arg(long, default_value = "recording.wav")]
@@ -54,21 +54,21 @@ pub struct UnifiedArgs {
     #[arg(long, default_value = "48000")]
     pub mic_sample_rate: u32,
 
-    /// Microphone device name (None = default)
+    /// Microphone device name (None = system default)
     /// Supports ALSA device names like: sysdefault:CARD=Quadcast, hw:CARD=Quadcast,DEV=0
     #[arg(long)]
     pub mic_device: Option<String>,
 
-    /// Alias for --mic-device (shorter form)
+    /// Alias for --mic-device (shorter form, None = system default)
     #[arg(long)]
     pub device: Option<String>,
 
-    /// Monitor desktop audio output instead of microphone input
+    /// Disable monitoring desktop audio output
     /// Creates a virtual loopback sink to capture system audio (Linux only)
     #[arg(long)]
-    pub monitor_desktop_audio: bool,
+    pub no_monitor_desktop_audio: bool,
 
-    /// Path to Whisper model for transcription (required for transcription)
+    /// Path to Whisper model for transcription (defaults to .models/ggml-small-fp16.bin)
     #[arg(long)]
     pub whisper_model: Option<PathBuf>,
 
@@ -156,32 +156,22 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         audio_configs: {
             let mut configs = Vec::new();
             
-            // Use provided model path or try default location
-            let model_path = if let Some(ref provided_path) = args.whisper_model {
-                if provided_path.exists() {
-                    Some(provided_path.clone())
-                } else {
-                    eprintln!("⚠️  Warning: Whisper model not found at: {}", provided_path.display());
-                    None
-                }
-            } else {
-                // Try default locations
-                let default_paths = [
-                    PathBuf::from("src/nexus_audio/src/__models__/ggml-base.bin"),
-                    PathBuf::from("models/ggml-base.bin"),
-                    PathBuf::from(".models/ggml-base.bin"),
-                    PathBuf::from("ggml-base.bin"),
-                ];
-                default_paths.iter().find(|p| p.exists()).cloned()
-            };
-
-            let transcribe_enabled = model_path.is_some();
-            if args.mic_audio && !transcribe_enabled {
-                eprintln!("⚠️  Warning: Transcription disabled - no Whisper model found. Use --whisper-model to specify model path.");
+            // Determine model path: use provided path or default to .models/ggml-small-fp16.bin
+            let model_path = args.whisper_model.clone().unwrap_or_else(|| {
+                PathBuf::from(".models/ggml-small-fp16.bin")
+            });
+            let transcribe_enabled = model_path.exists();
+            
+            // Check if model exists on startup and print message if not
+            if !transcribe_enabled {
+                eprintln!("⚠️  Whisper model not found at: {}", model_path.display());
+                eprintln!("   You need to install models using install-models.sh");
+                eprintln!("   Transcription will be disabled.");
             }
 
             // Create monitor desktop audio config if enabled (add first so it's processed first)
-            if args.monitor_desktop_audio {
+            // Enabled by default unless --no-monitor-desktop-audio is specified
+            if !args.no_monitor_desktop_audio {
                 let monitor_output_path = args.mic_audio_output
                     .parent()
                     .map(|p| p.join("desktop_audio.wav"))
@@ -195,13 +185,15 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     device_name: None, // Will use default (monitor source)
                     monitor_desktop_audio: true,
                     transcribe: transcribe_enabled,
-                    transcription_model_path: model_path.clone(),
+                    transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
                 });
             }
             
             // Create microphone audio config if enabled
-            if args.mic_audio {
+            // Enabled by default unless --no-mic-audio is specified
+            if !args.no_mic_audio {
                 // Use --device if provided, otherwise fall back to --mic-device
+                // If both are None, will use system default
                 let device_name = args.device.clone().or(args.mic_device.clone());
                 configs.push(AudioRecordingConfig {
                     enabled: true,
@@ -211,7 +203,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     device_name,
                     monitor_desktop_audio: false,
                     transcribe: transcribe_enabled,
-                    transcription_model_path: model_path.clone(),
+                    transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
                 });
             }
             
@@ -250,19 +242,41 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         "   Mouse moves: {}",
         if args.mouse_moves { "✓" } else { "✗" }
     );
+    // Determine model path for display (same logic as in config)
+    let model_path = args.whisper_model.clone().unwrap_or_else(|| {
+        PathBuf::from(".models/ggml-small-fp16.bin")
+    });
+    
     println!("   System audio: {}", if !args.no_audio { "✓" } else { "✗" });
-    println!("   Microphone: {}", if args.mic_audio { "✓" } else { "✗" });
-    if args.mic_audio {
+    println!("   Desktop audio monitoring: {}", if !args.no_monitor_desktop_audio { "✓" } else { "✗" });
+    println!("   Microphone: {}", if !args.no_mic_audio { "✓" } else { "✗" });
+    if !args.no_mic_audio {
         println!("     Output: {}", args.mic_audio_output.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);
         let device_display = args.device.as_ref().or(args.mic_device.as_ref());
         if let Some(device) = device_display {
             println!("     Device: {}", device);
-        }
-        if let Some(ref model) = args.whisper_model {
-            println!("     Transcription: ✓ (model: {})", model.display());
         } else {
-            println!("     Transcription: {}", if args.mic_audio { "checking..." } else { "✗" });
+            println!("     Device: system default");
+        }
+        if model_path.exists() {
+            println!("     Transcription: ✓ (model: {})", model_path.display());
+        } else {
+            println!("     Transcription: ✗ (model not found)");
+        }
+    }
+    if !args.no_monitor_desktop_audio {
+        let monitor_output_path = args.mic_audio_output
+            .parent()
+            .map(|p| p.join("desktop_audio.wav"))
+            .unwrap_or_else(|| PathBuf::from("desktop_audio.wav"));
+        println!("   Desktop audio monitoring:");
+        println!("     Output: {}", monitor_output_path.display());
+        println!("     Sample rate: {} Hz", args.mic_sample_rate);
+        if model_path.exists() {
+            println!("     Transcription: ✓ (model: {})", model_path.display());
+        } else {
+            println!("     Transcription: ✗ (model not found)");
         }
     }
     println!(

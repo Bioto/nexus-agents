@@ -73,7 +73,7 @@ pub struct ListenArgs {
     #[arg(
         short,
         long,
-        default_value = "src/nexus_audio/src/__models__/ggml-base.bin"
+        default_value = ".models/ggml-small-fp16.bin"
     )]
     pub model: PathBuf,
 
@@ -90,16 +90,75 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
     // Handle list devices command
     if args.list_devices {
         let recorder = AudioRecorder::new()?;
-        let devices = recorder.list_input_devices()?;
+        let mut devices = recorder.list_input_devices()?;
+        
+        // Separate CPAL-enumerated devices from ALSA-only devices
+        let mut cpal_devices = Vec::new();
+        let mut alsa_only_devices = Vec::new();
+        
+        #[cfg(target_os = "linux")]
+        {
+            let alsa_devices = AudioRecorder::list_alsa_devices();
+            let cpal_device_names: std::collections::HashSet<String> = devices.iter()
+                .map(|d| d.name.clone())
+                .collect();
+            
+            for device in devices.iter() {
+                // Check if this device name matches an ALSA pattern
+                let is_alsa_pattern = device.name.contains("CARD=") || 
+                                     device.name.contains("hw:") ||
+                                     device.name.contains("sysdefault:") ||
+                                     device.name.contains("plughw:") ||
+                                     device.name.contains("front:") ||
+                                     device.name.contains("dsnoop:");
+                
+                if is_alsa_pattern && !cpal_device_names.contains(&device.name) {
+                    // This is an ALSA device that CPAL enumerated
+                    cpal_devices.push(device.clone());
+                } else if !is_alsa_pattern {
+                    // This is a CPAL device (pulse, pipewire, etc.)
+                    cpal_devices.push(device.clone());
+                }
+            }
+            
+            // Find ALSA devices that aren't in CPAL enumeration
+            for alsa_device in alsa_devices {
+                if !cpal_device_names.contains(&alsa_device.name) {
+                    alsa_only_devices.push(alsa_device);
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            cpal_devices = devices;
+        }
+        
         println!("📡 Available audio input devices:\n");
-        for (i, device) in devices.iter().enumerate() {
+        for (i, device) in cpal_devices.iter().enumerate() {
             let default_marker = if device.default { " [DEFAULT]" } else { "" };
             println!("  {}. {}{}", i + 1, device.display_name, default_marker);
             if device.display_name != device.name {
                 println!("     → {}", device.name);
             }
         }
+        
+        #[cfg(target_os = "linux")]
+        {
+            if !alsa_only_devices.is_empty() {
+                println!("\n📡 Additional ALSA devices (not enumerated by CPAL):\n");
+                let start_num = cpal_devices.len() + 1;
+                for (i, device) in alsa_only_devices.iter().enumerate() {
+                    println!("  {}. {}{}", start_num + i, device.display_name, "");
+                    if device.display_name != device.name {
+                        println!("     → {}", device.name);
+                    }
+                    println!("     ⚠️  May require exact ALSA device name to use");
+                }
+            }
+        }
+        
         println!("\n💡 Tip: Use the technical name (after →) with --device");
+        println!("💡 If your device isn't listed, try: --device sysdefault:CARD=<CardName>");
         return Ok(());
     }
 

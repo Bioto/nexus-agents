@@ -105,7 +105,7 @@ impl Default for VoiceListenerConfig {
             max_voice_freq: 255.0,
             silence_duration_ms: 5000,
             min_speech_ms: 1000,
-            model_path: PathBuf::from("src/nexus_audio/src/__models__/ggml-base.bin"),
+            model_path: PathBuf::from(".models/ggml-small-fp16.bin"),
             verbose: false,
         }
     }

@@ -1844,14 +1844,23 @@ fn print_timeline_entry(
                 format!("@ {:.2}s: ", trans_timecode)
             };
             
-            // Wrap long transcriptions
+            // Calculate available space for text (box is 78 chars wide, minus borders and prefix)
+            // Box format: "║ " (2) + prefix + text + " ║" (2) = 78
+            // Available space = 78 - 2 - prefix_len - 2 = 74 - prefix_len
+            let prefix = format!("{} Transcription: ", source_display);
+            let prefix_len = prefix.chars().count(); // Use char count for proper emoji handling
+            let available_width = 74 - prefix_len; // 74 = 78 - 2 (left border) - 2 (right border)
+            
+            // Wrap long transcriptions to fit available width
             let full_text = format!("{}{}", timecode_prefix, text);
-            let wrapped = wrap_text(&full_text, 75);
+            let wrapped = wrap_text(&full_text, available_width);
             for (idx, line) in wrapped.iter().enumerate() {
                 if idx == 0 {
-                    println!("║ {} Transcription: {}", source_display, pad_right(&line, 70));
+                    println!("║ {}{}", prefix, pad_right(&line, available_width));
                 } else {
-                    println!("║    {}", pad_right(&line, 75));
+                    // Continuation lines: "║    " (5 chars) + text + " ║" (2) = 78
+                    let continuation_width = 74 - 4; // 4 chars for "    " indent
+                    println!("║    {}", pad_right(&line, continuation_width));
                 }
             }
         }
