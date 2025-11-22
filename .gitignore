@@ -9,3 +9,4 @@ logs
 __pycache__/** */
 
 click-frames
+.models
