@@ -410,16 +410,10 @@ impl UnifiedRecordingService {
                             loopback_module_ids.extend(module_ids);
                             previous_default_sink = Some(prev_sink);
                             
-                            // Set monitor as default source so pipewire/pulse routes to it
-                            match AudioRecorder::set_default_source(&monitor_name) {
-                                Ok(_) => {
-                                    eprintln!("✅ Set {} as default source for desktop audio", monitor_name);
-                                }
-                                Err(e) => {
-                                    eprintln!("⚠️  Could not set default source: {}", e);
-                                    eprintln!("   Desktop audio may record from wrong source");
-                                }
-                            }
+                            // DON'T change the default source - we'll use the monitor source name directly
+                            // This allows the microphone to continue using the default source
+                            eprintln!("ℹ️  Using monitor source '{}' directly (not changing default source)", monitor_name);
+                            eprintln!("   This allows microphone to use default source simultaneously");
                         }
                         Err(e) => {
                             eprintln!("❌ Failed to create loopback sink: {}", e);
@@ -429,7 +423,7 @@ impl UnifiedRecordingService {
                         }
                     }
                     
-                    // Give a moment for the default source change to propagate
+                    // Give a moment for the loopback sink to be ready
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
                 
@@ -447,6 +441,8 @@ impl UnifiedRecordingService {
         }
         
         // Then start microphone tasks (they use explicit device names)
+        // Since we're not changing the default source for desktop audio, the microphone can use 'pulse'/'default'
+        // and it will route to the original default source (the microphone)
         for (config_idx, audio_config) in self.config.audio_configs.iter().enumerate() {
             if audio_config.enabled && !audio_config.monitor_desktop_audio {
                 let audio_config_clone = audio_config.clone();
@@ -875,16 +871,18 @@ impl UnifiedRecordingService {
         };
 
         // Convert our config to nexus_audio's RecordingConfig
-        // For desktop audio: try "pipewire" device for direct monitor access
+        // For desktop audio: use the monitor source name directly
         // For microphone: use the device name we determined above
         let recording_config = if config.monitor_desktop_audio {
-            // Try "pipewire" device which might have better routing to monitors
-            // without needing to change default source
+            // Use the monitor source name directly instead of changing default source
+            // The monitor name should be "nexus_audio_monitor.monitor"
+            let monitor_name = "nexus_audio_monitor.monitor".to_string();
+            eprintln!("📺 Using monitor source name directly: '{}'", monitor_name);
             NexusAudioRecordingConfig {
                 sample_rate: config.sample_rate,
                 channels: 2, // Desktop audio is typically stereo
                 duration: None,
-                device_name: Some("pipewire".to_string()), // Try pipewire for better monitor routing
+                device_name: Some(monitor_name), // Use monitor source name directly
             }
         } else {
             NexusAudioRecordingConfig {
@@ -921,7 +919,7 @@ impl UnifiedRecordingService {
         // Use streaming API to have control over stop signal
         // This will return the actual sample rate and channels from the device
         eprintln!("🎙️  {} attempting to create audio stream...", device_type);
-        let (stream, rx, actual_sample_rate, actual_channels) = match recorder.stream_audio_chunks(recording_config.clone()) {
+        let (mut stream, rx, actual_sample_rate, actual_channels) = match recorder.stream_audio_chunks(recording_config.clone()) {
             Ok(result) => {
                 eprintln!("✅ {} stream created successfully", device_type);
                 result
@@ -966,7 +964,7 @@ impl UnifiedRecordingService {
         }
 
         // Start the stream
-        cpal::traits::StreamTrait::play(&stream).map_err(|e| {
+        stream.play().map_err(|e| {
             LoggerError::Other(format!("Failed to start audio stream: {}", e))
         })?;
 
@@ -1036,7 +1034,7 @@ impl UnifiedRecordingService {
         eprintln!("📊 {} recording: wrote {} samples before finalization", device_type, samples_written);
 
         // Stop the stream
-        cpal::traits::StreamTrait::pause(&stream).map_err(|e| {
+        stream.pause().map_err(|e| {
             LoggerError::Other(format!("Failed to pause audio stream: {}", e))
         })?;
 
@@ -1640,13 +1638,21 @@ impl RecordingSession {
                 }
             }
             
-            // Restore default source
+            // Restore default source (only if we actually changed it - which we don't anymore with Option 2)
+            // Keeping this for safety, but it should be a no-op since we don't change the default source
             if let Some(ref prev_source) = self.previous_default_source {
-                eprintln!("🔄 Restoring previous default source...");
-                if let Err(e) = AudioRecorder::set_default_source(prev_source) {
-                    eprintln!("⚠️  Failed to restore previous default source: {}", e);
-                } else {
-                    eprintln!("✅ Restored previous default source: {}", prev_source);
+                // Check if current default is different (meaning something else changed it)
+                if let Ok(current) = AudioRecorder::get_default_source() {
+                    if current != *prev_source {
+                        eprintln!("🔄 Restoring previous default source (was changed by something else)...");
+                        if let Err(e) = AudioRecorder::set_default_source(prev_source) {
+                            eprintln!("⚠️  Failed to restore previous default source: {}", e);
+                        } else {
+                            eprintln!("✅ Restored previous default source: {}", prev_source);
+                        }
+                    } else {
+                        eprintln!("ℹ️  Default source unchanged (still '{}'), no restoration needed", prev_source);
+                    }
                 }
             }
             

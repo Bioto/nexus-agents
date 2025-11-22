@@ -1,6 +1,5 @@
 use crate::error::{Result, VoiceError};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Host, SampleFormat, SampleRate, StreamConfig, SupportedStreamConfig};
+use portaudio as pa;
 use hound::{WavSpec, WavWriter};
 use std::fs::File;
 use std::io::BufWriter;
@@ -190,16 +189,55 @@ impl DeviceInfo {
     }
 }
 
-/// Audio recorder using CPAL
+/// Wrapper for audio stream that abstracts away the underlying implementation
+/// Wrapper for audio stream that abstracts away the underlying implementation
+pub struct AudioStream {
+    stream: pa::Stream<pa::NonBlocking, pa::Input<f32>>,
+    _pa: Arc<pa::PortAudio>, // Keep PortAudio alive while stream exists
+    #[cfg(target_os = "linux")]
+    _parecord_process: Option<Arc<std::sync::Mutex<Option<(std::process::Child, std::path::PathBuf)>>>>,
+    #[cfg(not(target_os = "linux"))]
+    _parecord_process: Option<()>, // Placeholder for non-Linux
+}
+
+impl AudioStream {
+    /// Start playing the audio stream
+    pub fn play(&mut self) -> Result<()> {
+        // For parecord processes, they start automatically, so just start the dummy stream
+        self.stream.start()
+            .map_err(|e| VoiceError::Audio(format!("Failed to start audio stream: {}", e)))
+    }
+
+    /// Pause the audio stream
+    pub fn pause(&mut self) -> Result<()> {
+        // Stop parecord process if it exists
+        #[cfg(target_os = "linux")]
+        if let Some(ref process_handle) = self._parecord_process {
+            if let Ok(mut process_opt) = process_handle.lock() {
+                if let Some((mut process, temp_file)) = process_opt.take() {
+                    let _ = process.kill();
+                    let _ = process.wait();
+                    let _ = std::fs::remove_file(&temp_file);
+                }
+            }
+        }
+        
+        self.stream.stop()
+            .map_err(|e| VoiceError::Audio(format!("Failed to stop audio stream: {}", e)))
+    }
+}
+
+/// Audio recorder using PortAudio
 pub struct AudioRecorder {
-    host: Host,
+    pa: Arc<pa::PortAudio>,
 }
 
 impl AudioRecorder {
     /// Create a new audio recorder instance
     pub fn new() -> Result<Self> {
-        let host = cpal::default_host();
-        Ok(Self { host })
+        let pa = pa::PortAudio::new()
+            .map_err(|e| VoiceError::Audio(format!("Failed to initialize PortAudio: {}", e)))?;
+        Ok(Self { pa: Arc::new(pa) })
     }
 
     /// List all available ALSA devices directly from system (Linux only)
@@ -255,27 +293,31 @@ impl AudioRecorder {
 
     /// List all available input devices
     pub fn list_input_devices(&self) -> Result<Vec<DeviceInfo>> {
-        let default_device = self
-            .host
-            .default_input_device()
-            .map(|d| d.name().unwrap_or_else(|_| "Unknown".to_string()));
-
-        let mut devices: Vec<DeviceInfo> = self
-            .host
-            .input_devices()?
-            .map(|device| {
-                let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
-                let display_name = DeviceInfo::parse_device_name(&name);
-                let is_default = default_device.as_ref().map(|d| d == &name).unwrap_or(false);
-                Ok(DeviceInfo {
-                    name,
-                    display_name,
-                    default: is_default,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let num_devices = self.pa.device_count()
+            .map_err(|e| VoiceError::Audio(format!("Failed to get device count: {}", e)))?;
         
-        // Also include ALSA devices that might not be enumerated by CPAL
+        let default_input = self.pa.default_input_device()
+            .ok(); // PortAudio returns Result, we want Option for comparison
+        
+        let mut devices = Vec::new();
+        
+        for i in 0..num_devices {
+            if let Ok(device_info) = self.pa.device_info(pa::DeviceIndex(i)) {
+                if device_info.max_input_channels > 0 {
+                    let name = device_info.name.to_string();
+                    let display_name = DeviceInfo::parse_device_name(&name);
+                    let is_default = Some(pa::DeviceIndex(i)) == default_input;
+                    
+                    devices.push(DeviceInfo {
+                        name: format!("{}", i), // PortAudio uses indices, but we'll store as string
+                        display_name: format!("{} ({})", display_name, name),
+                        default: is_default,
+                    });
+                }
+            }
+        }
+        
+        // Also include ALSA devices that might not be enumerated by PortAudio
         #[cfg(target_os = "linux")]
         {
             let alsa_devices = Self::list_alsa_devices();
@@ -292,27 +334,31 @@ impl AudioRecorder {
 
     /// List all available output devices
     pub fn list_output_devices(&self) -> Result<Vec<DeviceInfo>> {
-        let default_device = self
-            .host
-            .default_output_device()
-            .map(|d| d.name().unwrap_or_else(|_| "Unknown".to_string()));
-
-        let devices: Result<Vec<_>> = self
-            .host
-            .output_devices()?
-            .map(|device| {
-                let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
-                let display_name = DeviceInfo::parse_device_name(&name);
-                let is_default = default_device.as_ref().map(|d| d == &name).unwrap_or(false);
-                Ok(DeviceInfo {
-                    name,
-                    display_name,
-                    default: is_default,
-                })
-            })
-            .collect();
-
-        devices
+        let num_devices = self.pa.device_count()
+            .map_err(|e| VoiceError::Audio(format!("Failed to get device count: {}", e)))?;
+        
+        let default_output = self.pa.default_output_device()
+            .ok(); // PortAudio returns Result, we want Option for comparison
+        
+        let mut devices = Vec::new();
+        
+        for i in 0..num_devices {
+            if let Ok(device_info) = self.pa.device_info(pa::DeviceIndex(i)) {
+                if device_info.max_output_channels > 0 {
+                    let name = device_info.name.to_string();
+                    let display_name = DeviceInfo::parse_device_name(&name);
+                    let is_default = Some(pa::DeviceIndex(i)) == default_output;
+                    
+                    devices.push(DeviceInfo {
+                        name: format!("{}", i),
+                        display_name: format!("{} ({})", display_name, name),
+                        default: is_default,
+                    });
+                }
+            }
+        }
+        
+        Ok(devices)
     }
 
     /// List all available monitor/loopback devices (for capturing desktop audio output)
@@ -379,52 +425,57 @@ impl AudioRecorder {
         Ok(monitor_devices)
     }
 
-    /// Find an input device by name
-    pub fn find_input_device(&self, name: &str) -> Result<Option<Device>> {
-        let devices: Vec<_> = self.host.input_devices()?.collect();
+    /// Find an input device index by name
+    pub fn find_input_device_index(&self, name: &str) -> Result<Option<pa::DeviceIndex>> {
+        let num_devices = self.pa.device_count()
+            .map_err(|e| VoiceError::Audio(format!("Failed to get device count: {}", e)))?;
         
         // Extract card name from ALSA device name if present
         let requested_card_name = DeviceInfo::extract_card_name(name);
         
-        for device in &devices {
-            if let Ok(device_name) = device.name() {
-                // Exact match (case-sensitive)
-                if device_name == name {
-                    return Ok(Some(device.clone()));
-                }
-                // Case-insensitive match
-                if device_name.eq_ignore_ascii_case(name) {
-                    return Ok(Some(device.clone()));
-                }
-                
-                // If we have a card name from the requested device, try matching by card name
-                if let Some(ref requested_card) = requested_card_name {
-                    if let Some(device_card) = DeviceInfo::extract_card_name(&device_name) {
-                        if device_card.eq_ignore_ascii_case(requested_card) {
-                            return Ok(Some(device.clone()));
+        for i in 0..num_devices {
+            let idx = pa::DeviceIndex(i);
+            if let Ok(device_info) = self.pa.device_info(idx) {
+                if device_info.max_input_channels > 0 {
+                    let device_name = device_info.name;
+                    
+                    // Exact match (case-sensitive)
+                    if device_name == name {
+                        return Ok(Some(idx));
+                    }
+                    // Case-insensitive match
+                    if device_name.eq_ignore_ascii_case(name) {
+                        return Ok(Some(idx));
+                    }
+                    
+                    // If we have a card name from the requested device, try matching by card name
+                    if let Some(ref requested_card) = requested_card_name {
+                        if let Some(device_card) = DeviceInfo::extract_card_name(&device_name) {
+                            if device_card.eq_ignore_ascii_case(requested_card) {
+                                return Ok(Some(idx));
+                            }
+                        }
+                        // Also try substring matching on the device name itself
+                        if device_name.to_lowercase().contains(&requested_card.to_lowercase()) {
+                            return Ok(Some(idx));
                         }
                     }
-                    // Also try substring matching on the device name itself
-                    if device_name.to_lowercase().contains(&requested_card.to_lowercase()) {
-                        return Ok(Some(device.clone()));
+                    
+                    // Substring match (case-insensitive)
+                    if device_name.to_lowercase().contains(&name.to_lowercase()) 
+                        || name.to_lowercase().contains(&device_name.to_lowercase()) {
+                        return Ok(Some(idx));
                     }
-                }
-                
-                // Substring match (case-insensitive)
-                if device_name.to_lowercase().contains(&name.to_lowercase()) 
-                    || name.to_lowercase().contains(&device_name.to_lowercase()) {
-                    return Ok(Some(device.clone()));
                 }
             }
         }
         Ok(None)
     }
 
-    /// Get the default input device
-    pub fn default_input_device(&self) -> Result<Device> {
-        self.host
-            .default_input_device()
-            .ok_or_else(|| VoiceError::Audio("No default input device available".to_string()))
+    /// Get the default input device index
+    pub fn default_input_device_index(&self) -> Result<pa::DeviceIndex> {
+        self.pa.default_input_device()
+            .map_err(|e| VoiceError::Audio(format!("No default input device available: {}", e)))
     }
 
     /// Get the default output device's monitor source name
@@ -453,13 +504,11 @@ impl AudioRecorder {
         }
         
         // Fallback: construct monitor name from output device
-        let default_output = self
-            .host
-            .default_output_device()
-            .ok_or_else(|| VoiceError::Audio("No default output device available".to_string()))?;
-        
-        let output_name = default_output.name()
-            .map_err(|_| VoiceError::Audio("Failed to get default output device name".to_string()))?;
+        let default_output_idx = self.pa.default_output_device()
+            .map_err(|e| VoiceError::Audio(format!("No default output device available: {}", e)))?;
+        let default_output_info = self.pa.device_info(default_output_idx)
+            .map_err(|e| VoiceError::Audio(format!("Failed to get default output device info: {}", e)))?;
+        let output_name = default_output_info.name;
         
         Ok(format!("Monitor of {}", output_name))
     }
@@ -789,162 +838,94 @@ impl AudioRecorder {
     }
 
     /// Get the input device based on configuration
-    fn get_input_device(&self, config: &RecordingConfig) -> Result<Device> {
+    /// Get PortAudio device index for input device
+    fn get_input_device_index(&self, config: &RecordingConfig) -> Result<pa::DeviceIndex> {
+        let num_devices = self.pa.device_count()
+            .map_err(|e| VoiceError::Audio(format!("Failed to get device count: {}", e)))?;
+        
         if let Some(ref device_name) = config.device_name {
-            // Try to find the device - check exact match first
-            let devices: Vec<_> = self.host.input_devices()?.collect();
-            let mut matched_device = None;
-            
-            // Extract card name from ALSA device name if present (e.g., "sysdefault:CARD=Quadcast" -> "Quadcast")
-            let requested_card_name = DeviceInfo::extract_card_name(device_name);
-            
-            for device in &devices {
-                if let Ok(name) = device.name() {
-                    // Exact match (case-sensitive)
-                    if name == *device_name {
-                        matched_device = Some(device);
-                        break;
-                    }
-                    // Case-insensitive match
-                    if name.eq_ignore_ascii_case(device_name) {
-                        matched_device = Some(device);
-                        break;
-                    }
-                    
-                    // If we have a card name from the requested device, try matching by card name
-                    if let Some(ref requested_card) = requested_card_name {
-                        if let Some(device_card) = DeviceInfo::extract_card_name(&name) {
-                            if device_card.eq_ignore_ascii_case(requested_card) {
-                                matched_device = Some(device);
-                                break;
-                            }
+            // Try to parse as device index first
+            if let Ok(device_idx) = device_name.parse::<u32>() {
+                if device_idx < num_devices {
+                    let idx = pa::DeviceIndex(device_idx);
+                    if let Ok(device_info) = self.pa.device_info(idx) {
+                        if device_info.max_input_channels > 0 {
+                            eprintln!("✅ Using device index {}: {}", device_idx, 
+                                device_info.name);
+                            return Ok(idx);
                         }
-                        // Also try substring matching on the device name itself
-                        if name.to_lowercase().contains(&requested_card.to_lowercase()) {
-                            matched_device = Some(device);
-                            break;
-                        }
-                    }
-                    
-                    // Substring match (case-insensitive) - useful if device name contains the requested string
-                    if name.to_lowercase().contains(&device_name.to_lowercase()) 
-                        || device_name.to_lowercase().contains(&name.to_lowercase()) {
-                        matched_device = Some(device);
-                        break;
                     }
                 }
             }
             
-            if let Some(device) = matched_device {
-                let actual_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
-                eprintln!("✅ Found requested device: '{}' (actual name: '{}')", device_name, actual_name);
-                return Ok(device.clone());
+            // Search by device name
+            for i in 0..num_devices {
+                let idx = pa::DeviceIndex(i);
+                if let Ok(device_info) = self.pa.device_info(idx) {
+                    if device_info.max_input_channels > 0 {
+                        if device_info.name.eq_ignore_ascii_case(device_name) 
+                            || device_info.name.to_lowercase().contains(&device_name.to_lowercase())
+                            || device_name.to_lowercase().contains(&device_info.name.to_lowercase()) {
+                            eprintln!("✅ Found device '{}' at index {}", device_info.name, i);
+                            return Ok(idx);
+                        }
+                    }
+                }
             }
             
-            // If still not found, log a warning and fall back to default device
-            let available_devices: Vec<String> = devices
-                .iter()
-                .filter_map(|d| d.name().ok())
-                .collect();
-            
-            eprintln!(
-                "⚠️  Device '{}' not found. Available devices: {}",
-                device_name,
-                if available_devices.is_empty() {
-                    "none".to_string()
+            eprintln!("⚠️  Device '{}' not found, falling back to default", device_name);
+        }
+        
+        // Fall back to default input device
+        match self.pa.default_input_device() {
+            Ok(idx) => {
+                if let Ok(device_info) = self.pa.device_info(idx) {
+                    if device_info.max_input_channels > 0 {
+                        Ok(idx)
+                    } else {
+                        Err(VoiceError::Audio("Default device has no input channels".to_string()))
+                    }
                 } else {
-                    available_devices.join(", ")
+                    Err(VoiceError::Audio("Failed to get default device info".to_string()))
                 }
-            );
-            eprintln!("⚠️  Falling back to default input device");
-            
-            // Fall back to default device instead of failing
-            self.default_input_device()
-        } else {
-            self.default_input_device()
+            }
+            Err(e) => Err(VoiceError::Audio(format!("No default input device available: {}", e)))
         }
     }
 
-    /// Get supported stream configuration for a device
-    /// Prefers higher quality formats (f32 > i32 > i16 > others)
-    fn get_supported_config(
+    /// Get device info and determine stream parameters
+    fn get_device_stream_params(
         &self,
-        device: &Device,
+        device_idx: pa::DeviceIndex,
         config: &RecordingConfig,
-    ) -> Result<SupportedStreamConfig> {
-        let mut supported_configs: Vec<_> = device.supported_input_configs()?.collect();
-
-        // Sort by quality: prefer f32, then i32, then i16, then others
-        supported_configs.sort_by(|a, b| {
-            let quality_a = match a.sample_format() {
-                SampleFormat::F32 => 4,
-                SampleFormat::I32 => 3,
-                SampleFormat::I16 => 2,
-                SampleFormat::F64 => 1,
-                _ => 0,
-            };
-            let quality_b = match b.sample_format() {
-                SampleFormat::F32 => 4,
-                SampleFormat::I32 => 3,
-                SampleFormat::I16 => 2,
-                SampleFormat::F64 => 1,
-                _ => 0,
-            };
-            quality_b.cmp(&quality_a) // Higher quality first
-        });
-
-        let target_sample_rate = SampleRate(config.sample_rate);
-        let target_channels = config.channels;
-
-        // Try to find exact match with preferred format
-        if let Some(supported) = supported_configs.iter().find(|c| {
-            c.channels() == target_channels
-                && c.min_sample_rate() <= target_sample_rate
-                && c.max_sample_rate() >= target_sample_rate
-        }) {
-            return Ok(supported.with_sample_rate(target_sample_rate));
+    ) -> Result<(f64, i32)> {
+        let device_info = self.pa.device_info(device_idx)
+            .map_err(|e| VoiceError::Audio(format!("Failed to get device info: {}", e)))?;
+        
+        // Use requested sample rate, or device default, or 44100 as fallback
+        let sample_rate = config.sample_rate as f64;
+        let channels = config.channels as i32;
+        
+        // PortAudio uses F32 format for float samples
+        // Note: We don't actually need to return the format since PortAudio handles it
+        
+        // Verify device supports requested channels
+        if channels > device_info.max_input_channels {
+            return Err(VoiceError::Audio(format!(
+                "Device only supports {} channels, requested {}",
+                device_info.max_input_channels, channels
+            )));
         }
-
-        // Try to find config with matching channels (any sample rate)
-        if let Some(supported) = supported_configs
-            .iter()
-            .find(|c| c.channels() == target_channels)
-        {
-            let sample_rate = supported
-                .min_sample_rate()
-                .max(target_sample_rate.min(supported.max_sample_rate()));
-            return Ok(supported.with_sample_rate(sample_rate));
-        }
-
-        // Fall back to first available config (highest quality)
-        supported_configs
-            .first()
-            .ok_or_else(|| VoiceError::Audio("No supported input config found".to_string()))
-            .map(|c| {
-                let sample_rate = c
-                    .min_sample_rate()
-                    .max(target_sample_rate.min(c.max_sample_rate()));
-                c.with_sample_rate(sample_rate)
-            })
+        
+        Ok((sample_rate, channels))
     }
 
-    /// Record audio to a WAV file
+    /// Record audio to a WAV file using PortAudio
     pub fn record_to_file(&self, config: RecordingConfig, output_path: &Path) -> Result<()> {
-        let device = self.get_input_device(&config)?;
-        let supported_config = self.get_supported_config(&device, &config)?;
+        // Use stream_audio_chunks and write to file
+        let (mut stream, rx, actual_sample_rate, actual_channels) = self.stream_audio_chunks(config.clone())?;
 
-        // Adjust config to match supported config
-        let actual_sample_rate = supported_config.sample_rate().0;
-        let actual_channels = supported_config.channels();
-        let sample_format = supported_config.sample_format();
-
-        // Create stream config - let the device choose an appropriate buffer size
-        // Some devices have specific buffer size requirements, so we use Default
-        // which allows the backend to select an optimal size
-        let stream_config = StreamConfig::from(supported_config);
-
-        // Create WAV writer with optimal settings
-        // Use 16-bit for compatibility, but record at higher sample rate for quality
+        // Create WAV writer
         let spec = WavSpec {
             channels: actual_channels,
             sample_rate: actual_sample_rate,
@@ -952,79 +933,46 @@ impl AudioRecorder {
             sample_format: hound::SampleFormat::Int,
         };
 
-        // Log the actual recording parameters for debugging
         log::info!(
-            "Recording at {} Hz, {} channels, format: {:?}",
+            "Recording at {} Hz, {} channels",
             actual_sample_rate,
-            actual_channels,
-            sample_format
+            actual_channels
         );
 
         let writer = File::create(output_path)
             .map_err(VoiceError::Io)
             .map(BufWriter::new)?;
-        let wav_writer = WavWriter::new(writer, spec)
+        let mut wav_writer = WavWriter::new(writer, spec)
             .map_err(|e| VoiceError::Audio(format!("Failed to create WAV writer: {}", e)))?;
-
-        // Shared state for stopping recording
-        let recording = Arc::new(AtomicBool::new(true));
-        let wav_writer_arc = Arc::new(std::sync::Mutex::new(wav_writer));
-
-        // Build the stream based on sample format
-        // We convert all formats to i16 for WAV compatibility
-        let stream = match sample_format {
-            SampleFormat::I8 => self.build_stream_i8(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            SampleFormat::I16 => self.build_stream_i16(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            SampleFormat::I32 => self.build_stream_i32(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            SampleFormat::U8 => self.build_stream_u8(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            SampleFormat::U16 => self.build_stream_u16(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            SampleFormat::F32 => self.build_stream_f32(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            SampleFormat::F64 => self.build_stream_f64(
-                &device,
-                &stream_config,
-                Arc::clone(&wav_writer_arc),
-                Arc::clone(&recording),
-            )?,
-            _ => {
-                return Err(VoiceError::Audio(format!(
-                    "Unsupported sample format: {:?}",
-                    sample_format
-                )));
-            }
-        };
 
         // Start recording
         stream.play()?;
+
+        // Recording state
+        let recording = Arc::new(AtomicBool::new(true));
+        let recording_clone = Arc::clone(&recording);
+
+        // Spawn thread to write samples
+        let write_handle = std::thread::spawn(move || {
+            while recording_clone.load(Ordering::Relaxed) {
+                match rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(samples) => {
+                        // Convert f32 samples to i16 and write
+                        for sample in samples {
+                            let clamped = sample.clamp(-1.0, 1.0);
+                            let sample_i16 = (clamped * 32767.0).round() as i16;
+                            if let Err(e) = wav_writer.write_sample(sample_i16) {
+                                log::error!("Error writing sample: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            wav_writer
+        });
 
         // Wait for duration or until stopped
         if let Some(duration) = config.duration {
@@ -1039,147 +987,18 @@ impl AudioRecorder {
 
         // Stop the stream
         stream.pause()?;
-
-        // Finalize WAV file
-        // We need to drop the stream first, then finalize the writer
         drop(stream);
 
-        // Extract the writer from the Arc and Mutex to finalize it
-        let mutex = Arc::try_unwrap(wav_writer_arc)
-            .map_err(|_| VoiceError::Audio("Failed to unwrap WAV writer Arc".to_string()))?;
-        let writer = mutex.into_inner().map_err(|e| {
-            VoiceError::Audio(format!("Failed to extract WAV writer from mutex: {}", e))
-        })?;
-        writer
+        // Wait for writer thread and finalize
+        let wav_writer = write_handle.join()
+            .map_err(|_| VoiceError::Audio("Writer thread panicked".to_string()))?;
+        wav_writer
             .finalize()
             .map_err(|e| VoiceError::Audio(format!("Failed to finalize WAV file: {}", e)))?;
 
         Ok(())
     }
 
-    /// Build stream helper that converts samples to i16
-    fn build_stream_helper<T>(
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-        convert: impl Fn(T) -> f32 + Send + 'static,
-    ) -> Result<cpal::Stream>
-    where
-        T: cpal::Sample + cpal::SizedSample + Send + 'static,
-    {
-        let wav_writer_clone = Arc::clone(&wav_writer);
-        let recording_clone = Arc::clone(&recording);
-
-        let stream = device.build_input_stream(
-            config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| {
-                if recording_clone.load(Ordering::Relaxed) {
-                    if let Ok(mut writer) = wav_writer_clone.lock() {
-                        for &sample in data {
-                            // Convert sample to f32, then to i16 with proper scaling
-                            let sample_f32: f32 = convert(sample);
-                            // Clamp to [-1.0, 1.0] range
-                            let clamped = sample_f32.clamp(-1.0, 1.0);
-                            // Convert to i16 with proper rounding to reduce quantization noise
-                            // Use i16::MAX (32767) instead of i16::MAX as f32 to avoid precision issues
-                            let sample_i16 = (clamped * 32767.0).round() as i16;
-                            if let Err(e) = writer.write_sample(sample_i16) {
-                                log::error!("Error writing sample: {}", e);
-                                break;
-                            }
-                        }
-                    }
-                }
-            },
-            |err| {
-                log::error!("Audio stream error: {}", err);
-            },
-            None,
-        )?;
-
-        Ok(stream)
-    }
-
-    fn build_stream_i8(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: i8| {
-            s as f32 / i8::MAX as f32
-        })
-    }
-
-    fn build_stream_i16(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: i16| {
-            s as f32 / i16::MAX as f32
-        })
-    }
-
-    fn build_stream_i32(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: i32| {
-            s as f32 / i32::MAX as f32
-        })
-    }
-
-    fn build_stream_u8(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: u8| {
-            (s as f32 / u8::MAX as f32) * 2.0 - 1.0
-        })
-    }
-
-    fn build_stream_u16(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: u16| {
-            (s as f32 / u16::MAX as f32) * 2.0 - 1.0
-        })
-    }
-
-    fn build_stream_f32(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: f32| s)
-    }
-
-    fn build_stream_f64(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        wav_writer: Arc<std::sync::Mutex<WavWriter<BufWriter<File>>>>,
-        recording: Arc<AtomicBool>,
-    ) -> Result<cpal::Stream> {
-        Self::build_stream_helper(device, config, wav_writer, recording, |s: f64| s as f32)
-    }
 
     /// Stop a recording (for use with async/background recording)
     #[allow(dead_code)]
@@ -1195,153 +1014,285 @@ impl AudioRecorder {
 
     /// Stream audio chunks to a channel for real-time processing
     /// Returns a stream handle and a receiver for audio chunks (f32 samples at the configured sample rate)
+    /// 
+    /// For PulseAudio monitor sources (device names containing ".monitor"), uses parecord command-line tool
+    /// since PortAudio (ALSA) cannot access PulseAudio monitor sources directly.
     pub fn stream_audio_chunks(
         &self,
         config: RecordingConfig,
-    ) -> Result<(cpal::Stream, mpsc::Receiver<Vec<f32>>, u32, u16)> {
-        let device = self.get_input_device(&config)?;
-        let supported_config = self.get_supported_config(&device, &config)?;
+    ) -> Result<(AudioStream, mpsc::Receiver<Vec<f32>>, u32, u16)> {
+        // Check if this is a PulseAudio monitor source (PortAudio/ALSA can't access these)
+        if let Some(ref device_name) = config.device_name {
+            if device_name.contains(".monitor") {
+                #[cfg(target_os = "linux")]
+                {
+                    return self.stream_audio_chunks_pulseaudio(config);
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    return Err(VoiceError::Audio(
+                        "PulseAudio monitor sources only supported on Linux".to_string()
+                    ));
+                }
+            }
+        }
 
-        let actual_sample_rate = supported_config.sample_rate().0;
-        let actual_channels = supported_config.channels();
-        let sample_format = supported_config.sample_format();
+        // Use PortAudio for regular devices
+        let device_idx = self.get_input_device_index(&config)?;
+        let (sample_rate, channels) = self.get_device_stream_params(device_idx, &config)?;
 
-        let stream_config = StreamConfig::from(supported_config);
+        let actual_sample_rate = sample_rate as u32;
+        let actual_channels = channels as u16;
 
         // Channel for sending audio chunks
         let (tx, rx) = mpsc::channel();
 
-        // Build the stream based on sample format
-        let stream = match sample_format {
-            SampleFormat::I8 => self.build_streaming_stream_i8(&device, &stream_config, tx)?,
-            SampleFormat::I16 => self.build_streaming_stream_i16(&device, &stream_config, tx)?,
-            SampleFormat::I32 => self.build_streaming_stream_i32(&device, &stream_config, tx)?,
-            SampleFormat::U8 => self.build_streaming_stream_u8(&device, &stream_config, tx)?,
-            SampleFormat::U16 => self.build_streaming_stream_u16(&device, &stream_config, tx)?,
-            SampleFormat::F32 => self.build_streaming_stream_f32(&device, &stream_config, tx)?,
-            SampleFormat::F64 => self.build_streaming_stream_f64(&device, &stream_config, tx)?,
-            _ => {
-                return Err(VoiceError::Audio(format!(
-                    "Unsupported sample format: {:?}",
-                    sample_format
-                )));
-            }
-        };
+        // Create PortAudio stream settings
+        let stream_settings = self.pa.default_input_stream_settings(
+            channels,
+            sample_rate,
+            pa::FRAMES_PER_BUFFER_UNSPECIFIED,
+        )
+        .map_err(|e| VoiceError::Audio(format!("Failed to get stream settings: {}", e)))?;
 
-        log::info!(
-            "Streaming audio at {} Hz, {} channels, format: {:?}",
-            actual_sample_rate,
-            actual_channels,
-            sample_format
-        );
-
-        Ok((stream, rx, actual_sample_rate, actual_channels))
-    }
-
-    /// Build streaming stream helper
-    fn build_streaming_stream_helper<T>(
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-        convert: impl Fn(T) -> f32 + Send + 'static,
-    ) -> Result<cpal::Stream>
-    where
-        T: cpal::Sample + cpal::SizedSample + Send + 'static,
-    {
+        let pa_clone = Arc::clone(&self.pa);
         let tx_clone = tx.clone();
 
-        let stream = device.build_input_stream(
-            config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| {
-                // Convert samples to f32 and send as chunk
-                let mut samples = Vec::with_capacity(data.len());
-                for &sample in data {
-                    let sample_f32: f32 = convert(sample);
-                    samples.push(sample_f32.clamp(-1.0, 1.0));
-                }
-
-                // Send chunk (blocking - channel should be large enough)
-                // If channel is full, we'll drop samples (non-blocking would be better but mpsc doesn't have try_send)
+        // Create the stream with callback
+        let stream = self.pa.open_non_blocking_stream(
+            stream_settings,
+            move |pa::InputStreamCallbackArgs { buffer, frames, .. }| {
+                // Buffer is already f32, convert to Vec and send
+                let num_samples = frames * channels as usize;
+                let samples: Vec<f32> = buffer[..num_samples]
+                    .iter()
+                    .copied()
+                    .map(|s: f32| s.clamp(-1.0, 1.0))
+                    .collect();
+                
                 if tx_clone.send(samples).is_err() {
-                    // Receiver dropped, stop trying
                     log::warn!("Audio receiver dropped, stopping stream");
+                    pa::Complete
+                } else {
+                    pa::Continue
                 }
             },
-            |err| {
-                log::error!("Audio stream error: {}", err);
+        )
+        .map_err(|e| VoiceError::Audio(format!("Failed to open stream: {}", e)))?;
+
+        log::info!(
+            "Streaming audio at {} Hz, {} channels, format: Float32",
+            actual_sample_rate,
+            actual_channels
+        );
+
+        Ok((AudioStream { stream, _pa: pa_clone, _parecord_process: None }, rx, actual_sample_rate, actual_channels))
+    }
+
+    /// Stream audio from PulseAudio monitor source using parecord
+    #[cfg(target_os = "linux")]
+    fn stream_audio_chunks_pulseaudio(
+        &self,
+        config: RecordingConfig,
+    ) -> Result<(AudioStream, mpsc::Receiver<Vec<f32>>, u32, u16)> {
+        use std::process::{Command, Stdio};
+        use std::io::Read;
+
+        let device_name = config.device_name.as_ref()
+            .ok_or_else(|| VoiceError::Audio("Device name required for PulseAudio monitor".to_string()))?;
+
+        let sample_rate = config.sample_rate;
+        let channels = config.channels;
+
+        eprintln!("📺 Using parecord for PulseAudio monitor source: {}", device_name);
+
+        // Verify the monitor source exists before trying to record
+        #[cfg(target_os = "linux")]
+        {
+            use std::process::Command;
+            let list_output = Command::new("pactl")
+                .arg("list")
+                .arg("sources")
+                .arg("short")
+                .output();
+            
+            if let Ok(output) = list_output {
+                let sources = String::from_utf8_lossy(&output.stdout);
+                if !sources.contains(device_name) {
+                    eprintln!("⚠️  WARNING: Monitor source '{}' not found in PulseAudio sources!", device_name);
+                    eprintln!("📋 Available sources:");
+                    for line in sources.lines().take(10) {
+                        eprintln!("   {}", line);
+                    }
+                    return Err(VoiceError::Audio(format!(
+                        "Monitor source '{}' not found. Available sources may be listed above.",
+                        device_name
+                    )));
+                } else {
+                    eprintln!("✅ Verified monitor source '{}' exists", device_name);
+                }
+            }
+        }
+
+        // Channel for sending audio chunks
+        let (tx, rx) = mpsc::channel();
+
+        // Use a temporary file that parecord will write to
+        // We'll read from this file as it's being written
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join(format!("nexus_parecord_{}.raw", std::process::id()));
+        let _ = std::fs::remove_file(&temp_file); // Clean up if exists
+        
+        eprintln!("📺 Using temporary file for parecord: {}", temp_file.display());
+
+        // Use parecord to write raw PCM to a temporary file
+        // We'll read from this file as it's being written
+        let mut parecord = Command::new("parecord")
+            .arg("--record") // Explicitly request recording mode
+            .arg("--rate")
+            .arg(sample_rate.to_string())
+            .arg("--channels")
+            .arg(channels.to_string())
+            .arg("--format=s16le") // 16-bit signed little-endian PCM
+            .arg("--device")
+            .arg(device_name)
+            .arg(&temp_file) // Write to temporary file
+            .stdout(Stdio::null()) // parecord doesn't use stdout when writing to file
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| VoiceError::Audio(format!("Failed to spawn parecord: {}. Is PulseAudio utils installed? (package: pulseaudio-utils)", e)))?;
+
+        let mut stderr = parecord.stderr.take()
+            .ok_or_else(|| VoiceError::Audio("Failed to get parecord stderr".to_string()))?;
+
+        // Spawn thread to monitor stderr for errors
+        let stderr_handle = std::thread::spawn(move || {
+            let mut stderr_buf = vec![0u8; 1024];
+            loop {
+                match stderr.read(&mut stderr_buf) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let error_msg = String::from_utf8_lossy(&stderr_buf[..n]);
+                        eprintln!("⚠️  parecord stderr: {}", error_msg.trim());
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Wait a moment for parecord to start writing
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Spawn thread to read raw PCM data from the temporary file as it's being written
+        let tx_clone = tx.clone();
+        let channels_clone = channels;
+        let temp_file_clone = temp_file.clone();
+        let read_handle = std::thread::spawn(move || -> Result<()> {
+            eprintln!("📺 parecord reader thread started, reading from: {}", temp_file_clone.display());
+            let mut total_bytes = 0u64;
+            let mut total_samples = 0u64;
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .open(&temp_file_clone)
+                .map_err(|e| VoiceError::Audio(format!("Failed to open parecord output file: {}", e)))?;
+            
+            // Read raw 16-bit PCM (s16le format) as it's being written
+            let mut buffer = vec![0u8; 4096];
+            loop {
+                match file.read(&mut buffer) {
+                    Ok(0) => {
+                        // No data available yet, wait a bit and try again
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    Ok(n) => {
+                        total_bytes += n as u64;
+                        // Convert 16-bit PCM to f32 samples
+                        // Each sample is 2 bytes, interleaved by channel
+                        let samples: Vec<f32> = buffer[..n]
+                            .chunks_exact(2)
+                            .map(|sample_bytes| {
+                                let sample_i16 = i16::from_le_bytes([sample_bytes[0], sample_bytes[1]]);
+                                (sample_i16 as f32 / 32768.0).clamp(-1.0, 1.0)
+                            })
+                            .collect();
+
+                        if !samples.is_empty() {
+                            total_samples += samples.len() as u64;
+                            // Samples are interleaved: [L, R, L, R, ...] for stereo
+                            // Send all samples as a single chunk (they're already interleaved)
+                            if tx_clone.send(samples).is_err() {
+                                eprintln!("📺 parecord receiver dropped, stopping");
+                                return Ok(()); // Receiver dropped
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // File not ready yet, wait and retry
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Error reading from parecord file: {}", e);
+                        log::error!("Error reading from parecord file: {}", e);
+                        break;
+                    }
+                }
+            }
+            eprintln!("📺 parecord reader thread finished (read {} bytes, {} samples)", total_bytes, total_samples);
+            // Clean up temp file
+            let _ = std::fs::remove_file(&temp_file_clone);
+            Ok(())
+        });
+
+        // Create a dummy stream wrapper for parecord (we'll control it via the process)
+        // We need to keep the process handle alive and clean up the temp file
+        let temp_file_clone_for_cleanup = temp_file.clone();
+        let process_handle = Arc::new(std::sync::Mutex::new(Some((parecord, temp_file_clone_for_cleanup))));
+        let process_handle_clone = Arc::clone(&process_handle);
+
+        // Create a dummy PortAudio stream that we won't actually use
+        // We'll manage the parecord process directly
+        let dummy_settings = self.pa.default_input_stream_settings(
+            1,
+            44100.0,
+            pa::FRAMES_PER_BUFFER_UNSPECIFIED,
+        )
+        .map_err(|e| VoiceError::Audio(format!("Failed to create dummy stream settings: {}", e)))?;
+
+        let dummy_stream = self.pa.open_non_blocking_stream(
+            dummy_settings,
+            move |_| pa::Continue, // Dummy callback
+        )
+        .map_err(|e| VoiceError::Audio(format!("Failed to create dummy stream: {}", e)))?;
+
+        // Store process handle in a way we can access it
+        // We'll need to modify AudioStream to support parecord processes
+        // For now, create a wrapper that manages the parecord process
+
+        log::info!(
+            "Streaming audio from PulseAudio monitor at {} Hz, {} channels",
+            sample_rate,
+            channels
+        );
+
+        // Store handles to monitor the threads (but don't block on them)
+        // The threads will run until the process is killed
+        std::mem::forget(read_handle); // Let it run until process is killed
+        std::mem::forget(stderr_handle); // Let stderr monitor run
+
+        Ok((
+            AudioStream {
+                stream: dummy_stream,
+                _pa: Arc::clone(&self.pa),
+                _parecord_process: Some(process_handle_clone),
             },
-            None,
-        )?;
-
-        Ok(stream)
+            rx,
+            sample_rate,
+            channels,
+        ))
     }
 
-    fn build_streaming_stream_i8(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: i8| s as f32 / i8::MAX as f32)
-    }
-
-    fn build_streaming_stream_i16(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: i16| s as f32 / i16::MAX as f32)
-    }
-
-    fn build_streaming_stream_i32(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: i32| s as f32 / i32::MAX as f32)
-    }
-
-    fn build_streaming_stream_u8(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: u8| {
-            (s as f32 / u8::MAX as f32) * 2.0 - 1.0
-        })
-    }
-
-    fn build_streaming_stream_u16(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: u16| {
-            (s as f32 / u16::MAX as f32) * 2.0 - 1.0
-        })
-    }
-
-    fn build_streaming_stream_f32(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: f32| s)
-    }
-
-    fn build_streaming_stream_f64(
-        &self,
-        device: &Device,
-        config: &StreamConfig,
-        tx: mpsc::Sender<Vec<f32>>,
-    ) -> Result<cpal::Stream> {
-        Self::build_streaming_stream_helper(device, config, tx, |s: f64| s as f32)
-    }
 }
 
 impl Default for AudioRecorder {

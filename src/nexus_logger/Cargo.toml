@@ -22,7 +22,6 @@ log = "0.4.22"
 nexus-core = { path = "../nexus_core" }
 nexus-screen = { path = "../nexus_screen" }
 nexus-audio = { path = "../nexus_audio" }
-cpal = "0.15"
 hound = "3.5"
 whisper-rs = "0.15"
 tempfile = "3.10"

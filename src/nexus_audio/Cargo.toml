@@ -10,7 +10,8 @@ path = "src/main.rs"
 [dependencies]
 ratatui = { workspace = true }
 crossterm = "0.28"
-cpal = "0.15"
+portaudio = "0.7"
+cpal = "0.15"  # Still needed for tts.rs and some methods - will be removed later
 tokio = { workspace = true, features = ["full"] }
 anyhow = "1.0"
 clap = { workspace = true }

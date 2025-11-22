@@ -186,23 +186,38 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 // If both are None, pre-select a microphone device NOW (before loopback sink is created)
                 let device_name = args.device.clone().or(args.mic_device.clone()).or_else(|| {
                     // Pre-select microphone device before desktop audio creates loopback sink
-                    // Prefer "jack" device which CPAL can see and won't fall back to "default"
                     use nexus_audio::AudioRecorder;
                     if let Ok(recorder) = AudioRecorder::new() {
                         if let Ok(devices) = recorder.list_input_devices() {
-                            // First, try to find "jack" device explicitly
-                            if let Some(jack_device) = devices.iter().find(|d| d.name == "jack") {
-                                eprintln!("🎤 Pre-selected microphone device: {} ({})", jack_device.display_name, jack_device.name);
-                                return Some(jack_device.name.clone());
+                            eprintln!("🔍 Available input devices:");
+                            for (idx, device) in devices.iter().enumerate() {
+                                let default_marker = if device.default { " (default)" } else { "" };
+                                eprintln!("  {}. {}{} → {}", idx + 1, device.display_name, default_marker, device.name);
+                            }
+                            
+                            // First, try to find common microphone names (case-insensitive)
+                            let common_mic_names = ["quadcast", "microphone", "mic", "usb", "jack"];
+                            for mic_name in &common_mic_names {
+                                if let Some(mic_device) = devices.iter().find(|d| {
+                                    let name_lower = d.name.to_lowercase();
+                                    let display_lower = d.display_name.to_lowercase();
+                                    name_lower.contains(mic_name) || display_lower.contains(mic_name)
+                                }) {
+                                    eprintln!("🎤 Pre-selected microphone device: {} ({})", mic_device.display_name, mic_device.name);
+                                    return Some(mic_device.name.clone());
+                                }
                             }
                             
                             // Otherwise, find first device that's not a monitor/loopback/nexus/pulse/default
                             if let Some(mic_device) = devices.iter().find(|d| {
                                 let name_lower = d.name.to_lowercase();
+                                let display_lower = d.display_name.to_lowercase();
                                 !name_lower.contains("monitor") 
                                     && !name_lower.contains("loopback")
                                     && !name_lower.contains("dsnoop")
                                     && !name_lower.contains("nexus") // Exclude our loopback sink
+                                    && !display_lower.contains("monitor")
+                                    && !display_lower.contains("loopback")
                                     && d.name != "pulse" // pulse might route to monitor
                                     && d.name != "default" // default will route to monitor
                                     && d.name != "pipewire" // might also route to default
@@ -210,16 +225,19 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                                 eprintln!("🎤 Pre-selected microphone device: {} ({})", mic_device.display_name, mic_device.name);
                                 Some(mic_device.name.clone())
                             } else {
-                                eprintln!("⚠️  Could not auto-detect microphone, will use 'jack' as fallback");
-                                Some("jack".to_string()) // Fallback to jack
+                                // If no suitable device found, use None to fall back to default device
+                                // The audio recorder will use the system default, which is better than hardcoding "jack"
+                                eprintln!("⚠️  Could not auto-detect suitable microphone device");
+                                eprintln!("   Will use system default input device");
+                                None // Use None to let the system choose the default
                             }
                         } else {
-                            eprintln!("⚠️  Could not list devices, will use 'jack' as fallback");
-                            Some("jack".to_string()) // Fallback to jack
+                            eprintln!("⚠️  Could not list devices, will use system default");
+                            None // Use None to let the system choose the default
                         }
                     } else {
-                        eprintln!("⚠️  Could not create audio recorder, will use 'jack' as fallback");
-                        Some("jack".to_string()) // Fallback to jack
+                        eprintln!("⚠️  Could not create audio recorder, will use system default");
+                        None // Use None to let the system choose the default
                     }
                 });
                 configs.push(AudioRecordingConfig {

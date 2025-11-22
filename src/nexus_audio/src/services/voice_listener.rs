@@ -1,6 +1,5 @@
 use crate::error::{Result, VoiceError};
 use crate::services::{AudioRecorder, RecordingConfig};
-use cpal::traits::StreamTrait;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -345,7 +344,7 @@ impl VoiceListener {
         };
 
         // Start audio stream
-        let (stream, rx, _actual_sr, _actual_ch) = self.recorder.stream_audio_chunks(config)?;
+        let (mut stream, rx, _actual_sr, _actual_ch) = self.recorder.stream_audio_chunks(config)?;
         stream
             .play()
             .map_err(|e| VoiceError::Audio(format!("Failed to start stream: {}", e)))?;
