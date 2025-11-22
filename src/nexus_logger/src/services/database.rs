@@ -664,4 +664,191 @@ impl Database {
 
         Ok(results)
     }
+
+    /// Get all events for a session ordered by timestamp/timecode
+    /// Uses HTTP interface to avoid LowCardinality type issues with native protocol
+    pub async fn get_session_events(&self, session_id: &str) -> Result<Vec<TimelineEvent>> {
+        use nexus_core::services::ClickHouseConfig;
+        
+        // Get config to build HTTP URL
+        let config = ClickHouseConfig::from_env();
+        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let url = format!("http://{}:{}", config.host, http_port);
+        
+        // Build query - HTTP interface handles LowCardinality automatically
+        let query = format!(
+            "SELECT 
+                toString(event_type) as event_type,
+                toString(event_subtype) as event_subtype,
+                key,
+                button,
+                x,
+                y,
+                pressed,
+                timestamp,
+                timecode,
+                metadata
+            FROM events
+            WHERE session_id = '{}'
+            ORDER BY COALESCE(timecode, toUnixTimestamp(timestamp)) ASC
+            FORMAT JSONEachRow",
+            session_id.replace('\'', "''")
+        );
+
+        // Use HTTP client to query
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .query(&[("database", &config.database)])
+            .basic_auth(&config.username, Some(&config.password))
+            .body(query)
+            .send()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LoggerError::Other(format!(
+                "ClickHouse HTTP query failed: {}",
+                error_text
+            )));
+        }
+
+        let text = response.text().await.map_err(|e| {
+            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
+        })?;
+
+        let mut events = Vec::new();
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
+                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
+            })?;
+
+            let event_type = row
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| LoggerError::Other("Missing event_type".to_string()))?
+                .to_string();
+            let event_subtype = row.get("event_subtype").and_then(|v| v.as_str()).map(String::from);
+            let key = row.get("key").and_then(|v| v.as_str()).map(String::from);
+            let button = row.get("button").and_then(|v| v.as_str()).map(String::from);
+            let x = row.get("x").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let y = row.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
+            let pressed = row.get("pressed").and_then(|v| v.as_u64()).map(|v| v != 0);
+            let timestamp_str = row
+                .get("timestamp")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| LoggerError::Other("Missing timestamp".to_string()))?;
+            let timecode = row.get("timecode").and_then(|v| v.as_f64());
+            let metadata_str = row
+                .get("metadata")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
+
+            let timestamp = match DateTime::parse_from_rfc3339(timestamp_str) {
+                Ok(dt) => dt.with_timezone(&Utc),
+                Err(_) => {
+                    chrono::NaiveDateTime::parse_from_str(timestamp_str, "%Y-%m-%d %H:%M:%S%.f")
+                        .map_err(|e| {
+                            LoggerError::Other(format!("Failed to parse timestamp: {}", e))
+                        })?
+                        .and_utc()
+                }
+            };
+
+            let metadata: Value = serde_json::from_str(metadata_str)
+                .unwrap_or_else(|_| Value::Null);
+
+            events.push(TimelineEvent {
+                event_type,
+                event_subtype,
+                key,
+                button,
+                x,
+                y,
+                pressed,
+                timestamp,
+                timecode,
+                metadata,
+            });
+        }
+
+        Ok(events)
+    }
+
+    /// Get session start time from database
+    pub async fn get_session_start_time(&self, session_id: &str) -> Result<Option<DateTime<Utc>>> {
+        use nexus_core::services::ClickHouseConfig;
+        
+        // Get config to build HTTP URL
+        let config = ClickHouseConfig::from_env();
+        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let url = format!("http://{}:{}", config.host, http_port);
+        
+        let query = format!(
+            "SELECT start_time FROM sessions WHERE id = '{}' ORDER BY created_at DESC LIMIT 1 FORMAT JSONEachRow",
+            session_id.replace('\'', "''")
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .query(&[("database", &config.database)])
+            .basic_auth(&config.username, Some(&config.password))
+            .body(query)
+            .send()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(None);
+        }
+
+        let text = response.text().await.map_err(|e| {
+            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
+        })?;
+
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
+                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
+            })?;
+
+            if let Some(start_time_str) = row.get("start_time").and_then(|v| v.as_str()) {
+                let start_time = match DateTime::parse_from_rfc3339(start_time_str) {
+                    Ok(dt) => dt.with_timezone(&Utc),
+                    Err(_) => {
+                        chrono::NaiveDateTime::parse_from_str(start_time_str, "%Y-%m-%d %H:%M:%S%.f")
+                            .map_err(|e| {
+                                LoggerError::Other(format!("Failed to parse start_time: {}", e))
+                            })?
+                            .and_utc()
+                    }
+                };
+                return Ok(Some(start_time));
+            }
+        }
+
+        Ok(None)
+    }
+}
+
+/// Event for timeline display
+#[derive(Debug, Clone)]
+pub struct TimelineEvent {
+    pub event_type: String,
+    pub event_subtype: Option<String>,
+    pub key: Option<String>,
+    pub button: Option<String>,
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub pressed: Option<bool>,
+    pub timestamp: DateTime<Utc>,
+    pub timecode: Option<f64>,
+    pub metadata: Value,
 }

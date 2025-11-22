@@ -377,6 +377,20 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     println!("   Video: {}", args.output.display());
     println!("   Database: {}", args.database.display());
 
+    // Generate timeline
+    println!("\n📋 Generating timeline...");
+    let db = crate::services::database::Database::new().await?;
+    let events = db.get_session_events(&session_id).await?;
+
+    if events.is_empty() {
+        println!("   No events found for session {}", session_id);
+    } else {
+        // Get session start time from database, fallback to recording_start
+        let session_start = db.get_session_start_time(&session_id).await?
+            .unwrap_or(recording_start);
+        crate::services::unified_recording::print_timeline(&session_id, &events, session_start)?;
+    }
+
     Ok(())
 }
 

@@ -1030,6 +1030,7 @@ impl ProcessingService {
                 "button": job.button,
                 "x": job.x,
                 "y": job.y,
+                "video_timestamp": job.video_timestamp,
             },
             "metadata": job.metadata
         });
