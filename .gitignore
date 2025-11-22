@@ -7,3 +7,5 @@ logs
 **/__pycache__/**
 .ruff_cache
 __pycache__/** */
+
+click-frames
