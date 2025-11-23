@@ -701,9 +701,13 @@ impl NutritionService {
     }
 
     /// Calculate nutritional information for a recipe
+    /// 
+    /// If `servings` is provided, it will be used for per-serving calculations.
+    /// Otherwise, the recipe's default servings will be used.
     pub async fn calculate_recipe_nutrition(
         pool: &PgPool,
         recipe_id: Uuid,
+        servings: Option<i32>,
     ) -> Result<RecipeNutrition> {
         let recipe = Self::get_recipe(pool, recipe_id).await?;
 
@@ -751,10 +755,12 @@ impl NutritionService {
             }
         }
 
-        let per_serving_calories = recipe.servings.map(|s| total_calories.clone() / BigDecimal::from(s));
-        let per_serving_protein = recipe.servings.map(|s| total_protein.clone() / BigDecimal::from(s));
-        let per_serving_carbs = recipe.servings.map(|s| total_carbs.clone() / BigDecimal::from(s));
-        let per_serving_fat = recipe.servings.map(|s| total_fat.clone() / BigDecimal::from(s));
+        // Use provided servings or fall back to recipe's default servings
+        let servings_for_calc = servings.or(recipe.servings);
+        let per_serving_calories = servings_for_calc.map(|s| total_calories.clone() / BigDecimal::from(s));
+        let per_serving_protein = servings_for_calc.map(|s| total_protein.clone() / BigDecimal::from(s));
+        let per_serving_carbs = servings_for_calc.map(|s| total_carbs.clone() / BigDecimal::from(s));
+        let per_serving_fat = servings_for_calc.map(|s| total_fat.clone() / BigDecimal::from(s));
 
         Ok(RecipeNutrition {
             recipe_id,
@@ -1484,7 +1490,7 @@ Return only valid JSON, no markdown formatting."#,
         for entry in entries {
             let key = (entry.date, entry.day_of_week);
             let recipe_nutrition =
-                Self::calculate_recipe_nutrition(pool, entry.recipe_id).await?;
+                Self::calculate_recipe_nutrition(pool, entry.recipe_id, None).await?;
 
             let meal_nutrition = daily_map.entry(key).or_insert_with(Vec::new);
 

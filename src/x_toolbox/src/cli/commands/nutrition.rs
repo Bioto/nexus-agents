@@ -54,6 +54,9 @@ pub enum NutritionCommands {
     Calculate {
         /// Recipe ID
         recipe_id: String,
+        /// Optional number of servings to calculate per-serving nutrition for
+        #[arg(long)]
+        servings: Option<i32>,
     },
     /// Import recipes from a CSV file
     Import {
@@ -62,6 +65,25 @@ pub enum NutritionCommands {
         /// Skip rows with errors instead of failing
         #[arg(long)]
         skip_errors: bool,
+    },
+    /// Import ingredients from USDA Foundation Foods dataset
+    ImportIngredients {
+        /// Path to the directory containing USDA CSV files
+        directory: String,
+        /// Skip rows with errors instead of failing
+        #[arg(long)]
+        skip_errors: bool,
+    },
+    /// Import ingredients from USDA Branded Foods dataset
+    ImportBrandedIngredients {
+        /// Path to the directory containing USDA CSV files
+        directory: String,
+        /// Skip rows with errors instead of failing
+        #[arg(long)]
+        skip_errors: bool,
+        /// Limit the number of foods to import (for testing)
+        #[arg(long)]
+        limit: Option<usize>,
     },
     /// Batch operations for multiple IDs/queries
     Batch {
@@ -450,9 +472,9 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                 println!("Deleted recipe: {}", id);
             }
         },
-        NutritionCommands::Calculate { recipe_id } => {
+        NutritionCommands::Calculate { recipe_id, servings } => {
             let recipe_uuid = Uuid::parse_str(&recipe_id)?;
-            let nutrition = NutritionService::calculate_recipe_nutrition(pool, recipe_uuid).await?;
+            let nutrition = NutritionService::calculate_recipe_nutrition(pool, recipe_uuid, servings).await?;
             println!("Nutritional information for recipe {}:", recipe_id);
             println!("Total calories: {}", nutrition.total_calories);
             println!("Total protein: {}g", nutrition.total_protein_g);
@@ -480,6 +502,12 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
         }
         NutritionCommands::Import { file, skip_errors } => {
             import_recipes_from_csv(pool, &file, skip_errors).await?;
+        }
+        NutritionCommands::ImportIngredients { directory, skip_errors } => {
+            import_usda_ingredients(pool, &directory, skip_errors).await?;
+        }
+        NutritionCommands::ImportBrandedIngredients { directory, skip_errors, limit } => {
+            import_usda_branded_ingredients(pool, &directory, skip_errors, limit).await?;
         }
         NutritionCommands::Batch { operation } => {
             handle_batch_operation(pool, operation).await?;
@@ -724,7 +752,7 @@ async fn handle_batch_operation(
                 parsed_ids.iter().map(|&id| {
                     let pool = pool;
                     async move {
-                        NutritionService::calculate_recipe_nutrition(pool, id).await
+                        NutritionService::calculate_recipe_nutrition(pool, id, None).await
                     }
                 })
             )
@@ -1467,5 +1495,539 @@ fn parse_directions(directions_str: &str) -> Vec<(i32, String)> {
         .enumerate()
         .map(|(idx, line)| ((idx + 1) as i32, line.to_string()))
         .collect()
+}
+
+/// Import ingredients from USDA Foundation Foods dataset
+async fn import_usda_ingredients(
+    pool: &sqlx::PgPool,
+    directory: &str,
+    skip_errors: bool,
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    let dir_path = Path::new(directory);
+    
+    // USDA nutrient IDs we care about
+    const NUTRIENT_ENERGY: i32 = 1008; // Energy (KCAL)
+    const NUTRIENT_PROTEIN: i32 = 1003; // Protein (G)
+    const NUTRIENT_FAT: i32 = 1004; // Total lipid (fat) (G)
+    const NUTRIENT_CARBS: i32 = 1005; // Carbohydrate, by difference (G)
+    const NUTRIENT_FIBER: i32 = 1079; // Fiber, total dietary (G)
+    const NUTRIENT_SUGAR: i32 = 1063; // Sugars, Total (G)
+
+    println!("Loading USDA Foundation Foods dataset from: {}", directory);
+
+    // Step 1: Load foundation_food.csv to get fdc_ids
+    let foundation_food_path = dir_path.join("foundation_food.csv");
+    let foundation_food_file = File::open(&foundation_food_path).map_err(|e| {
+        ToolboxError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Failed to open foundation_food.csv: {}", e),
+        ))
+    })?;
+
+    let mut foundation_fdc_ids = Vec::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(foundation_food_file);
+
+    for result in reader.records() {
+        let record = result.map_err(|e| {
+            ToolboxError::Other(format!("Error reading foundation_food.csv: {}", e))
+        })?;
+        if let Some(fdc_id_str) = record.get(0) {
+            if let Ok(fdc_id) = fdc_id_str.parse::<i32>() {
+                foundation_fdc_ids.push(fdc_id);
+            }
+        }
+    }
+
+    println!("Found {} foundation foods", foundation_fdc_ids.len());
+
+    // Step 2: Load food.csv to get descriptions (map fdc_id -> description)
+    let food_path = dir_path.join("food.csv");
+    let food_file = File::open(&food_path).map_err(|e| {
+        ToolboxError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Failed to open food.csv: {}", e),
+        ))
+    })?;
+
+    let mut food_descriptions: HashMap<i32, String> = HashMap::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(food_file);
+
+    for result in reader.records() {
+        let record = result.map_err(|e| {
+            ToolboxError::Other(format!("Error reading food.csv: {}", e))
+        })?;
+        if let (Some(fdc_id_str), Some(description)) = (record.get(0), record.get(2)) {
+            if let Ok(fdc_id) = fdc_id_str.parse::<i32>() {
+                food_descriptions.insert(fdc_id, description.to_string());
+            }
+        }
+    }
+
+    println!("Loaded {} food descriptions", food_descriptions.len());
+
+    // Step 3: Load food_nutrient.csv to get nutrient values (map (fdc_id, nutrient_id) -> amount)
+    let food_nutrient_path = dir_path.join("food_nutrient.csv");
+    let food_nutrient_file = File::open(&food_nutrient_path).map_err(|e| {
+        ToolboxError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Failed to open food_nutrient.csv: {}", e),
+        ))
+    })?;
+
+    let mut food_nutrients: HashMap<(i32, i32), f64> = HashMap::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(food_nutrient_file);
+
+    for result in reader.records() {
+        let record = result.map_err(|e| {
+            ToolboxError::Other(format!("Error reading food_nutrient.csv: {}", e))
+        })?;
+        if let (Some(fdc_id_str), Some(nutrient_id_str), Some(amount_str)) = 
+            (record.get(1), record.get(2), record.get(3)) {
+            if let (Ok(fdc_id), Ok(nutrient_id)) = 
+                (fdc_id_str.parse::<i32>(), nutrient_id_str.parse::<i32>()) {
+                if let Ok(amount) = amount_str.parse::<f64>() {
+                    food_nutrients.insert((fdc_id, nutrient_id), amount);
+                }
+            }
+        }
+    }
+
+    println!("Loaded {} nutrient values", food_nutrients.len());
+
+    // Step 4: Process each foundation food
+    let mut imported = 0;
+    let mut skipped = 0;
+    let mut errors = 0;
+
+    for fdc_id in foundation_fdc_ids.iter() {
+        // Get food description
+        let food_name = match food_descriptions.get(fdc_id) {
+            Some(name) => name.trim().to_string(),
+            None => {
+                if skip_errors {
+                    eprintln!("FDC ID {}: No description found", fdc_id);
+                    skipped += 1;
+                    continue;
+                } else {
+                    return Err(ToolboxError::Validation(format!(
+                        "FDC ID {}: No description found",
+                        fdc_id
+                    )));
+                }
+            }
+        };
+
+        if food_name.is_empty() {
+            if skip_errors {
+                skipped += 1;
+                continue;
+            } else {
+                return Err(ToolboxError::Validation(format!(
+                    "FDC ID {}: Empty description",
+                    fdc_id
+                )));
+            }
+        }
+
+        // Extract nutrient values
+        let calories = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_ENERGY))
+            .copied()
+            .unwrap_or(0.0);
+        let protein = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_PROTEIN))
+            .copied()
+            .unwrap_or(0.0);
+        let fat = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_FAT))
+            .copied()
+            .unwrap_or(0.0);
+        let carbs = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_CARBS))
+            .copied()
+            .unwrap_or(0.0);
+        let fiber = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_FIBER))
+            .copied();
+        let sugar = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_SUGAR))
+            .copied();
+
+        // Validate required nutrients
+        if calories == 0.0 && protein == 0.0 && carbs == 0.0 && fat == 0.0 {
+            if skip_errors {
+                eprintln!("FDC ID {} ({}): No nutritional data found", fdc_id, food_name);
+                skipped += 1;
+                continue;
+            } else {
+                return Err(ToolboxError::Validation(format!(
+                    "FDC ID {} ({}): No nutritional data found",
+                    fdc_id, food_name
+                )));
+            }
+        }
+
+        // Find or create ingredient
+        let ingredient = match NutritionService::find_or_create_ingredient(pool, &food_name).await {
+            Ok(ing) => ing,
+            Err(e) => {
+                if skip_errors {
+                    eprintln!("FDC ID {} ({}): Error creating ingredient: {}", fdc_id, food_name, e);
+                    errors += 1;
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
+        // Create or update nutritional info
+        // Convert f64 to BigDecimal via string parsing
+        let calories_bd = calories.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid calories value: {}", e))
+        })?;
+        let protein_bd = protein.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid protein value: {}", e))
+        })?;
+        let carbs_bd = carbs.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid carbs value: {}", e))
+        })?;
+        let fat_bd = fat.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid fat value: {}", e))
+        })?;
+        let fiber_bd = fiber.and_then(|f| f.to_string().parse::<BigDecimal>().ok());
+        let sugar_bd = sugar.and_then(|s| s.to_string().parse::<BigDecimal>().ok());
+
+        match NutritionService::upsert_nutritional_info(
+            pool,
+            ingredient.id,
+            calories_bd,
+            protein_bd,
+            carbs_bd,
+            fat_bd,
+            fiber_bd,
+            sugar_bd,
+        )
+        .await
+        {
+            Ok(_) => {
+                imported += 1;
+                if imported % 100 == 0 {
+                    println!("Imported {} ingredients...", imported);
+                }
+            }
+            Err(e) => {
+                if skip_errors {
+                    eprintln!("FDC ID {} ({}): Error creating nutritional info: {}", fdc_id, food_name, e);
+                    errors += 1;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    println!("\nImport complete:");
+    println!("  Imported: {}", imported);
+    if skipped > 0 {
+        println!("  Skipped: {}", skipped);
+    }
+    if errors > 0 {
+        println!("  Errors: {}", errors);
+    }
+
+    Ok(())
+}
+
+/// Import ingredients from USDA Branded Foods dataset
+async fn import_usda_branded_ingredients(
+    pool: &sqlx::PgPool,
+    directory: &str,
+    skip_errors: bool,
+    limit: Option<usize>,
+) -> Result<()> {
+    use std::collections::{HashMap, HashSet};
+
+    let dir_path = Path::new(directory);
+    
+    // USDA nutrient IDs we care about
+    const NUTRIENT_ENERGY: i32 = 1008; // Energy (KCAL)
+    const NUTRIENT_PROTEIN: i32 = 1003; // Protein (G)
+    const NUTRIENT_FAT: i32 = 1004; // Total lipid (fat) (G)
+    const NUTRIENT_CARBS: i32 = 1005; // Carbohydrate, by difference (G)
+    const NUTRIENT_FIBER: i32 = 1079; // Fiber, total dietary (G)
+    const NUTRIENT_SUGAR: i32 = 1063; // Sugars, Total (G)
+
+    println!("Loading USDA Branded Foods dataset from: {}", directory);
+
+    // Step 1: Load branded_food.csv to get fdc_ids
+    let branded_food_path = dir_path.join("branded_food.csv");
+    let branded_food_file = File::open(&branded_food_path).map_err(|e| {
+        ToolboxError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Failed to open branded_food.csv: {}", e),
+        ))
+    })?;
+
+    let mut branded_fdc_ids = Vec::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(branded_food_file);
+
+    for result in reader.records() {
+        let record = result.map_err(|e| {
+            ToolboxError::Other(format!("Error reading branded_food.csv: {}", e))
+        })?;
+        if let Some(fdc_id_str) = record.get(0) {
+            if let Ok(fdc_id) = fdc_id_str.parse::<i32>() {
+                branded_fdc_ids.push(fdc_id);
+            }
+        }
+    }
+
+    // Apply limit if specified
+    if let Some(limit_val) = limit {
+        branded_fdc_ids.truncate(limit_val);
+        println!("Limited to {} foods for import", limit_val);
+    }
+
+    // Create HashSet for efficient lookup
+    let branded_fdc_set: HashSet<i32> = branded_fdc_ids.iter().copied().collect();
+
+    println!("Found {} branded foods to import", branded_fdc_ids.len());
+
+    // Step 2: Load food.csv to get descriptions (only for branded foods)
+    let food_path = dir_path.join("food.csv");
+    let food_file = File::open(&food_path).map_err(|e| {
+        ToolboxError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Failed to open food.csv: {}", e),
+        ))
+    })?;
+
+    let mut food_descriptions: HashMap<i32, String> = HashMap::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(food_file);
+
+    let mut loaded_count = 0;
+    for result in reader.records() {
+        let record = result.map_err(|e| {
+            ToolboxError::Other(format!("Error reading food.csv: {}", e))
+        })?;
+        if let (Some(fdc_id_str), Some(data_type), Some(description)) = 
+            (record.get(0), record.get(1), record.get(2)) {
+            // Only process branded_food entries
+            if data_type == "branded_food" {
+                if let Ok(fdc_id) = fdc_id_str.parse::<i32>() {
+                    if branded_fdc_set.contains(&fdc_id) {
+                        food_descriptions.insert(fdc_id, description.to_string());
+                        loaded_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    println!("Loaded {} branded food descriptions", loaded_count);
+
+    // Step 3: Stream through food_nutrient.csv to get nutrient values
+    // Only process rows for branded foods we care about
+    let food_nutrient_path = dir_path.join("food_nutrient.csv");
+    let food_nutrient_file = File::open(&food_nutrient_path).map_err(|e| {
+        ToolboxError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Failed to open food_nutrient.csv: {}", e),
+        ))
+    })?;
+
+    let mut food_nutrients: HashMap<(i32, i32), f64> = HashMap::new();
+    let mut reader = ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(food_nutrient_file);
+
+    let mut processed_count = 0;
+    let mut relevant_rows = 0;
+    println!("Processing food_nutrient.csv (this may take a while for large datasets)...");
+
+    for result in reader.records() {
+        let record = result.map_err(|e| {
+            ToolboxError::Other(format!("Error reading food_nutrient.csv: {}", e))
+        })?;
+        
+        processed_count += 1;
+        if processed_count % 1_000_000 == 0 {
+            println!("  Processed {} million nutrient rows, matched {} relevant rows...", 
+                processed_count / 1_000_000, relevant_rows);
+        }
+
+        if let (Some(fdc_id_str), Some(nutrient_id_str), Some(amount_str)) = 
+            (record.get(1), record.get(2), record.get(3)) {
+            if let (Ok(fdc_id), Ok(nutrient_id)) = 
+                (fdc_id_str.parse::<i32>(), nutrient_id_str.parse::<i32>()) {
+                // Only process if this is a branded food we care about
+                if branded_fdc_set.contains(&fdc_id) {
+                    if let Ok(amount) = amount_str.parse::<f64>() {
+                        food_nutrients.insert((fdc_id, nutrient_id), amount);
+                        relevant_rows += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    println!("Loaded {} unique nutrient values for branded foods", food_nutrients.len());
+
+    // Step 4: Process each branded food
+    let mut imported = 0;
+    let mut skipped = 0;
+    let mut errors = 0;
+
+    for fdc_id in branded_fdc_ids.iter() {
+        // Get food description
+        let food_name = match food_descriptions.get(fdc_id) {
+            Some(name) => name.trim().to_string(),
+            None => {
+                if skip_errors {
+                    eprintln!("FDC ID {}: No description found", fdc_id);
+                    skipped += 1;
+                    continue;
+                } else {
+                    return Err(ToolboxError::Validation(format!(
+                        "FDC ID {}: No description found",
+                        fdc_id
+                    )));
+                }
+            }
+        };
+
+        if food_name.is_empty() {
+            if skip_errors {
+                skipped += 1;
+                continue;
+            } else {
+                return Err(ToolboxError::Validation(format!(
+                    "FDC ID {}: Empty description",
+                    fdc_id
+                )));
+            }
+        }
+
+        // Extract nutrient values
+        let calories = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_ENERGY))
+            .copied()
+            .unwrap_or(0.0);
+        let protein = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_PROTEIN))
+            .copied()
+            .unwrap_or(0.0);
+        let fat = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_FAT))
+            .copied()
+            .unwrap_or(0.0);
+        let carbs = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_CARBS))
+            .copied()
+            .unwrap_or(0.0);
+        let fiber = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_FIBER))
+            .copied();
+        let sugar = food_nutrients
+            .get(&(*fdc_id, NUTRIENT_SUGAR))
+            .copied();
+
+        // Validate required nutrients
+        if calories == 0.0 && protein == 0.0 && carbs == 0.0 && fat == 0.0 {
+            if skip_errors {
+                eprintln!("FDC ID {} ({}): No nutritional data found", fdc_id, food_name);
+                skipped += 1;
+                continue;
+            } else {
+                return Err(ToolboxError::Validation(format!(
+                    "FDC ID {} ({}): No nutritional data found",
+                    fdc_id, food_name
+                )));
+            }
+        }
+
+        // Find or create ingredient
+        let ingredient = match NutritionService::find_or_create_ingredient(pool, &food_name).await {
+            Ok(ing) => ing,
+            Err(e) => {
+                if skip_errors {
+                    eprintln!("FDC ID {} ({}): Error creating ingredient: {}", fdc_id, food_name, e);
+                    errors += 1;
+                    continue;
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
+        // Create or update nutritional info
+        // Convert f64 to BigDecimal via string parsing
+        let calories_bd = calories.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid calories value: {}", e))
+        })?;
+        let protein_bd = protein.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid protein value: {}", e))
+        })?;
+        let carbs_bd = carbs.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid carbs value: {}", e))
+        })?;
+        let fat_bd = fat.to_string().parse::<BigDecimal>().map_err(|e| {
+            ToolboxError::Validation(format!("Invalid fat value: {}", e))
+        })?;
+        let fiber_bd = fiber.and_then(|f| f.to_string().parse::<BigDecimal>().ok());
+        let sugar_bd = sugar.and_then(|s| s.to_string().parse::<BigDecimal>().ok());
+
+        match NutritionService::upsert_nutritional_info(
+            pool,
+            ingredient.id,
+            calories_bd,
+            protein_bd,
+            carbs_bd,
+            fat_bd,
+            fiber_bd,
+            sugar_bd,
+        )
+        .await
+        {
+            Ok(_) => {
+                imported += 1;
+                if imported % 100 == 0 {
+                    println!("Imported {} ingredients...", imported);
+                }
+            }
+            Err(e) => {
+                if skip_errors {
+                    eprintln!("FDC ID {} ({}): Error creating nutritional info: {}", fdc_id, food_name, e);
+                    errors += 1;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    println!("\nImport complete:");
+    println!("  Imported: {}", imported);
+    if skipped > 0 {
+        println!("  Skipped: {}", skipped);
+    }
+    if errors > 0 {
+        println!("  Errors: {}", errors);
+    }
+
+    Ok(())
 }
 

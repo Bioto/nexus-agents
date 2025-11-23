@@ -269,16 +269,16 @@ impl NutritionMcpServer {
     }
 
     /// Calculate nutritional information for a recipe
-    #[tool(description = "Calculate total and per-serving nutritional information for a recipe by UUID")]
+    #[tool(description = "Calculate total and per-serving nutritional information for a recipe by UUID. Optionally specify servings to calculate per-serving nutrition for a different number of servings than the recipe's default.")]
     async fn calculate_recipe_nutrition(
         &self,
-        params: Parameters<GetByIdParams>,
+        params: Parameters<CalculateNutritionParams>,
     ) -> Result<CallToolResult, McpError> {
         let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
             McpError::invalid_params(format!("Invalid UUID: {}", e), None)
         })?;
 
-        let nutrition = NutritionService::calculate_recipe_nutrition(&self.pool, uuid)
+        let nutrition = NutritionService::calculate_recipe_nutrition(&self.pool, uuid, params.0.servings)
             .await
             .map_err(convert_error)?;
 
@@ -299,13 +299,36 @@ impl NutritionMcpServer {
         }
 
         if let Some(cal_per_serving) = nutrition.per_serving_calories {
+            let servings_text = if let Some(s) = params.0.servings {
+                format!(" (for {} servings)", s)
+            } else {
+                String::new()
+            };
             output.push_str(&format!(
-                "\n\nPer Serving:\n  Calories: {}\n  Protein: {:?}g\n  Carbs: {:?}g\n  Fat: {:?}g",
+                "\n\nPer Serving{}:\n  Calories: {}\n  Protein: {:?}g\n  Carbs: {:?}g\n  Fat: {:?}g",
+                servings_text,
                 cal_per_serving,
                 nutrition.per_serving_protein_g,
                 nutrition.per_serving_carbs_g,
                 nutrition.per_serving_fat_g
             ));
+            
+            // If servings were specified, also show total for that number of servings
+            if let Some(s) = params.0.servings {
+                let total_cal = &cal_per_serving * BigDecimal::from(s);
+                let total_protein = nutrition.per_serving_protein_g.as_ref().map(|p| p * BigDecimal::from(s));
+                let total_carbs = nutrition.per_serving_carbs_g.as_ref().map(|c| c * BigDecimal::from(s));
+                let total_fat = nutrition.per_serving_fat_g.as_ref().map(|f| f * BigDecimal::from(s));
+                
+                output.push_str(&format!(
+                    "\n\nTotal for {} servings:\n  Calories: {}\n  Protein: {:?}g\n  Carbs: {:?}g\n  Fat: {:?}g",
+                    s,
+                    total_cal,
+                    total_protein,
+                    total_carbs,
+                    total_fat
+                ));
+            }
         }
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
@@ -666,7 +689,7 @@ impl NutritionMcpServer {
             uuids.iter().map(|&id| {
                 let pool = &self.pool;
                 async move {
-                    NutritionService::calculate_recipe_nutrition(pool, id).await.map_err(convert_error)
+                    NutritionService::calculate_recipe_nutrition(pool, id, None).await.map_err(convert_error)
                 }
             })
         )
@@ -1239,6 +1262,14 @@ struct CreateIngredientParams {
 struct GetByIdParams {
     /// UUID of the item
     id: String,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct CalculateNutritionParams {
+    /// UUID of the recipe
+    id: String,
+    /// Optional number of servings to calculate per-serving nutrition for. If not provided, uses the recipe's default servings.
+    servings: Option<i32>,
 }
 
 #[derive(Deserialize, Serialize, schemars::JsonSchema)]

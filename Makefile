@@ -55,3 +55,22 @@ nutrition-import:
 		exit 1; \
 	fi
 	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import $(FILE) $(if $(SKIP_ERRORS),--skip-errors,)
+
+# Usage: make nutrition-import-ingredients DIR=__test_files__/FoodData_Central_foundation_food_csv_2025-04-24
+#        make nutrition-import-ingredients DIR=__test_files__/FoodData_Central_foundation_food_csv_2025-04-24 SKIP_ERRORS=1
+nutrition-import-ingredients:
+	@if [ -z "$(DIR)" ]; then \
+		echo "Error: DIR is required. Usage: make nutrition-import-ingredients DIR=path/to/usda/csv/directory"; \
+		exit 1; \
+	fi
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import-ingredients $(DIR) $(if $(SKIP_ERRORS),--skip-errors,)
+
+# Usage: make nutrition-import-branded DIR=__test_files__/FoodData_Central_branded_food_csv_2025-04-24
+#        make nutrition-import-branded DIR=__test_files__/FoodData_Central_branded_food_csv_2025-04-24 SKIP_ERRORS=1
+#        make nutrition-import-branded DIR=__test_files__/FoodData_Central_branded_food_csv_2025-04-24 LIMIT=1000
+nutrition-import-branded:
+	@if [ -z "$(DIR)" ]; then \
+		echo "Error: DIR is required. Usage: make nutrition-import-branded DIR=path/to/usda/csv/directory [LIMIT=N]"; \
+		exit 1; \
+	fi
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import-branded-ingredients $(DIR) $(if $(SKIP_ERRORS),--skip-errors,) $(if $(LIMIT),--limit $(LIMIT),)

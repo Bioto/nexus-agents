@@ -226,12 +226,18 @@ async fn delete_recipe(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct CalculateNutritionQuery {
+    servings: Option<i32>,
+}
+
 async fn calculate_recipe_nutrition(
     Path(id): Path<String>,
+    Query(query): Query<CalculateNutritionQuery>,
     State(pool): State<PgPool>,
 ) -> std::result::Result<Json<RecipeNutrition>, ApiError> {
     let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let nutrition = NutritionService::calculate_recipe_nutrition(&pool, uuid)
+    let nutrition = NutritionService::calculate_recipe_nutrition(&pool, uuid, query.servings)
         .await
         .map_err(ApiError::from)?;
     Ok(Json(nutrition))

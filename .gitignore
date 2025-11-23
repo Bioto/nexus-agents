@@ -12,3 +12,5 @@ click-frames
 .models
 
 .sqlx
+
+__test_files__/**
