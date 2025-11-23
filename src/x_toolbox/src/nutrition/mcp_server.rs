@@ -72,71 +72,6 @@ impl NutritionMcpServer {
         ))]))
     }
 
-    /// Get ingredient by ID
-    #[tool(description = "Get ingredient details by UUID")]
-    async fn get_ingredient(
-        &self,
-        params: Parameters<GetByIdParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
-            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
-        })?;
-
-        let ingredient = NutritionService::get_ingredient(&self.pool, uuid)
-            .await
-            .map_err(convert_error)?;
-
-        let nutritional_info = NutritionService::get_nutritional_info(&self.pool, uuid)
-            .await
-            .map_err(convert_error)?;
-
-        let mut output = format!(
-            "Ingredient: {}\nID: {}\nDescription: {}\nCreated: {}",
-            ingredient.name,
-            ingredient.id,
-            ingredient.description.unwrap_or_else(|| "None".to_string()),
-            ingredient.created_at
-        );
-
-        if let Some(info) = nutritional_info {
-            output.push_str(&format!(
-                "\n\nNutritional Info (per 100g):\n  Calories: {}\n  Protein: {}g\n  Carbs: {}g\n  Fat: {}g",
-                info.calories_per_100g, info.protein_g, info.carbs_g, info.fat_g
-            ));
-            if let Some(fiber) = info.fiber_g {
-                output.push_str(&format!("\n  Fiber: {}g", fiber));
-            }
-            if let Some(sugar) = info.sugar_g {
-                output.push_str(&format!("\n  Sugar: {}g", sugar));
-            }
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    /// List all ingredients
-    #[tool(description = "List all ingredients with optional search term")]
-    async fn list_ingredients(
-        &self,
-        params: Parameters<ListIngredientsParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let ingredients = NutritionService::list_ingredients(&self.pool, params.0.search.as_deref())
-            .await
-            .map_err(convert_error)?;
-
-        let mut output = format!("Found {} ingredients:\n", ingredients.len());
-        for ingredient in ingredients {
-            output.push_str(&format!(
-                "\n- {} ({})\n  Description: {}",
-                ingredient.name,
-                ingredient.id,
-                ingredient.description.unwrap_or_else(|| "None".to_string())
-            ));
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
     /// Update an ingredient
     #[tool(description = "Update ingredient name and/or description by UUID")]
     async fn update_ingredient(
@@ -285,86 +220,6 @@ impl NutritionMcpServer {
         ))]))
     }
 
-    /// Get recipe by ID with full details
-    #[tool(description = "Get recipe details by UUID, including all ingredients and steps")]
-    async fn get_recipe(
-        &self,
-        params: Parameters<GetByIdParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
-            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
-        })?;
-
-        let recipe = NutritionService::get_recipe_with_details(&self.pool, uuid)
-            .await
-            .map_err(convert_error)?;
-
-        let mut output = format!(
-            "Recipe: {}\nID: {}\nDescription: {}\nServings: {:?}\nPrep time: {:?} minutes\nCook time: {:?} minutes\n",
-            recipe.recipe.name,
-            recipe.recipe.id,
-            recipe.recipe.description.unwrap_or_else(|| "None".to_string()),
-            recipe.recipe.servings,
-            recipe.recipe.prep_time_minutes,
-            recipe.recipe.cook_time_minutes
-        );
-
-        output.push_str("\nIngredients:\n");
-        for ing in &recipe.ingredients {
-            output.push_str(&format!(
-                "  - {} {} of {} ({})\n",
-                ing.recipe_ingredient.quantity,
-                ing.recipe_ingredient.unit,
-                ing.ingredient.name,
-                ing.ingredient.id
-            ));
-        }
-
-        output.push_str("\nSteps:\n");
-        for step in &recipe.steps {
-            output.push_str(&format!("  {}. {}\n", step.step_number, step.instruction));
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    /// List all recipes
-    #[tool(description = "List all recipes with optional search term and ingredient filter")]
-    async fn list_recipes(
-        &self,
-        params: Parameters<ListRecipesParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let ingredient_uuid = params
-            .0
-            .ingredient_id
-            .map(|id| Uuid::parse_str(&id))
-            .transpose()
-            .map_err(|e| McpError::invalid_params(format!("Invalid ingredient UUID: {}", e), None))?;
-
-        let recipes = NutritionService::list_recipes(
-            &self.pool,
-            params.0.search.as_deref(),
-            ingredient_uuid,
-        )
-        .await
-        .map_err(convert_error)?;
-
-        let mut output = format!("Found {} recipes:\n", recipes.len());
-        for recipe in recipes {
-            output.push_str(&format!(
-                "\n- {} ({})\n  Servings: {:?}, Prep: {:?} min, Cook: {:?} min\n  Description: {}",
-                recipe.name,
-                recipe.id,
-                recipe.servings,
-                recipe.prep_time_minutes,
-                recipe.cook_time_minutes,
-                recipe.description.unwrap_or_else(|| "None".to_string())
-            ));
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
     /// Update a recipe
     #[tool(description = "Update recipe metadata (name, description, servings, times). Does not modify ingredients or steps.")]
     async fn update_recipe(
@@ -450,63 +305,6 @@ impl NutritionMcpServer {
                 nutrition.per_serving_protein_g,
                 nutrition.per_serving_carbs_g,
                 nutrition.per_serving_fat_g
-            ));
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    /// Search ingredients
-    #[tool(description = "Search for ingredients by name or description")]
-    async fn search_ingredients(
-        &self,
-        params: Parameters<SearchParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let ingredients = NutritionService::list_ingredients(&self.pool, Some(&params.0.query))
-            .await
-            .map_err(convert_error)?;
-
-        let mut output = format!("Found {} ingredients matching '{}':\n", ingredients.len(), params.0.query);
-        for ingredient in ingredients {
-            output.push_str(&format!(
-                "\n- {} ({})\n  Description: {}",
-                ingredient.name,
-                ingredient.id,
-                ingredient.description.unwrap_or_else(|| "None".to_string())
-            ));
-        }
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    /// Search recipes
-    #[tool(description = "Search for recipes by name or description, optionally filter by ingredient")]
-    async fn search_recipes(
-        &self,
-        params: Parameters<SearchRecipesParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let ingredient_uuid = params
-            .0
-            .ingredient_id
-            .map(|id| Uuid::parse_str(&id))
-            .transpose()
-            .map_err(|e| McpError::invalid_params(format!("Invalid ingredient UUID: {}", e), None))?;
-
-        let recipes = NutritionService::list_recipes(
-            &self.pool,
-            Some(&params.0.query),
-            ingredient_uuid,
-        )
-        .await
-        .map_err(convert_error)?;
-
-        let mut output = format!("Found {} recipes matching '{}':\n", recipes.len(), params.0.query);
-        for recipe in recipes {
-            output.push_str(&format!(
-                "\n- {} ({})\n  Description: {}",
-                recipe.name,
-                recipe.id,
-                recipe.description.unwrap_or_else(|| "None".to_string())
             ));
         }
 
@@ -665,6 +463,767 @@ impl NutritionMcpServer {
             Content::text(format!("\nJSON representation:\n{}", json_output)),
         ]))
     }
+
+    // ========== Batch Operations ==========
+
+    /// Get multiple ingredients by IDs
+    #[tool(description = "Get multiple ingredients by their UUIDs. Returns details for all found ingredients.")]
+    async fn batch_get_ingredients(
+        &self,
+        params: Parameters<BatchGetByIdsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+
+        let uuids: Result<Vec<Uuid>, McpError> = params
+            .0
+            .ids
+            .into_iter()
+            .map(|id| {
+                Uuid::parse_str(&id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                })
+            })
+            .collect();
+
+        let uuids = uuids?;
+
+        let results: Vec<_> = join_all(
+            uuids.iter().map(|&id| {
+                let pool = &self.pool;
+                async move {
+                    NutritionService::get_ingredient(pool, id).await.map_err(convert_error)
+                }
+            })
+        )
+        .await;
+
+        let mut output = format!("Batch get ingredients ({} requested):\n\n", results.len());
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for (idx, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(ingredient) => {
+                    success_count += 1;
+                    output.push_str(&format!(
+                        "[{}] Ingredient: {}\n  ID: {}\n  Description: {}\n  Created: {}\n\n",
+                        idx + 1,
+                        ingredient.name,
+                        ingredient.id,
+                        ingredient.description.unwrap_or_else(|| "None".to_string()),
+                        ingredient.created_at
+                    ));
+                }
+                Err(e) => {
+                    error_count += 1;
+                    output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                }
+            }
+        }
+
+        output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Get multiple recipes by IDs
+    #[tool(description = "Get multiple recipes by their UUIDs. Returns details for all found recipes. Set full=true to include ingredients and steps.")]
+    async fn batch_get_recipes(
+        &self,
+        params: Parameters<BatchGetRecipesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+
+        let uuids: Result<Vec<Uuid>, McpError> = params
+            .0
+            .ids
+            .into_iter()
+            .map(|id| {
+                Uuid::parse_str(&id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                })
+            })
+            .collect();
+
+        let uuids = uuids?;
+
+        if params.0.full {
+            let results: Vec<_> = join_all(
+                uuids.iter().map(|&id| {
+                    let pool = &self.pool;
+                    async move {
+                        NutritionService::get_recipe_with_details(pool, id).await.map_err(convert_error)
+                    }
+                })
+            )
+            .await;
+
+            let mut output = format!("Batch get recipes with full details ({} requested):\n\n", results.len());
+            let mut success_count = 0;
+            let mut error_count = 0;
+
+            for (idx, result) in results.into_iter().enumerate() {
+                match result {
+                    Ok(recipe) => {
+                        success_count += 1;
+                        output.push_str(&format!(
+                            "[{}] Recipe: {}\n  ID: {}\n  Description: {}\n  Servings: {:?}\n  Prep: {:?} min, Cook: {:?} min\n",
+                            idx + 1,
+                            recipe.recipe.name,
+                            recipe.recipe.id,
+                            recipe.recipe.description.unwrap_or_else(|| "None".to_string()),
+                            recipe.recipe.servings,
+                            recipe.recipe.prep_time_minutes,
+                            recipe.recipe.cook_time_minutes
+                        ));
+                        output.push_str("  Ingredients:\n");
+                        for ing in &recipe.ingredients {
+                            output.push_str(&format!(
+                                "    - {} {} of {} ({})\n",
+                                ing.recipe_ingredient.quantity,
+                                ing.recipe_ingredient.unit,
+                                ing.ingredient.name,
+                                ing.ingredient.id
+                            ));
+                        }
+                        output.push_str("  Steps:\n");
+                        for step in &recipe.steps {
+                            output.push_str(&format!("    {}. {}\n", step.step_number, step.instruction));
+                        }
+                        output.push('\n');
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                    }
+                }
+            }
+
+            output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+            Ok(CallToolResult::success(vec![Content::text(output)]))
+        } else {
+            let results: Vec<_> = join_all(
+                uuids.iter().map(|&id| {
+                    let pool = &self.pool;
+                    async move {
+                        NutritionService::get_recipe(pool, id).await.map_err(convert_error)
+                    }
+                })
+            )
+            .await;
+
+            let mut output = format!("Batch get recipes ({} requested):\n\n", results.len());
+            let mut success_count = 0;
+            let mut error_count = 0;
+
+            for (idx, result) in results.into_iter().enumerate() {
+                match result {
+                    Ok(recipe) => {
+                        success_count += 1;
+                        output.push_str(&format!(
+                            "[{}] Recipe: {}\n  ID: {}\n  Description: {}\n  Created: {}\n\n",
+                            idx + 1,
+                            recipe.name,
+                            recipe.id,
+                            recipe.description.unwrap_or_else(|| "None".to_string()),
+                            recipe.created_at
+                        ));
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                    }
+                }
+            }
+
+            output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+            Ok(CallToolResult::success(vec![Content::text(output)]))
+        }
+    }
+
+    /// Calculate nutrition for multiple recipes
+    #[tool(description = "Calculate nutritional information for multiple recipes by their UUIDs. Returns nutrition data for all recipes.")]
+    async fn batch_calculate_nutrition(
+        &self,
+        params: Parameters<BatchGetByIdsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+
+        let uuids: Result<Vec<Uuid>, McpError> = params
+            .0
+            .ids
+            .into_iter()
+            .map(|id| {
+                Uuid::parse_str(&id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                })
+            })
+            .collect();
+
+        let uuids = uuids?;
+
+        let results: Vec<_> = join_all(
+            uuids.iter().map(|&id| {
+                let pool = &self.pool;
+                async move {
+                    NutritionService::calculate_recipe_nutrition(pool, id).await.map_err(convert_error)
+                }
+            })
+        )
+        .await;
+
+        let mut output = format!("Batch calculate nutrition ({} requested):\n\n", results.len());
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for (idx, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(nutrition) => {
+                    success_count += 1;
+                    output.push_str(&format!(
+                        "[{}] Recipe ID: {}\n  Total calories: {}\n  Total protein: {}g\n  Total carbs: {}g\n  Total fat: {}g\n",
+                        idx + 1,
+                        nutrition.recipe_id,
+                        nutrition.total_calories,
+                        nutrition.total_protein_g,
+                        nutrition.total_carbs_g,
+                        nutrition.total_fat_g
+                    ));
+                    if let Some(fiber) = nutrition.total_fiber_g {
+                        output.push_str(&format!("  Total fiber: {}g\n", fiber));
+                    }
+                    if let Some(sugar) = nutrition.total_sugar_g {
+                        output.push_str(&format!("  Total sugar: {}g\n", sugar));
+                    }
+                    if let Some(cal_per_serving) = nutrition.per_serving_calories {
+                        output.push_str(&format!("  Per serving: {} calories", cal_per_serving));
+                        if let Some(protein) = nutrition.per_serving_protein_g {
+                            output.push_str(&format!(", {}g protein", protein));
+                        }
+                        if let Some(carbs) = nutrition.per_serving_carbs_g {
+                            output.push_str(&format!(", {}g carbs", carbs));
+                        }
+                        if let Some(fat) = nutrition.per_serving_fat_g {
+                            output.push_str(&format!(", {}g fat", fat));
+                        }
+                        output.push('\n');
+                    }
+                    output.push('\n');
+                }
+                Err(e) => {
+                    error_count += 1;
+                    output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                }
+            }
+        }
+
+        output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Search ingredients with multiple queries
+    #[tool(description = "Search for ingredients using multiple search terms. Returns union of all results (unique ingredients).")]
+    async fn batch_search_ingredients(
+        &self,
+        params: Parameters<BatchSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+        use std::collections::HashSet;
+
+        let results: Vec<_> = join_all(
+            params.0.queries.iter().map(|term| {
+                let pool = &self.pool;
+                let term = term.clone();
+                async move {
+                    NutritionService::list_ingredients(pool, Some(&term)).await.map_err(convert_error)
+                }
+            })
+        )
+        .await;
+
+        let mut seen_ids = HashSet::new();
+        let mut all_ingredients = Vec::new();
+        let mut output = String::new();
+
+        for (idx, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(ingredients) => {
+                    output.push_str(&format!(
+                        "Search '{}' found {} ingredients\n",
+                        params.0.queries[idx],
+                        ingredients.len()
+                    ));
+                    for ingredient in ingredients {
+                        if seen_ids.insert(ingredient.id) {
+                            all_ingredients.push(ingredient);
+                        }
+                    }
+                }
+                Err(e) => {
+                    output.push_str(&format!("Search '{}' error: {}\n", params.0.queries[idx], e));
+                }
+            }
+        }
+
+        output.push_str(&format!("\nTotal unique ingredients found: {}\n\n", all_ingredients.len()));
+        for ingredient in all_ingredients {
+            output.push_str(&format!(
+                "- {} ({})\n  Description: {}\n",
+                ingredient.name,
+                ingredient.id,
+                ingredient.description.unwrap_or_else(|| "None".to_string())
+            ));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Search recipes with multiple queries
+    #[tool(description = "Search for recipes using multiple search terms. Returns union of all results (unique recipes). Optionally filter by ingredient ID.")]
+    async fn batch_search_recipes(
+        &self,
+        params: Parameters<BatchSearchRecipesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+        use std::collections::HashSet;
+
+        let ingredient_uuid = params
+            .0
+            .ingredient_id
+            .map(|id| Uuid::parse_str(&id))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid ingredient UUID: {}", e), None))?;
+
+        let results: Vec<_> = join_all(
+            params.0.queries.iter().map(|term| {
+                let pool = &self.pool;
+                let term = term.clone();
+                let ingredient_uuid = ingredient_uuid;
+                async move {
+                    NutritionService::list_recipes(pool, Some(&term), ingredient_uuid).await.map_err(convert_error)
+                }
+            })
+        )
+        .await;
+
+        let mut seen_ids = HashSet::new();
+        let mut all_recipes = Vec::new();
+        let mut output = String::new();
+
+        for (idx, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(recipes) => {
+                    output.push_str(&format!(
+                        "Search '{}' found {} recipes\n",
+                        params.0.queries[idx],
+                        recipes.len()
+                    ));
+                    for recipe in recipes {
+                        if seen_ids.insert(recipe.id) {
+                            all_recipes.push(recipe);
+                        }
+                    }
+                }
+                Err(e) => {
+                    output.push_str(&format!("Search '{}' error: {}\n", params.0.queries[idx], e));
+                }
+            }
+        }
+
+        output.push_str(&format!("\nTotal unique recipes found: {}\n\n", all_recipes.len()));
+        for recipe in all_recipes {
+            output.push_str(&format!(
+                "- {} ({})\n  Description: {}\n  Servings: {:?}, Prep: {:?} min, Cook: {:?} min\n",
+                recipe.name,
+                recipe.id,
+                recipe.description.unwrap_or_else(|| "None".to_string()),
+                recipe.servings,
+                recipe.prep_time_minutes,
+                recipe.cook_time_minutes
+            ));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    // ========== Meal Plan Tools ==========
+
+    /// Create a new meal plan
+    #[tool(description = "Create a new meal plan with optional name, description, dates, and template flag")]
+    async fn create_meal_plan(
+        &self,
+        params: Parameters<CreateMealPlanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use chrono::NaiveDate;
+
+        let start_date = params.0.start_date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid start_date format: {}", e), None))?;
+        let end_date = params.0.end_date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid end_date format: {}", e), None))?;
+
+        let meal_plan = NutritionService::create_meal_plan(
+            &self.pool,
+            &params.0.name,
+            params.0.description.as_deref(),
+            start_date,
+            end_date,
+            params.0.is_template,
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Created meal plan: {} (ID: {})\nTemplate: {}\nStart: {:?}\nEnd: {:?}",
+            meal_plan.name,
+            meal_plan.id,
+            meal_plan.is_template,
+            meal_plan.start_date,
+            meal_plan.end_date
+        ))]))
+    }
+
+    /// Get multiple meal plans by IDs
+    #[tool(description = "Get multiple meal plans by their UUIDs. Returns details for all found meal plans. Set full=true to include entries.")]
+    async fn batch_get_meal_plans(
+        &self,
+        params: Parameters<BatchGetMealPlansParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+
+        let uuids: Result<Vec<Uuid>, McpError> = params
+            .0
+            .ids
+            .into_iter()
+            .map(|id| {
+                Uuid::parse_str(&id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                })
+            })
+            .collect();
+
+        let uuids = uuids?;
+
+        if params.0.full {
+            let results: Vec<_> = join_all(
+                uuids.iter().map(|&id| {
+                    let pool = &self.pool;
+                    async move {
+                        NutritionService::get_meal_plan_with_entries(pool, id).await.map_err(convert_error)
+                    }
+                })
+            )
+            .await;
+
+            let mut output = format!("Batch get meal plans with entries ({} requested):\n\n", results.len());
+            let mut success_count = 0;
+            let mut error_count = 0;
+
+            for (idx, result) in results.into_iter().enumerate() {
+                match result {
+                    Ok(meal_plan) => {
+                        success_count += 1;
+                        output.push_str(&format!(
+                            "[{}] Meal Plan: {}\n  ID: {}\n  Template: {}\n  Entries: {}\n\n",
+                            idx + 1,
+                            meal_plan.meal_plan.name,
+                            meal_plan.meal_plan.id,
+                            meal_plan.meal_plan.is_template,
+                            meal_plan.entries.len()
+                        ));
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                    }
+                }
+            }
+
+            output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+            Ok(CallToolResult::success(vec![Content::text(output)]))
+        } else {
+            let results: Vec<_> = join_all(
+                uuids.iter().map(|&id| {
+                    let pool = &self.pool;
+                    async move {
+                        NutritionService::get_meal_plan(pool, id).await.map_err(convert_error)
+                    }
+                })
+            )
+            .await;
+
+            let mut output = format!("Batch get meal plans ({} requested):\n\n", results.len());
+            let mut success_count = 0;
+            let mut error_count = 0;
+
+            for (idx, result) in results.into_iter().enumerate() {
+                match result {
+                    Ok(meal_plan) => {
+                        success_count += 1;
+                        output.push_str(&format!(
+                            "[{}] Meal Plan: {}\n  ID: {}\n  Template: {}\n\n",
+                            idx + 1,
+                            meal_plan.name,
+                            meal_plan.id,
+                            meal_plan.is_template
+                        ));
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                    }
+                }
+            }
+
+            output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+            Ok(CallToolResult::success(vec![Content::text(output)]))
+        }
+    }
+
+    /// Update meal plan metadata
+    #[tool(description = "Update meal plan metadata (name, description, dates). Does not modify entries.")]
+    async fn update_meal_plan(
+        &self,
+        params: Parameters<UpdateMealPlanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use chrono::NaiveDate;
+
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        let start_date = params.0.start_date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid start_date format: {}", e), None))?;
+        let end_date = params.0.end_date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid end_date format: {}", e), None))?;
+
+        let meal_plan = NutritionService::update_meal_plan(
+            &self.pool,
+            uuid,
+            params.0.name.as_deref(),
+            params.0.description.as_deref(),
+            start_date,
+            end_date,
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated meal plan: {} ({})",
+            meal_plan.name, meal_plan.id
+        ))]))
+    }
+
+    /// Delete a meal plan
+    #[tool(description = "Delete a meal plan by UUID. This will also delete all associated entries.")]
+    async fn delete_meal_plan(
+        &self,
+        params: Parameters<GetByIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        NutritionService::delete_meal_plan(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Deleted meal plan: {}",
+            params.0.id
+        ))]))
+    }
+
+    /// Add an entry to a meal plan
+    #[tool(description = "Add a recipe entry to a meal plan. For templates, use day_of_week (0-6, Monday=0). For date-specific plans, use date (YYYY-MM-DD).")]
+    async fn add_meal_plan_entry(
+        &self,
+        params: Parameters<AddMealPlanEntryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use chrono::NaiveDate;
+
+        let meal_plan_uuid = Uuid::parse_str(&params.0.meal_plan_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid meal plan UUID: {}", e), None)
+        })?;
+        let recipe_uuid = Uuid::parse_str(&params.0.recipe_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid recipe UUID: {}", e), None)
+        })?;
+
+        let date = params.0.date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid date format: {}", e), None))?;
+
+        let entry = NutritionService::add_meal_plan_entry(
+            &self.pool,
+            meal_plan_uuid,
+            recipe_uuid,
+            &params.0.meal_type,
+            params.0.day_of_week,
+            date,
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Added entry to meal plan {}\nEntry ID: {}\nMeal type: {}\nRecipe ID: {}",
+            params.0.meal_plan_id,
+            entry.id,
+            entry.meal_type,
+            entry.recipe_id
+        ))]))
+    }
+
+    /// Remove an entry from a meal plan
+    #[tool(description = "Remove an entry from a meal plan by entry UUID")]
+    async fn remove_meal_plan_entry(
+        &self,
+        params: Parameters<RemoveMealPlanEntryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.entry_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        NutritionService::remove_meal_plan_entry(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Removed meal plan entry: {}",
+            params.0.entry_id
+        ))]))
+    }
+
+    /// List or search meal plans
+    #[tool(description = "List meal plans with optional search term and filters (template status, date range)")]
+    async fn list_meal_plans(
+        &self,
+        params: Parameters<ListMealPlansParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use chrono::NaiveDate;
+
+        let start_date = params.0.start_date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid start_date format: {}", e), None))?;
+        let end_date = params.0.end_date
+            .as_ref()
+            .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| McpError::invalid_params(format!("Invalid end_date format: {}", e), None))?;
+
+        let meal_plans = NutritionService::list_meal_plans(
+            &self.pool,
+            params.0.search.as_deref(),
+            params.0.is_template,
+            start_date,
+            end_date,
+        )
+        .await
+        .map_err(convert_error)?;
+
+        let mut output = format!("Found {} meal plans:\n\n", meal_plans.len());
+        for meal_plan in meal_plans {
+            output.push_str(&format!(
+                "- {} ({})\n  Template: {}\n",
+                meal_plan.name,
+                meal_plan.id,
+                meal_plan.is_template
+            ));
+            if let Some(desc) = &meal_plan.description {
+                output.push_str(&format!("  Description: {}\n", desc));
+            }
+            if let Some(start) = meal_plan.start_date {
+                output.push_str(&format!("  Start date: {}\n", start));
+            }
+            if let Some(end) = meal_plan.end_date {
+                output.push_str(&format!("  End date: {}\n", end));
+            }
+            output.push('\n');
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Calculate nutrition for multiple meal plans
+    #[tool(description = "Calculate nutritional information for multiple meal plans by their UUIDs. Returns nutrition data for all meal plans.")]
+    async fn batch_calculate_meal_plan_nutrition(
+        &self,
+        params: Parameters<BatchCalculateMealPlanNutritionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use futures::future::join_all;
+
+        let uuids: Result<Vec<Uuid>, McpError> = params
+            .0
+            .ids
+            .into_iter()
+            .map(|id| {
+                Uuid::parse_str(&id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                })
+            })
+            .collect();
+
+        let uuids = uuids?;
+
+        let results: Vec<_> = join_all(
+            uuids.iter().map(|&id| {
+                let pool = &self.pool;
+                async move {
+                    NutritionService::calculate_meal_plan_nutrition(pool, id).await.map_err(convert_error)
+                }
+            })
+        )
+        .await;
+
+        let mut output = format!("Batch calculate meal plan nutrition ({} requested):\n\n", results.len());
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for (idx, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(nutrition) => {
+                    success_count += 1;
+                    output.push_str(&format!(
+                        "[{}] Meal Plan ID: {}\n  Days: {}\n",
+                        idx + 1,
+                        nutrition.meal_plan_id,
+                        nutrition.daily_nutrition.len()
+                    ));
+                    if let Some(weekly) = nutrition.weekly_totals {
+                        output.push_str(&format!(
+                            "  Weekly total calories: {}\n  Average daily calories: {}\n",
+                            weekly.total_calories,
+                            weekly.average_daily_calories
+                        ));
+                    }
+                    output.push('\n');
+                }
+                Err(e) => {
+                    error_count += 1;
+                    output.push_str(&format!("[{}] Error: {}\n\n", idx + 1, e));
+                }
+            }
+        }
+
+        output.push_str(&format!("Summary: {} succeeded, {} failed", success_count, error_count));
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
 }
 
 // Parameter structs
@@ -680,12 +1239,6 @@ struct CreateIngredientParams {
 struct GetByIdParams {
     /// UUID of the item
     id: String,
-}
-
-#[derive(Deserialize, Serialize, schemars::JsonSchema)]
-struct ListIngredientsParams {
-    /// Optional search term to filter ingredients
-    search: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, schemars::JsonSchema)]
@@ -745,14 +1298,6 @@ struct CreateRecipeParams {
 }
 
 #[derive(Deserialize, Serialize, schemars::JsonSchema)]
-struct ListRecipesParams {
-    /// Optional search term to filter recipes
-    search: Option<String>,
-    /// Optional ingredient UUID to filter recipes containing this ingredient
-    ingredient_id: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, schemars::JsonSchema)]
 struct UpdateRecipeParams {
     /// UUID of the recipe
     id: String,
@@ -766,20 +1311,6 @@ struct UpdateRecipeParams {
     prep_time_minutes: Option<i32>,
     /// New cook time in minutes (optional)
     cook_time_minutes: Option<i32>,
-}
-
-#[derive(Deserialize, Serialize, schemars::JsonSchema)]
-struct SearchParams {
-    /// Search query
-    query: String,
-}
-
-#[derive(Deserialize, Serialize, schemars::JsonSchema)]
-struct SearchRecipesParams {
-    /// Search query
-    query: String,
-    /// Optional ingredient UUID to filter by
-    ingredient_id: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, schemars::JsonSchema)]
@@ -824,6 +1355,108 @@ struct RemoveRecipeStepParams {
 struct ExtractRecipeFromUrlParams {
     /// URL of the recipe page to extract
     url: String,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct BatchGetByIdsParams {
+    /// List of UUIDs to fetch
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct BatchGetRecipesParams {
+    /// List of recipe UUIDs to fetch
+    ids: Vec<String>,
+    /// Include full details (ingredients and steps)
+    full: bool,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct BatchSearchParams {
+    /// List of search queries
+    queries: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct BatchSearchRecipesParams {
+    /// List of search queries
+    queries: Vec<String>,
+    /// Optional ingredient UUID to filter by
+    ingredient_id: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct CreateMealPlanParams {
+    /// Name of the meal plan
+    name: String,
+    /// Optional description
+    description: Option<String>,
+    /// Start date (YYYY-MM-DD) - null for templates
+    start_date: Option<String>,
+    /// End date (YYYY-MM-DD) - null for templates
+    end_date: Option<String>,
+    /// Mark as template (day-of-week based)
+    is_template: bool,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct BatchGetMealPlansParams {
+    /// List of meal plan UUIDs to fetch
+    ids: Vec<String>,
+    /// Include full details (entries)
+    full: bool,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct UpdateMealPlanParams {
+    /// UUID of the meal plan
+    id: String,
+    /// New name (optional)
+    name: Option<String>,
+    /// New description (optional)
+    description: Option<String>,
+    /// New start date (YYYY-MM-DD, optional)
+    start_date: Option<String>,
+    /// New end date (YYYY-MM-DD, optional)
+    end_date: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct AddMealPlanEntryParams {
+    /// Meal plan UUID
+    meal_plan_id: String,
+    /// Recipe UUID
+    recipe_id: String,
+    /// Meal type (breakfast, lunch, dinner, snack)
+    meal_type: String,
+    /// Day of week (0-6, Monday=0) - for templates
+    day_of_week: Option<i32>,
+    /// Date (YYYY-MM-DD) - for date-specific plans
+    date: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct RemoveMealPlanEntryParams {
+    /// Entry UUID
+    entry_id: String,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct BatchCalculateMealPlanNutritionParams {
+    /// List of meal plan UUIDs
+    ids: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct ListMealPlansParams {
+    /// Optional search term to filter by name or description
+    search: Option<String>,
+    /// Filter by template status
+    is_template: Option<bool>,
+    /// Filter by start date (YYYY-MM-DD)
+    start_date: Option<String>,
+    /// Filter by end date (YYYY-MM-DD)
+    end_date: Option<String>,
 }
 
 // Error conversion helper

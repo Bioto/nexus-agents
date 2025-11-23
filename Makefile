@@ -45,3 +45,13 @@ nutrition-mcp-start:
 
 nutrition-mcp-stdio:
 	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport stdio
+
+# Nutrition CLI commands
+# Usage: make nutrition-import FILE=__test_files__/recipes.csv
+#        make nutrition-import FILE=__test_files__/recipes.csv SKIP_ERRORS=1
+nutrition-import:
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: FILE is required. Usage: make nutrition-import FILE=path/to/file.csv"; \
+		exit 1; \
+	fi
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import $(FILE) $(if $(SKIP_ERRORS),--skip-errors,)

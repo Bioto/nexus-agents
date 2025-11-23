@@ -1,4 +1,5 @@
 use crate::error::{Result, ToolboxError};
+use chrono::NaiveDate;
 use sqlx::{types::BigDecimal, PgPool};
 use uuid::Uuid;
 
@@ -48,6 +49,33 @@ impl NutritionService {
         .ok_or_else(|| ToolboxError::NotFound(format!("Ingredient with id {} not found", id)))?;
 
         Ok(ingredient)
+    }
+
+    /// Find or create an ingredient by name (case-insensitive)
+    pub async fn find_or_create_ingredient(
+        pool: &PgPool,
+        name: &str,
+    ) -> Result<Ingredient> {
+        // Try to find existing ingredient by exact name match (case-insensitive)
+        let ingredient = sqlx::query_as!(
+            Ingredient,
+            r#"
+            SELECT id, name, description, created_at, updated_at
+            FROM ingredients
+            WHERE LOWER(name) = LOWER($1)
+            LIMIT 1
+            "#,
+            name
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(ingredient) = ingredient {
+            Ok(ingredient)
+        } else {
+            // Create new ingredient if not found
+            Self::create_ingredient(pool, name, None).await
+        }
     }
 
     /// List all ingredients with optional search
@@ -610,6 +638,68 @@ impl NutritionService {
 
     // ========== Nutritional Calculation ==========
 
+    /// Convert quantity from various units to grams
+    /// This function handles common cooking units and ingredient-specific conversions
+    fn convert_to_grams(quantity: &BigDecimal, unit: &str, ingredient_name: &str) -> BigDecimal {
+        let unit_lower = unit.to_lowercase();
+        let name_lower = ingredient_name.to_lowercase();
+        
+        match unit_lower.as_str() {
+            "g" | "gram" | "grams" => quantity.clone(),
+            "kg" | "kilogram" | "kilograms" => quantity * BigDecimal::from(1000_i32),
+            "oz" | "ounce" | "ounces" => quantity * "28.3495".parse::<BigDecimal>().unwrap(),
+            "lb" | "lbs" | "pound" | "pounds" => quantity * "453.592".parse::<BigDecimal>().unwrap(),
+            "cup" | "cups" => {
+                // Ingredient-specific conversions for cups
+                if name_lower.contains("rice") {
+                    quantity * BigDecimal::from(200_i32) // ~200g per cup of uncooked rice
+                } else if name_lower.contains("oil") || name_lower.contains("olive") {
+                    quantity * "218".parse::<BigDecimal>().unwrap() // ~218g per cup of olive oil
+                } else if name_lower.contains("water") || name_lower.contains("broth") || name_lower.contains("stock") {
+                    quantity * "236.588".parse::<BigDecimal>().unwrap() // ~237g per cup of liquid
+                } else {
+                    // Default: assume similar density to water
+                    quantity * "236.588".parse::<BigDecimal>().unwrap()
+                }
+            },
+            "tbsp" | "tablespoon" | "tablespoons" => {
+                if name_lower.contains("oil") || name_lower.contains("olive") {
+                    quantity * "13.6".parse::<BigDecimal>().unwrap() // ~13.6g per tbsp of oil
+                } else {
+                    quantity * "15".parse::<BigDecimal>().unwrap() // ~15g per tbsp (general)
+                }
+            },
+            "tsp" | "teaspoon" | "teaspoons" => {
+                if name_lower.contains("oil") || name_lower.contains("olive") {
+                    quantity * "4.5".parse::<BigDecimal>().unwrap() // ~4.5g per tsp of oil
+                } else {
+                    quantity * "5".parse::<BigDecimal>().unwrap() // ~5g per tsp (general)
+                }
+            },
+            "piece" | "pieces" | "whole" | "item" | "items" => {
+                // Ingredient-specific conversions for pieces
+                if name_lower.contains("lemon") {
+                    quantity * BigDecimal::from(100_i32) // ~100g per lemon
+                } else if name_lower.contains("garlic") && (name_lower.contains("clove") || name_lower.contains("cloves")) {
+                    quantity * BigDecimal::from(3_i32) // ~3g per garlic clove
+                } else if name_lower.contains("potato") || name_lower.contains("potatoes") {
+                    quantity * BigDecimal::from(150_i32) // ~150g per medium potato
+                } else {
+                    // Default: assume 100g per piece
+                    quantity * BigDecimal::from(100_i32)
+                }
+            },
+            "clove" | "cloves" => {
+                quantity * BigDecimal::from(3_i32) // ~3g per garlic clove
+            },
+            _ => {
+                // Unknown unit - assume it's already in grams or log a warning
+                // In production, you might want to log this
+                quantity.clone()
+            }
+        }
+    }
+
     /// Calculate nutritional information for a recipe
     pub async fn calculate_recipe_nutrition(
         pool: &PgPool,
@@ -639,9 +729,14 @@ impl NutritionService {
 
         for ri in recipe_ingredients {
             if let Some(nutritional_info) = Self::get_nutritional_info(pool, ri.ingredient_id).await? {
-                // Calculate multiplier based on quantity (assuming unit is grams for now)
-                // For simplicity, we'll assume unit conversion is handled or all units are grams
-                let multiplier = &ri.quantity / &BigDecimal::from(100_i32);
+                // Get ingredient name for unit conversion
+                let ingredient = Self::get_ingredient(pool, ri.ingredient_id).await?;
+                
+                // Convert quantity to grams
+                let quantity_grams = Self::convert_to_grams(&ri.quantity, &ri.unit, &ingredient.name);
+                
+                // Calculate multiplier: quantity in grams / 100g (since nutritional info is per 100g)
+                let multiplier = &quantity_grams / &BigDecimal::from(100_i32);
                 
                 total_calories += &nutritional_info.calories_per_100g * &multiplier;
                 total_protein += &nutritional_info.protein_g * &multiplier;
@@ -840,6 +935,734 @@ Return only valid JSON, no markdown formatting."#,
             .map_err(|e| ToolboxError::Other(format!("Failed to parse extracted recipe: {}", e)))?;
 
         Ok(extracted)
+    }
+
+    // ========== Meal Plan Operations ==========
+
+    /// Create a new meal plan
+    pub async fn create_meal_plan(
+        pool: &PgPool,
+        name: &str,
+        description: Option<&str>,
+        start_date: Option<NaiveDate>,
+        end_date: Option<NaiveDate>,
+        is_template: bool,
+    ) -> Result<MealPlan> {
+        // Validate dates
+        if let (Some(start), Some(end)) = (start_date, end_date) {
+            if start > end {
+                return Err(ToolboxError::Validation(
+                    "start_date must be less than or equal to end_date".to_string(),
+                ));
+            }
+        }
+
+        let meal_plan = sqlx::query_as!(
+            MealPlan,
+            r#"
+            INSERT INTO meal_plans (name, description, start_date, end_date, is_template)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, description, start_date, end_date, is_template, created_at, updated_at
+            "#,
+            name,
+            description,
+            start_date,
+            end_date,
+            is_template
+        )
+        .fetch_one(pool)
+        .await?;
+
+        Ok(meal_plan)
+    }
+
+    /// Get meal plan by ID
+    pub async fn get_meal_plan(pool: &PgPool, id: Uuid) -> Result<MealPlan> {
+        let meal_plan = sqlx::query_as!(
+            MealPlan,
+            r#"
+            SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+            FROM meal_plans
+            WHERE id = $1
+            "#,
+            id
+        )
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| ToolboxError::NotFound(format!("Meal plan with id {} not found", id)))?;
+
+        Ok(meal_plan)
+    }
+
+    /// Get meal plan with all entries
+    pub async fn get_meal_plan_with_entries(
+        pool: &PgPool,
+        id: Uuid,
+    ) -> Result<MealPlanWithEntries> {
+        let meal_plan = Self::get_meal_plan(pool, id).await?;
+
+        // Get all entries with recipe details
+        let entries = sqlx::query_as!(
+            MealPlanEntry,
+            r#"
+            SELECT id, meal_plan_id, day_of_week, date, meal_type, recipe_id, created_at
+            FROM meal_plan_entries
+            WHERE meal_plan_id = $1
+            ORDER BY 
+                CASE 
+                    WHEN date IS NOT NULL THEN date
+                    ELSE NULL
+                END,
+                day_of_week,
+                CASE meal_type
+                    WHEN 'breakfast' THEN 1
+                    WHEN 'lunch' THEN 2
+                    WHEN 'dinner' THEN 3
+                    WHEN 'snack' THEN 4
+                    ELSE 5
+                END
+            "#,
+            id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut entries_with_recipes = Vec::new();
+        for entry in entries {
+            let recipe = Self::get_recipe(pool, entry.recipe_id).await?;
+            entries_with_recipes.push(MealPlanEntryWithRecipe {
+                entry,
+                recipe,
+            });
+        }
+
+        Ok(MealPlanWithEntries {
+            meal_plan,
+            entries: entries_with_recipes,
+        })
+    }
+
+    /// Update meal plan
+    pub async fn update_meal_plan(
+        pool: &PgPool,
+        id: Uuid,
+        name: Option<&str>,
+        description: Option<&str>,
+        start_date: Option<NaiveDate>,
+        end_date: Option<NaiveDate>,
+    ) -> Result<MealPlan> {
+        // Validate dates if both provided
+        if let (Some(start), Some(end)) = (start_date, end_date) {
+            if start > end {
+                return Err(ToolboxError::Validation(
+                    "start_date must be less than or equal to end_date".to_string(),
+                ));
+            }
+        }
+
+        let meal_plan = sqlx::query_as!(
+            MealPlan,
+            r#"
+            UPDATE meal_plans
+            SET
+                name = COALESCE($1, name),
+                description = COALESCE($2, description),
+                start_date = COALESCE($3, start_date),
+                end_date = COALESCE($4, end_date)
+            WHERE id = $5
+            RETURNING id, name, description, start_date, end_date, is_template, created_at, updated_at
+            "#,
+            name,
+            description,
+            start_date,
+            end_date,
+            id
+        )
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| ToolboxError::NotFound(format!("Meal plan with id {} not found", id)))?;
+
+        Ok(meal_plan)
+    }
+
+    /// Delete meal plan
+    pub async fn delete_meal_plan(pool: &PgPool, id: Uuid) -> Result<()> {
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM meal_plans
+            WHERE id = $1
+            "#,
+            id
+        )
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(ToolboxError::NotFound(format!(
+                "Meal plan with id {} not found",
+                id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Add entry to meal plan
+    pub async fn add_meal_plan_entry(
+        pool: &PgPool,
+        meal_plan_id: Uuid,
+        recipe_id: Uuid,
+        meal_type: &str,
+        day_of_week: Option<i32>,
+        date: Option<NaiveDate>,
+    ) -> Result<MealPlanEntry> {
+        // Validate meal type
+        if !matches!(meal_type, "breakfast" | "lunch" | "dinner" | "snack") {
+            return Err(ToolboxError::Validation(format!(
+                "Invalid meal_type: {}. Must be one of: breakfast, lunch, dinner, snack",
+                meal_type
+            )));
+        }
+
+        // Validate that either day_of_week or date is provided, but not both
+        match (day_of_week, date) {
+            (Some(_dow), Some(_)) => {
+                return Err(ToolboxError::Validation(
+                    "Cannot specify both day_of_week and date".to_string(),
+                ));
+            }
+            (None, None) => {
+                return Err(ToolboxError::Validation(
+                    "Must specify either day_of_week or date".to_string(),
+                ));
+            }
+            (Some(dow), None) if dow < 0 || dow > 6 => {
+                return Err(ToolboxError::Validation(
+                    "day_of_week must be between 0 (Monday) and 6 (Sunday)".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        // Verify meal plan exists
+        Self::get_meal_plan(pool, meal_plan_id).await?;
+
+        // Verify recipe exists
+        Self::get_recipe(pool, recipe_id).await?;
+
+        let entry = sqlx::query_as!(
+            MealPlanEntry,
+            r#"
+            INSERT INTO meal_plan_entries (meal_plan_id, recipe_id, meal_type, day_of_week, date)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, meal_plan_id, day_of_week, date, meal_type, recipe_id, created_at
+            "#,
+            meal_plan_id,
+            recipe_id,
+            meal_type,
+            day_of_week,
+            date
+        )
+        .fetch_one(pool)
+        .await?;
+
+        Ok(entry)
+    }
+
+    /// Remove entry from meal plan
+    pub async fn remove_meal_plan_entry(pool: &PgPool, entry_id: Uuid) -> Result<()> {
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM meal_plan_entries
+            WHERE id = $1
+            "#,
+            entry_id
+        )
+        .execute(pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(ToolboxError::NotFound(format!(
+                "Meal plan entry with id {} not found",
+                entry_id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// List meal plans with optional filters
+    pub async fn list_meal_plans(
+        pool: &PgPool,
+        search: Option<&str>,
+        is_template: Option<bool>,
+        start_date_filter: Option<NaiveDate>,
+        end_date_filter: Option<NaiveDate>,
+    ) -> Result<Vec<MealPlan>> {
+        let search_term = search.map(|s| format!("%{}%", s));
+        
+        let meal_plans = if let Some(search_str) = search_term {
+            if let Some(template) = is_template {
+                if let (Some(start), Some(end)) = (start_date_filter, end_date_filter) {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE is_template = $1
+                        AND (name ILIKE $2 OR description ILIKE $2)
+                        AND (start_date IS NULL OR start_date <= $3)
+                        AND (end_date IS NULL OR end_date >= $4)
+                        ORDER BY name
+                        "#,
+                        template,
+                        search_str,
+                        start,
+                        end
+                    )
+                    .fetch_all(pool)
+                    .await?
+                } else if let Some(start) = start_date_filter {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE is_template = $1
+                        AND (name ILIKE $2 OR description ILIKE $2)
+                        AND (start_date IS NULL OR start_date <= $3)
+                        ORDER BY name
+                        "#,
+                        template,
+                        search_str,
+                        start
+                    )
+                    .fetch_all(pool)
+                    .await?
+                } else if let Some(end) = end_date_filter {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE is_template = $1
+                        AND (name ILIKE $2 OR description ILIKE $2)
+                        AND (end_date IS NULL OR end_date >= $3)
+                        ORDER BY name
+                        "#,
+                        template,
+                        search_str,
+                        end
+                    )
+                    .fetch_all(pool)
+                    .await?
+                } else {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE is_template = $1
+                        AND (name ILIKE $2 OR description ILIKE $2)
+                        ORDER BY name
+                        "#,
+                        template,
+                        search_str
+                    )
+                    .fetch_all(pool)
+                    .await?
+                }
+            } else {
+                if let (Some(start), Some(end)) = (start_date_filter, end_date_filter) {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE (name ILIKE $1 OR description ILIKE $1)
+                        AND (start_date IS NULL OR start_date <= $2)
+                        AND (end_date IS NULL OR end_date >= $3)
+                        ORDER BY name
+                        "#,
+                        search_str,
+                        start,
+                        end
+                    )
+                    .fetch_all(pool)
+                    .await?
+                } else if let Some(start) = start_date_filter {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE (name ILIKE $1 OR description ILIKE $1)
+                        AND (start_date IS NULL OR start_date <= $2)
+                        ORDER BY name
+                        "#,
+                        search_str,
+                        start
+                    )
+                    .fetch_all(pool)
+                    .await?
+                } else if let Some(end) = end_date_filter {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE (name ILIKE $1 OR description ILIKE $1)
+                        AND (end_date IS NULL OR end_date >= $2)
+                        ORDER BY name
+                        "#,
+                        search_str,
+                        end
+                    )
+                    .fetch_all(pool)
+                    .await?
+                } else {
+                    sqlx::query_as!(
+                        MealPlan,
+                        r#"
+                        SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                        FROM meal_plans
+                        WHERE (name ILIKE $1 OR description ILIKE $1)
+                        ORDER BY name
+                        "#,
+                        search_str
+                    )
+                    .fetch_all(pool)
+                    .await?
+                }
+            }
+        } else if let Some(template) = is_template {
+            if let (Some(start), Some(end)) = (start_date_filter, end_date_filter) {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE is_template = $1
+                    AND (start_date IS NULL OR start_date <= $2)
+                    AND (end_date IS NULL OR end_date >= $3)
+                    ORDER BY name
+                    "#,
+                    template,
+                    start,
+                    end
+                )
+                .fetch_all(pool)
+                .await?
+            } else if let Some(start) = start_date_filter {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE is_template = $1
+                    AND (start_date IS NULL OR start_date <= $2)
+                    ORDER BY name
+                    "#,
+                    template,
+                    start
+                )
+                .fetch_all(pool)
+                .await?
+            } else if let Some(end) = end_date_filter {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE is_template = $1
+                    AND (end_date IS NULL OR end_date >= $2)
+                    ORDER BY name
+                    "#,
+                    template,
+                    end
+                )
+                .fetch_all(pool)
+                .await?
+            } else {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE is_template = $1
+                    ORDER BY name
+                    "#,
+                    template
+                )
+                .fetch_all(pool)
+                .await?
+            }
+        } else {
+            if let (Some(start), Some(end)) = (start_date_filter, end_date_filter) {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE (start_date IS NULL OR start_date <= $1)
+                    AND (end_date IS NULL OR end_date >= $2)
+                    ORDER BY name
+                    "#,
+                    start,
+                    end
+                )
+                .fetch_all(pool)
+                .await?
+            } else if let Some(start) = start_date_filter {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE (start_date IS NULL OR start_date <= $1)
+                    ORDER BY name
+                    "#,
+                    start
+                )
+                .fetch_all(pool)
+                .await?
+            } else if let Some(end) = end_date_filter {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    WHERE (end_date IS NULL OR end_date >= $1)
+                    ORDER BY name
+                    "#,
+                    end
+                )
+                .fetch_all(pool)
+                .await?
+            } else {
+                sqlx::query_as!(
+                    MealPlan,
+                    r#"
+                    SELECT id, name, description, start_date, end_date, is_template, created_at, updated_at
+                    FROM meal_plans
+                    ORDER BY name
+                    "#
+                )
+                .fetch_all(pool)
+                .await?
+            }
+        };
+
+        Ok(meal_plans)
+    }
+
+    /// Calculate nutritional information for a meal plan
+    pub async fn calculate_meal_plan_nutrition(
+        pool: &PgPool,
+        meal_plan_id: Uuid,
+    ) -> Result<MealPlanNutrition> {
+        let meal_plan = Self::get_meal_plan(pool, meal_plan_id).await?;
+
+        // Get all entries
+        let entries = sqlx::query_as!(
+            MealPlanEntry,
+            r#"
+            SELECT id, meal_plan_id, day_of_week, date, meal_type, recipe_id, created_at
+            FROM meal_plan_entries
+            WHERE meal_plan_id = $1
+            "#,
+            meal_plan_id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        // Group entries by date or day_of_week
+        use std::collections::HashMap;
+        let mut daily_map: HashMap<(Option<NaiveDate>, Option<i32>), Vec<MealNutrition>> =
+            HashMap::new();
+
+        for entry in entries {
+            let key = (entry.date, entry.day_of_week);
+            let recipe_nutrition =
+                Self::calculate_recipe_nutrition(pool, entry.recipe_id).await?;
+
+            let meal_nutrition = daily_map.entry(key).or_insert_with(Vec::new);
+
+            // Find or create meal nutrition for this meal type
+            let meal_nut = meal_nutrition
+                .iter_mut()
+                .find(|m| m.meal_type == entry.meal_type);
+
+            if let Some(meal) = meal_nut {
+                // Add to existing meal
+                meal.calories += &recipe_nutrition.total_calories;
+                meal.protein_g += &recipe_nutrition.total_protein_g;
+                meal.carbs_g += &recipe_nutrition.total_carbs_g;
+                meal.fat_g += &recipe_nutrition.total_fat_g;
+                if let Some(ref fiber) = recipe_nutrition.total_fiber_g {
+                    meal.fiber_g = Some(
+                        meal.fiber_g
+                            .as_ref()
+                            .map(|f| f.clone())
+                            .unwrap_or_else(|| BigDecimal::from(0))
+                            + fiber,
+                    );
+                }
+                if let Some(ref sugar) = recipe_nutrition.total_sugar_g {
+                    meal.sugar_g = Some(
+                        meal.sugar_g
+                            .as_ref()
+                            .map(|s| s.clone())
+                            .unwrap_or_else(|| BigDecimal::from(0))
+                            + sugar,
+                    );
+                }
+                meal.recipes.push(recipe_nutrition);
+            } else {
+                // Create new meal nutrition
+                meal_nutrition.push(MealNutrition {
+                    meal_type: entry.meal_type.clone(),
+                    calories: recipe_nutrition.total_calories.clone(),
+                    protein_g: recipe_nutrition.total_protein_g.clone(),
+                    carbs_g: recipe_nutrition.total_carbs_g.clone(),
+                    fat_g: recipe_nutrition.total_fat_g.clone(),
+                    fiber_g: recipe_nutrition.total_fiber_g.clone(),
+                    sugar_g: recipe_nutrition.total_sugar_g.clone(),
+                    recipes: vec![recipe_nutrition],
+                });
+            }
+        }
+
+        // Convert to DailyNutrition
+        let mut daily_nutrition: Vec<DailyNutrition> = daily_map
+            .into_iter()
+            .map(|((date, day_of_week), meals)| {
+                let total_calories = meals
+                    .iter()
+                    .fold(BigDecimal::from(0), |acc, m| acc + &m.calories);
+                let total_protein = meals
+                    .iter()
+                    .fold(BigDecimal::from(0), |acc, m| acc + &m.protein_g);
+                let total_carbs = meals
+                    .iter()
+                    .fold(BigDecimal::from(0), |acc, m| acc + &m.carbs_g);
+                let total_fat = meals
+                    .iter()
+                    .fold(BigDecimal::from(0), |acc, m| acc + &m.fat_g);
+                let total_fiber: Option<BigDecimal> = {
+                    let sum: BigDecimal = meals
+                        .iter()
+                        .filter_map(|m| m.fiber_g.as_ref())
+                        .fold(BigDecimal::from(0), |acc, f| acc + f);
+                    if sum > BigDecimal::from(0) {
+                        Some(sum)
+                    } else {
+                        None
+                    }
+                };
+                let total_sugar: Option<BigDecimal> = {
+                    let sum: BigDecimal = meals
+                        .iter()
+                        .filter_map(|m| m.sugar_g.as_ref())
+                        .fold(BigDecimal::from(0), |acc, s| acc + s);
+                    if sum > BigDecimal::from(0) {
+                        Some(sum)
+                    } else {
+                        None
+                    }
+                };
+
+                DailyNutrition {
+                    date,
+                    day_of_week,
+                    total_calories,
+                    total_protein_g: total_protein,
+                    total_carbs_g: total_carbs,
+                    total_fat_g: total_fat,
+                    total_fiber_g: total_fiber,
+                    total_sugar_g: total_sugar,
+                    meals,
+                }
+            })
+            .collect();
+
+        // Sort by date or day_of_week
+        daily_nutrition.sort_by(|a, b| {
+            match (a.date, b.date) {
+                (Some(ad), Some(bd)) => ad.cmp(&bd),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => {
+                    a.day_of_week
+                        .unwrap_or(7)
+                        .cmp(&b.day_of_week.unwrap_or(7))
+                }
+            }
+        });
+
+        // Calculate weekly totals if applicable
+        let weekly_totals = if meal_plan.is_template || daily_nutrition.len() >= 7 {
+            let total_calories: BigDecimal = daily_nutrition
+                .iter()
+                .fold(BigDecimal::from(0), |acc, d| acc + &d.total_calories);
+            let total_protein: BigDecimal = daily_nutrition
+                .iter()
+                .fold(BigDecimal::from(0), |acc, d| acc + &d.total_protein_g);
+            let total_carbs: BigDecimal = daily_nutrition
+                .iter()
+                .fold(BigDecimal::from(0), |acc, d| acc + &d.total_carbs_g);
+            let total_fat: BigDecimal = daily_nutrition
+                .iter()
+                .fold(BigDecimal::from(0), |acc, d| acc + &d.total_fat_g);
+            let total_fiber: Option<BigDecimal> = {
+                let sum: BigDecimal = daily_nutrition
+                    .iter()
+                    .filter_map(|d| d.total_fiber_g.as_ref())
+                    .fold(BigDecimal::from(0), |acc, f| acc + f);
+                if sum > BigDecimal::from(0) {
+                    Some(sum)
+                } else {
+                    None
+                }
+            };
+            let total_sugar: Option<BigDecimal> = {
+                let sum: BigDecimal = daily_nutrition
+                    .iter()
+                    .filter_map(|d| d.total_sugar_g.as_ref())
+                    .fold(BigDecimal::from(0), |acc, s| acc + s);
+                if sum > BigDecimal::from(0) {
+                    Some(sum)
+                } else {
+                    None
+                }
+            };
+
+            let day_count = BigDecimal::from(daily_nutrition.len() as i32);
+            let total_calories_clone = total_calories.clone();
+            let total_protein_clone = total_protein.clone();
+            let total_carbs_clone = total_carbs.clone();
+            let total_fat_clone = total_fat.clone();
+            Some(WeeklyNutrition {
+                total_calories,
+                total_protein_g: total_protein,
+                total_carbs_g: total_carbs,
+                total_fat_g: total_fat,
+                total_fiber_g: total_fiber,
+                total_sugar_g: total_sugar,
+                average_daily_calories: total_calories_clone / day_count.clone(),
+                average_daily_protein_g: total_protein_clone / day_count.clone(),
+                average_daily_carbs_g: total_carbs_clone / day_count.clone(),
+                average_daily_fat_g: total_fat_clone / day_count,
+            })
+        } else {
+            None
+        };
+
+        Ok(MealPlanNutrition {
+            meal_plan_id,
+            daily_nutrition,
+            weekly_totals,
+        })
     }
 }
 
