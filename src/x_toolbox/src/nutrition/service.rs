@@ -683,5 +683,163 @@ impl NutritionService {
             per_serving_fat_g: per_serving_fat,
         })
     }
+
+    // ========== Recipe Extraction from URL ==========
+
+    /// Extract recipe information from a URL using LLM
+    pub async fn extract_recipe_from_url(url: &str) -> Result<ExtractedRecipe> {
+        use reqwest::Client;
+        use scraper::{Html, Selector};
+        use std::env;
+
+        // Fetch HTML content
+        let client = Client::builder()
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .build()
+            .map_err(|e| ToolboxError::Other(format!("Failed to create HTTP client: {}", e)))?;
+
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to fetch URL: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(ToolboxError::Other(format!(
+                "Failed to fetch URL: HTTP {}",
+                response.status()
+            )));
+        }
+
+        let html_content = response
+            .text()
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to read response: {}", e)))?;
+
+        // Extract text from HTML (do this synchronously before any await)
+        let text_content = {
+            let document = Html::parse_document(&html_content);
+            let body_selector = Selector::parse("body").unwrap();
+            document
+                .select(&body_selector)
+                .next()
+                .map(|body| {
+                    // Extract text from body, removing script and style tags
+                    let mut text = String::new();
+                    for text_node in body.text() {
+                        let trimmed = text_node.trim();
+                        if !trimmed.is_empty() {
+                            text.push_str(trimmed);
+                            text.push(' ');
+                        }
+                    }
+                    text
+                })
+                .unwrap_or_else(|| {
+                    // Fallback: use first 10000 chars of HTML if body extraction fails
+                    html_content.chars().take(10000).collect()
+                })
+        };
+
+        // Truncate to reasonable size for LLM (keep first 50000 chars)
+        let text_for_llm = if text_content.len() > 50000 {
+            text_content.chars().take(50000).collect::<String>()
+                + "\n[... content truncated ...]"
+        } else {
+            text_content
+        };
+
+        // Call LLM API to extract recipe
+        let llm_api_key = env::var("OPENAI_API_KEY")
+            .map_err(|_| ToolboxError::Configuration(
+                "OPENAI_API_KEY environment variable not set".to_string()
+            ))?;
+
+        let llm_base_url = env::var("OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+        let model = env::var("DEFAULT_MODEL")
+            .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+        // Create prompt for recipe extraction
+        let prompt = format!(
+            r#"Extract recipe information from the following HTML content. Return a JSON object with the following structure:
+{{
+  "name": "Recipe name",
+  "description": "Optional description",
+  "servings": optional_number,
+  "prep_time_minutes": optional_number,
+  "cook_time_minutes": optional_number,
+  "ingredients": [
+    {{"name": "ingredient name", "quantity": number, "unit": "unit string"}}
+  ],
+  "steps": ["step 1", "step 2", ...]
+}}
+
+HTML content:
+{}
+
+Return only valid JSON, no markdown formatting."#,
+            text_for_llm
+        );
+
+        // Make LLM API call
+        let llm_request = serde_json::json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.1,
+            "response_format": {
+                "type": "json_object"
+            }
+        });
+
+        let llm_response = client
+            .post(&format!("{}/chat/completions", llm_base_url))
+            .header("Authorization", format!("Bearer {}", llm_api_key))
+            .header("Content-Type", "application/json")
+            .json(&llm_request)
+            .send()
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to call LLM API: {}", e)))?;
+
+        let status = llm_response.status();
+        if !status.is_success() {
+            let error_text = llm_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ToolboxError::Other(format!(
+                "LLM API error: HTTP {} - {}",
+                status,
+                error_text
+            )));
+        }
+
+        let llm_json: serde_json::Value = llm_response
+            .json()
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to parse LLM response: {}", e)))?;
+
+        // Extract the recipe JSON from LLM response
+        let recipe_json_str = llm_json
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| ToolboxError::Other("Invalid LLM response format".to_string()))?;
+
+        // Parse the extracted recipe
+        let extracted: ExtractedRecipe = serde_json::from_str(recipe_json_str)
+            .map_err(|e| ToolboxError::Other(format!("Failed to parse extracted recipe: {}", e)))?;
+
+        Ok(extracted)
+    }
 }
 

@@ -32,9 +32,15 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    let _ = dotenvy::dotenv();
+
     // Use stderr for logging/debugging - stdout is reserved for MCP protocol when using stdio
     eprintln!("Starting Nutrition MCP Server...");
     eprintln!("Transport: {}", args.transport);
+
+    println!("Environment variables loaded");   
+    println!("OPENAI_API_KEY: {}", dotenvy::var("OPENAI_API_KEY").unwrap());
+    println!("OPENAI_BASE_URL: {}", dotenvy::var("OPENAI_BASE_URL").unwrap());
 
     match args.transport.as_str() {
         "stdio" => {

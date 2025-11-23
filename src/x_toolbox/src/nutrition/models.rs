@@ -153,3 +153,23 @@ pub struct UpdateRecipeRequest {
     pub cook_time_minutes: Option<i32>,
 }
 
+/// Extracted recipe from URL (before database insertion)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedRecipe {
+    pub name: String,
+    pub description: Option<String>,
+    pub servings: Option<i32>,
+    pub prep_time_minutes: Option<i32>,
+    pub cook_time_minutes: Option<i32>,
+    pub ingredients: Vec<ExtractedIngredient>,
+    pub steps: Vec<String>,
+}
+
+/// Extracted ingredient from recipe
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedIngredient {
+    pub name: String,
+    pub quantity: f64,
+    pub unit: String,
+}
+

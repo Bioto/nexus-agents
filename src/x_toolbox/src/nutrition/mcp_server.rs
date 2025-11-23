@@ -13,6 +13,8 @@ use sqlx::{types::BigDecimal, PgPool};
 use std::sync::Arc;
 use uuid::Uuid;
 
+
+
 use super::{Database, NutritionService};
 
 /// MCP Server for nutrition module
@@ -27,6 +29,11 @@ pub struct NutritionMcpServer {
 #[tool_router]
 impl NutritionMcpServer {
     pub async fn new() -> Result<Self, ToolboxError> {
+        // Load environment variables from .env file if it exists
+        let _ = dotenvy::dotenv();
+
+        
+        
         let db = Database::new().await?;
         Ok(Self {
             pool: Arc::new(db.pool().clone()),
@@ -607,6 +614,57 @@ impl NutritionMcpServer {
             params.0.step_number, params.0.recipe_id
         ))]))
     }
+
+    /// Extract recipe from URL
+    #[tool(description = "Extract recipe information from a URL by fetching the HTML content and using an LLM to parse the recipe. Returns the extracted recipe data.")]
+    async fn extract_recipe_from_url(
+        &self,
+        params: Parameters<ExtractRecipeFromUrlParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let extracted = NutritionService::extract_recipe_from_url(&params.0.url)
+            .await
+            .map_err(convert_error)?;
+
+        let mut output = format!(
+            "Extracted Recipe: {}\n",
+            extracted.name
+        );
+
+        if let Some(desc) = &extracted.description {
+            output.push_str(&format!("Description: {}\n", desc));
+        }
+
+        if let Some(servings) = extracted.servings {
+            output.push_str(&format!("Servings: {}\n", servings));
+        }
+
+        if let Some(prep) = extracted.prep_time_minutes {
+            output.push_str(&format!("Prep time: {} minutes\n", prep));
+        }
+
+        if let Some(cook) = extracted.cook_time_minutes {
+            output.push_str(&format!("Cook time: {} minutes\n", cook));
+        }
+
+        output.push_str("\nIngredients:\n");
+        for ing in &extracted.ingredients {
+            output.push_str(&format!("  - {} {} {}\n", ing.quantity, ing.unit, ing.name));
+        }
+
+        output.push_str("\nSteps:\n");
+        for (i, step) in extracted.steps.iter().enumerate() {
+            output.push_str(&format!("  {}. {}\n", i + 1, step));
+        }
+
+        // Also return JSON for programmatic use
+        let json_output = serde_json::to_string_pretty(&extracted)
+            .unwrap_or_else(|_| "Failed to serialize recipe".to_string());
+
+        Ok(CallToolResult::success(vec![
+            Content::text(output),
+            Content::text(format!("\nJSON representation:\n{}", json_output)),
+        ]))
+    }
 }
 
 // Parameter structs
@@ -760,6 +818,12 @@ struct RemoveRecipeStepParams {
     recipe_id: String,
     /// Step number to remove
     step_number: i32,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct ExtractRecipeFromUrlParams {
+    /// URL of the recipe page to extract
+    url: String,
 }
 
 // Error conversion helper
