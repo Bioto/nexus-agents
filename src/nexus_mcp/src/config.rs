@@ -10,6 +10,10 @@ use std::sync::OnceLock;
 pub struct ServerConfig {
     /// Server name/identifier
     pub name: String,
+    /// Server type: "nexus" or "nutrition" (default: "nexus")
+    /// Determines which server implementation to use
+    #[serde(default = "default_server_type")]
+    pub server_type: String,
     /// Transport type: "stdio" or "http"
     #[serde(default = "default_transport")]
     pub transport: String,
@@ -31,6 +35,10 @@ pub struct ServerConfig {
     /// Only used when connecting to external servers via `url`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<std::collections::HashMap<String, String>>,
+}
+
+fn default_server_type() -> String {
+    "nexus".to_string()
 }
 
 fn default_transport() -> String {

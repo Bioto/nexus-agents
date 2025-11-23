@@ -1,8 +1,9 @@
-# Example: External MCP server with custom headers
-# The API key is read from the CONTEXT7_API_KEY environment variable
+# Nutrition MCP Server - local nutrition/recipe management
 [[servers]]
-name = "context7"
+name = "nutrition"
+server_type = "nutrition"
 transport = "http"
-url = "https://mcp.context7.com/mcp"
-headers = { CONTEXT7_API_KEY = "${MCP_CONTEXT_7}" }
+bind = "127.0.0.1:8002"
+path = "/mcp"
+
 

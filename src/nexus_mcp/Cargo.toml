@@ -20,3 +20,4 @@ reqwest = { workspace = true, features = ["json"] }
 dotenv = "0.15"
 thiserror = "1"
 regex = "1"
+x_toolbox = { path = "../x_toolbox" }

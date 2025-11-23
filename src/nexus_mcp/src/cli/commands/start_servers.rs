@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use x_toolbox::nutrition::mcp_server::NutritionMcpServer;
 
 fn load_dotenv() {
     dotenv::dotenv().ok();
@@ -39,24 +40,55 @@ async fn start_http_server(
     let bind_addr: SocketAddr = config.parse_bind_addr()?;
     let path = config.path.clone();
     let name = config.name.clone();
+    let server_type = config.server_type.clone();
     let name_for_logging = name.clone();
 
     eprintln!(
-        "[{}] Starting HTTP server on {} (path: {})",
-        name, bind_addr, path
+        "[{}] Starting {} HTTP server on {} (path: {})",
+        name, server_type, bind_addr, path
     );
 
-    let service: StreamableHttpService<NexusMcpServer, LocalSessionManager> =
-        StreamableHttpService::new(
-            || Ok(NexusMcpServer::new()),
-            Arc::new(LocalSessionManager::default()),
-            StreamableHttpServerConfig {
-                stateful_mode: true,
-                sse_keep_alive: None,
-            },
-        );
+    let router = match server_type.as_str() {
+        "nexus" => {
+            let service: StreamableHttpService<NexusMcpServer, LocalSessionManager> =
+                StreamableHttpService::new(
+                    || Ok(NexusMcpServer::new()),
+                    Arc::new(LocalSessionManager::default()),
+                    StreamableHttpServerConfig {
+                        stateful_mode: true,
+                        sse_keep_alive: None,
+                    },
+                );
+            axum::Router::new().nest_service(&path, service)
+        }
+        "nutrition" => {
+            // Initialize database connection for nutrition server
+            let db = x_toolbox::nutrition::Database::new().await.map_err(|e| {
+                NexusError::Config(format!("Failed to initialize nutrition database: {}", e))
+            })?;
+            let nutrition_server = NutritionMcpServer::with_database(db).await.map_err(|e| {
+                NexusError::Config(format!("Failed to create nutrition server: {}", e))
+            })?;
 
-    let router = axum::Router::new().nest_service(&path, service);
+            let service: StreamableHttpService<NutritionMcpServer, LocalSessionManager> =
+                StreamableHttpService::new(
+                    move || Ok(nutrition_server.clone()),
+                    Arc::new(LocalSessionManager::default()),
+                    StreamableHttpServerConfig {
+                        stateful_mode: true,
+                        sse_keep_alive: None,
+                    },
+                );
+            axum::Router::new().nest_service(&path, service)
+        }
+        _ => {
+            return Err(NexusError::Config(format!(
+                "Unknown server type '{}' for server '{}'. Supported types: nexus, nutrition",
+                server_type, name
+            )));
+        }
+    };
+
     let tcp_listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .map_err(|e| NexusError::Io(e))?;
