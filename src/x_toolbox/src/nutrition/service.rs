@@ -755,12 +755,12 @@ impl NutritionService {
             }
         }
 
-        // Use provided servings or fall back to recipe's default servings
-        let servings_for_calc = servings.or(recipe.servings);
-        let per_serving_calories = servings_for_calc.map(|s| total_calories.clone() / BigDecimal::from(s));
-        let per_serving_protein = servings_for_calc.map(|s| total_protein.clone() / BigDecimal::from(s));
-        let per_serving_carbs = servings_for_calc.map(|s| total_carbs.clone() / BigDecimal::from(s));
-        let per_serving_fat = servings_for_calc.map(|s| total_fat.clone() / BigDecimal::from(s));
+        // Per-serving nutrition is always based on the recipe's default servings
+        // The servings parameter is only used for calculating totals for a specific number of servings
+        let per_serving_calories = recipe.servings.map(|s| total_calories.clone() / BigDecimal::from(s));
+        let per_serving_protein = recipe.servings.map(|s| total_protein.clone() / BigDecimal::from(s));
+        let per_serving_carbs = recipe.servings.map(|s| total_carbs.clone() / BigDecimal::from(s));
+        let per_serving_fat = recipe.servings.map(|s| total_fat.clone() / BigDecimal::from(s));
 
         Ok(RecipeNutrition {
             recipe_id,

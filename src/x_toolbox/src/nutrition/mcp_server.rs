@@ -299,21 +299,15 @@ impl NutritionMcpServer {
         }
 
         if let Some(cal_per_serving) = nutrition.per_serving_calories {
-            let servings_text = if let Some(s) = params.0.servings {
-                format!(" (for {} servings)", s)
-            } else {
-                String::new()
-            };
             output.push_str(&format!(
-                "\n\nPer Serving{}:\n  Calories: {}\n  Protein: {:?}g\n  Carbs: {:?}g\n  Fat: {:?}g",
-                servings_text,
+                "\n\nPer Serving:\n  Calories: {}\n  Protein: {:?}g\n  Carbs: {:?}g\n  Fat: {:?}g",
                 cal_per_serving,
                 nutrition.per_serving_protein_g,
                 nutrition.per_serving_carbs_g,
                 nutrition.per_serving_fat_g
             ));
             
-            // If servings were specified, also show total for that number of servings
+            // If servings were specified, show total for that number of servings
             if let Some(s) = params.0.servings {
                 let total_cal = &cal_per_serving * BigDecimal::from(s);
                 let total_protein = nutrition.per_serving_protein_g.as_ref().map(|p| p * BigDecimal::from(s));
