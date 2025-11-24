@@ -40,3 +40,6 @@ DROP TRIGGER IF EXISTS update_meal_plans_updated_at ON meal_plans;
 CREATE TRIGGER update_meal_plans_updated_at BEFORE UPDATE ON meal_plans
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+
+
+
