@@ -28,6 +28,7 @@ sudo apt-get install -y \
     libssl-dev \
     ca-certificates \
     libclang-dev \
+    linux-libc-dev \
     libavcodec-dev \
     libavformat-dev \
     libavutil-dev \
@@ -57,21 +58,45 @@ for pkg in libavcodec libavformat libavutil libavfilter libavdevice libswscale l
     fi
 done
 
+# Function to find the correct package name (handles both old and new t64 naming)
+find_package() {
+    local pkg=$1
+    # Try the package name as-is first
+    if apt-cache show "$pkg" &>/dev/null; then
+        echo "$pkg"
+        return 0
+    fi
+    # Try with t64 suffix (newer Ubuntu/Debian versions)
+    if apt-cache show "${pkg}t64" &>/dev/null; then
+        echo "${pkg}t64"
+        return 0
+    fi
+    # Return original name if neither found (let apt-get handle the error)
+    echo "$pkg"
+    return 1
+}
+
 # Install runtime libraries
 # Note: libssl3 might not exist on older Ubuntu versions, so we'll try libssl1.1 or libssl1.0.0 as fallback
 SSL_RUNTIME=""
-if apt-cache show libssl3 &>/dev/null; then
-    SSL_RUNTIME="libssl3"
-elif apt-cache show libssl1.1 &>/dev/null; then
-    SSL_RUNTIME="libssl1.1"
+if apt-cache show libssl3 &>/dev/null || apt-cache show libssl3t64 &>/dev/null; then
+    SSL_RUNTIME=$(find_package "libssl3")
+elif apt-cache show libssl1.1 &>/dev/null || apt-cache show libssl1.1t64 &>/dev/null; then
+    SSL_RUNTIME=$(find_package "libssl1.1")
 else
-    SSL_RUNTIME="libssl1.0.0"
+    SSL_RUNTIME=$(find_package "libssl1.0.0")
 fi
 
-echo "Installing runtime packages: $SSL_RUNTIME, FFmpeg libraries, and audio libraries..."
+# Find runtime package names (handles t64 suffix)
+PIPEWIRE_RUNTIME=$(find_package "libpipewire-0.3-0")
+GBM_RUNTIME=$(find_package "libgbm1")
+ALSA_RUNTIME=$(find_package "libasound2")
+PULSE_RUNTIME=$(find_package "libpulse0")
+
+echo "Installing runtime packages: $SSL_RUNTIME, $PIPEWIRE_RUNTIME, $GBM_RUNTIME, $ALSA_RUNTIME, $PULSE_RUNTIME, FFmpeg libraries..."
 
 # Build the install command - only include FFMPEG_RUNTIME_PKGS if it's not empty
-INSTALL_CMD="sudo apt-get install -y $SSL_RUNTIME libpipewire-0.3-0 libgbm1 libasound2 libpulse0"
+INSTALL_CMD="sudo apt-get install -y $SSL_RUNTIME $PIPEWIRE_RUNTIME $GBM_RUNTIME $ALSA_RUNTIME $PULSE_RUNTIME"
 if [ -n "$FFMPEG_RUNTIME_PKGS" ]; then
     INSTALL_CMD="$INSTALL_CMD $FFMPEG_RUNTIME_PKGS"
 fi

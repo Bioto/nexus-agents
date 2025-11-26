@@ -1,6 +1,10 @@
 chat:
 	cargo run -- chat --stream
 
+# TTS/Moshi commands
+tts-start:
+	bash src/nexus_audio/scripts/moshi/start_tts.sh
+
 # ClickHouse commands
 clickhouse-up:
 	docker compose -f .docker/docker-compose.clickhouse.yaml up -d
@@ -25,10 +29,10 @@ nutrition-db-stop:
 	cd src/x_toolbox && docker compose down
 
 nutrition-db-reset:
-	cd src/x_toolbox && docker compose down -v && docker compose up -d && sleep 5 && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql
+	cd src/x_toolbox && docker compose down -v && docker compose up -d && sleep 5 && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql
 
 nutrition-db-migrate:
-	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql
+	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql
 
 nutrition-db-status:
 	cd src/x_toolbox && docker compose ps
@@ -37,6 +41,21 @@ nutrition-db-logs:
 	cd src/x_toolbox && docker compose logs -f
 
 nutrition-prepare-sqlx:
+	@if ! cargo sqlx --version >/dev/null 2>&1; then \
+		echo "Error: sqlx-cli is not installed. Install it with:"; \
+		echo "  cargo install sqlx-cli --locked"; \
+		exit 1; \
+	fi
+	@echo "Checking database container..."
+	@cd src/x_toolbox && docker compose ps | grep -q "Up" || { \
+		echo "Error: Database container is not running. Start it with:"; \
+		echo "  make nutrition-db-start"; \
+		exit 1; \
+	}
+	@echo "Ensuring database migrations are applied..."
+	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql 2>/dev/null || true
+	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql 2>/dev/null || true
+	@echo "Preparing sqlx query cache..."
 	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && cd src/x_toolbox && cargo sqlx prepare
 
 # Nutrition MCP Server commands

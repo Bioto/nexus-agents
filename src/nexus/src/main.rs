@@ -80,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Audio { command } => match command {
             AudioCommands::Record(args) => nexus_audio::run_record(args)?,
+            AudioCommands::Monitor(args) => nexus_audio::run_monitor(args)?,
             AudioCommands::Listen(args) => nexus_audio::run_listen(args)?,
             AudioCommands::Speak(args) => nexus_audio::run_speak(args).await?,
             AudioCommands::TestVoice(args) => nexus_audio::run_test_voice(args).await?,

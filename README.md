@@ -329,6 +329,7 @@ See `env.example` for a complete configuration template with all available optio
 
 - `DEFAULT_MODEL` - Default LLM model (default: `gpt-5-nano-2025-08-07`)
 - `OPENAI_API_KEY` - OpenAI API key (required for LLM features)
+- `OPENAI_BASE_URL` - Base URL for OpenAI-compatible API (default: `https://api.openai.com/v1`)
 - `RUST_LOG` - Log level (`trace`, `debug`, `info`, `warn`, `error`)
 
 ### Module-Specific
