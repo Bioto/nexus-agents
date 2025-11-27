@@ -39,7 +39,10 @@ sudo apt-get install -y \
     libpipewire-0.3-dev \
     libgbm-dev \
     libasound2-dev \
-    libpulse-dev
+    libpulse-dev \
+    pulseaudio-utils \
+    libgtk-3-dev \
+    libxdo-dev
 
 # Install runtime dependencies (if you want to run the binaries)
 echo "Installing runtime dependencies..."
