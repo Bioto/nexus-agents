@@ -75,21 +75,48 @@ nutrition-import:
 	fi
 	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import $(FILE) $(if $(SKIP_ERRORS),--skip-errors,)
 
-# Usage: make nutrition-import-ingredients DIR=__test_files__/FoodData_Central_foundation_food_csv_2025-04-24
-#        make nutrition-import-ingredients DIR=__test_files__/FoodData_Central_foundation_food_csv_2025-04-24 SKIP_ERRORS=1
+# Import USDA Foundation Foods from JSON
+# Usage examples:
+#   make nutrition-import-ingredients FILE=.files/FoodData_Central_foundation_food_json_2025-04-24.json
+#   make nutrition-import-ingredients FILE=.files/FoodData_Central_foundation_food_json_2025-04-24.json BATCH_SIZE=50 CONCURRENT_BATCHES=5
+#   make nutrition-import-ingredients FILE=.files/FoodData_Central_foundation_food_json_2025-04-24.json NO_SKIP_ERRORS=1
+# Options:
+#   FILE - Required: Path to Foundation Foods JSON file
+#   BATCH_SIZE - Items per batch (default: 100)
+#   CONCURRENT_BATCHES - Number of batches to process in parallel (default: auto, 2-10)
+#   NO_SKIP_ERRORS - Fail on errors instead of skipping (default: skip errors)
 nutrition-import-ingredients:
-	@if [ -z "$(DIR)" ]; then \
-		echo "Error: DIR is required. Usage: make nutrition-import-ingredients DIR=path/to/usda/csv/directory"; \
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: FILE is required."; \
+		echo "Usage: make nutrition-import-ingredients FILE=path/to/foundation_food.json [BATCH_SIZE=N] [CONCURRENT_BATCHES=N] [NO_SKIP_ERRORS=1]"; \
+		echo ""; \
+		echo "Examples:"; \
+		echo "  make nutrition-import-ingredients FILE=.files/FoodData_Central_foundation_food_json_2025-04-24.json"; \
+		echo "  make nutrition-import-ingredients FILE=.files/FoodData_Central_foundation_food_json_2025-04-24.json CONCURRENT_BATCHES=5"; \
 		exit 1; \
 	fi
-	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import-ingredients $(DIR) $(if $(SKIP_ERRORS),--skip-errors,)
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import-ingredients-json $(FILE) $(if $(NO_SKIP_ERRORS),,--skip-errors) $(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE),) $(if $(CONCURRENT_BATCHES),--concurrent-batches $(CONCURRENT_BATCHES),)
 
-# Usage: make nutrition-import-branded DIR=__test_files__/FoodData_Central_branded_food_csv_2025-04-24
-#        make nutrition-import-branded DIR=__test_files__/FoodData_Central_branded_food_csv_2025-04-24 SKIP_ERRORS=1
-#        make nutrition-import-branded DIR=__test_files__/FoodData_Central_branded_food_csv_2025-04-24 LIMIT=1000
+# Import USDA Branded Foods from JSON
+# Usage examples:
+#   make nutrition-import-branded FILE=.files/FoodData_Central_branded_food_json_2025-04-24.json
+#   make nutrition-import-branded FILE=.files/FoodData_Central_branded_food_json_2025-04-24.json LIMIT=1000
+#   make nutrition-import-branded FILE=.files/FoodData_Central_branded_food_json_2025-04-24.json BATCH_SIZE=50 CONCURRENT_BATCHES=5
+#   make nutrition-import-branded FILE=.files/FoodData_Central_branded_food_json_2025-04-24.json NO_SKIP_ERRORS=1
+# Options:
+#   FILE - Required: Path to Branded Foods JSON file
+#   LIMIT - Limit number of foods to import (useful for testing)
+#   BATCH_SIZE - Items per batch (default: 100)
+#   CONCURRENT_BATCHES - Number of batches to process in parallel (default: auto, 2-10)
+#   NO_SKIP_ERRORS - Fail on errors instead of skipping (default: skip errors)
 nutrition-import-branded:
-	@if [ -z "$(DIR)" ]; then \
-		echo "Error: DIR is required. Usage: make nutrition-import-branded DIR=path/to/usda/csv/directory [LIMIT=N]"; \
+	@if [ -z "$(FILE)" ]; then \
+		echo "Error: FILE is required."; \
+		echo "Usage: make nutrition-import-branded FILE=path/to/branded_food.json [LIMIT=N] [BATCH_SIZE=N] [CONCURRENT_BATCHES=N] [NO_SKIP_ERRORS=1]"; \
+		echo ""; \
+		echo "Examples:"; \
+		echo "  make nutrition-import-branded FILE=.files/FoodData_Central_branded_food_json_2025-04-24.json LIMIT=1000"; \
+		echo "  make nutrition-import-branded FILE=.files/FoodData_Central_branded_food_json_2025-04-24.json CONCURRENT_BATCHES=5"; \
 		exit 1; \
 	fi
-	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import-branded-ingredients $(DIR) $(if $(SKIP_ERRORS),--skip-errors,) $(if $(LIMIT),--limit $(LIMIT),)
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin x-toolbox -- nutrition import-branded-ingredients-json $(FILE) $(if $(NO_SKIP_ERRORS),,--skip-errors) $(if $(LIMIT),--limit $(LIMIT),) $(if $(BATCH_SIZE),--batch-size $(BATCH_SIZE),) $(if $(CONCURRENT_BATCHES),--concurrent-batches $(CONCURRENT_BATCHES),)
