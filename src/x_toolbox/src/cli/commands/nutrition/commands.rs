@@ -107,6 +107,16 @@ pub enum NutritionCommands {
         #[command(subcommand)]
         command: MealPlanCommand,
     },
+    /// Family member management commands
+    Family {
+        #[command(subcommand)]
+        command: FamilyCommand,
+    },
+    /// Recipe favorite management commands
+    Favorite {
+        #[command(subcommand)]
+        command: FavoriteCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -370,5 +380,115 @@ pub enum DbCommand {
     Stop,
     /// Show database status
     Status,
+}
+
+#[derive(Subcommand)]
+pub enum FamilyCommand {
+    /// Add a new family member
+    Add {
+        /// Family member name
+        name: String,
+        /// Preferences as JSON (optional)
+        #[arg(long)]
+        preferences: Option<String>,
+    },
+    /// Get family member details
+    Get {
+        /// Family member ID
+        id: String,
+        /// Include allergies
+        #[arg(long)]
+        with_allergies: bool,
+    },
+    /// List family members
+    List {
+        /// Search term (searches by name)
+        #[arg(short, long)]
+        search: Option<String>,
+    },
+    /// Update a family member
+    Update {
+        /// Family member ID
+        id: String,
+        /// New name
+        #[arg(short, long)]
+        name: Option<String>,
+        /// New preferences as JSON
+        #[arg(long)]
+        preferences: Option<String>,
+    },
+    /// Delete a family member
+    Delete {
+        /// Family member ID
+        id: String,
+    },
+    /// Add an allergy to a family member
+    AddAllergy {
+        /// Family member ID
+        #[arg(long)]
+        family_member_id: String,
+        /// Ingredient ID (allergen)
+        #[arg(long)]
+        ingredient_id: String,
+        /// Severity (mild, moderate, severe)
+        #[arg(long)]
+        severity: Option<String>,
+        /// Notes about the allergy
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Remove an allergy from a family member
+    RemoveAllergy {
+        /// Family member ID
+        #[arg(long)]
+        family_member_id: String,
+        /// Ingredient ID (allergen)
+        #[arg(long)]
+        ingredient_id: String,
+    },
+    /// Check if a recipe contains allergens for a family member
+    CheckAllergens {
+        /// Family member ID
+        #[arg(long)]
+        family_member_id: String,
+        /// Recipe ID
+        #[arg(long)]
+        recipe_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum FavoriteCommand {
+    /// Add a recipe to a family member's favorites
+    Add {
+        /// Family member ID
+        #[arg(long)]
+        family_member_id: String,
+        /// Recipe ID
+        #[arg(long)]
+        recipe_id: String,
+        /// Optional notes
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Remove a recipe from a family member's favorites
+    Remove {
+        /// Family member ID
+        #[arg(long)]
+        family_member_id: String,
+        /// Recipe ID
+        #[arg(long)]
+        recipe_id: String,
+    },
+    /// List favorite recipes for a family member
+    List {
+        /// Family member ID
+        id: String,
+    },
+    /// List family members who favorited a recipe
+    FavoritedBy {
+        /// Recipe ID
+        id: String,
+    },
 }
 

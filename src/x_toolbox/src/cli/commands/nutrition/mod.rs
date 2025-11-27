@@ -8,6 +8,7 @@ mod meal_plan;
 use crate::error::{Result, ToolboxError};
 use crate::nutrition::{Database, NutritionService};
 use clap::Args;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 pub use commands::*;
@@ -189,11 +190,152 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
         NutritionCommands::MealPlan { command } => {
             handle_meal_plan_command(pool, command).await?;
         }
+        NutritionCommands::Family { command } => {
+            handle_family_command(pool, command).await?;
+        }
+        NutritionCommands::Favorite { command } => {
+            handle_favorite_command(pool, command).await?;
+        }
         NutritionCommands::Db { .. } => {
             // Already handled above
         }
     }
 
+    Ok(())
+}
+
+async fn handle_family_command(
+    pool: &PgPool,
+    command: crate::cli::commands::nutrition::commands::FamilyCommand,
+) -> Result<()> {
+    use crate::cli::commands::nutrition::commands::FamilyCommand;
+    use serde_json;
+
+    match command {
+        FamilyCommand::Add { name, preferences } => {
+            let prefs_json = preferences
+                .map(|p| serde_json::from_str(&p))
+                .transpose()
+                .map_err(|e| ToolboxError::Validation(format!("Invalid JSON preferences: {}", e)))?;
+            let family_member = NutritionService::create_family_member(pool, &name, prefs_json).await?;
+            println!("Created family member: {} ({})", family_member.name, family_member.id);
+        }
+        FamilyCommand::Get { id, with_allergies } => {
+            let uuid = Uuid::parse_str(&id)?;
+            if with_allergies {
+                let family_member = NutritionService::get_family_member_with_allergies(pool, uuid).await?;
+                println!("Family Member: {} ({})", family_member.family_member.name, family_member.family_member.id);
+                if let Some(prefs) = family_member.family_member.preferences {
+                    println!("Preferences: {}", serde_json::to_string_pretty(&prefs)?);
+                }
+                println!("\nAllergies ({}):", family_member.allergies.len());
+                for allergy in family_member.allergies {
+                    println!("- {} (severity: {})", 
+                        allergy.ingredient.name,
+                        allergy.allergy.severity.as_deref().unwrap_or("unknown"));
+                    if let Some(notes) = allergy.allergy.notes {
+                        println!("  Notes: {}", notes);
+                    }
+                }
+            } else {
+                let family_member = NutritionService::get_family_member(pool, uuid).await?;
+                println!("Family Member: {} ({})", family_member.name, family_member.id);
+                if let Some(prefs) = family_member.preferences {
+                    println!("Preferences: {}", serde_json::to_string_pretty(&prefs)?);
+                }
+            }
+        }
+        FamilyCommand::List { search } => {
+            let family_members = NutritionService::list_family_members(pool, search.as_deref()).await?;
+            println!("Found {} family member(s):", family_members.len());
+            for fm in family_members {
+                println!("- {} ({})", fm.name, fm.id);
+            }
+        }
+        FamilyCommand::Update { id, name, preferences } => {
+            let uuid = Uuid::parse_str(&id)?;
+            let prefs_json = preferences
+                .map(|p| serde_json::from_str(&p))
+                .transpose()
+                .map_err(|e| ToolboxError::Validation(format!("Invalid JSON preferences: {}", e)))?;
+            let family_member = NutritionService::update_family_member(pool, uuid, name.as_deref(), prefs_json).await?;
+            println!("Updated family member: {} ({})", family_member.name, family_member.id);
+        }
+        FamilyCommand::Delete { id } => {
+            let uuid = Uuid::parse_str(&id)?;
+            NutritionService::delete_family_member(pool, uuid).await?;
+            println!("Deleted family member: {}", id);
+        }
+        FamilyCommand::AddAllergy { family_member_id, ingredient_id, severity, notes } => {
+            let fm_uuid = Uuid::parse_str(&family_member_id)?;
+            let ing_uuid = Uuid::parse_str(&ingredient_id)?;
+            let allergy = NutritionService::add_family_member_allergy(
+                pool, fm_uuid, ing_uuid, severity.as_deref(), notes.as_deref()
+            ).await?;
+            println!("Added allergy (ID: {})", allergy.id);
+        }
+        FamilyCommand::RemoveAllergy { family_member_id, ingredient_id } => {
+            let fm_uuid = Uuid::parse_str(&family_member_id)?;
+            let ing_uuid = Uuid::parse_str(&ingredient_id)?;
+            NutritionService::remove_family_member_allergy(pool, fm_uuid, ing_uuid).await?;
+            println!("Removed allergy");
+        }
+        FamilyCommand::CheckAllergens { family_member_id, recipe_id } => {
+            let fm_uuid = Uuid::parse_str(&family_member_id)?;
+            let recipe_uuid = Uuid::parse_str(&recipe_id)?;
+            let allergens = NutritionService::check_recipe_allergens(pool, fm_uuid, recipe_uuid).await?;
+            if allergens.is_empty() {
+                println!("Recipe is safe - no allergens found.");
+            } else {
+                println!("⚠️  WARNING: Recipe contains {} allergen(s):", allergens.len());
+                for allergen in allergens {
+                    println!("- {}", allergen.name);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_favorite_command(
+    pool: &PgPool,
+    command: crate::cli::commands::nutrition::commands::FavoriteCommand,
+) -> Result<()> {
+    use crate::cli::commands::nutrition::commands::FavoriteCommand;
+
+    match command {
+        FavoriteCommand::Add { family_member_id, recipe_id, notes } => {
+            let fm_uuid = Uuid::parse_str(&family_member_id)?;
+            let recipe_uuid = Uuid::parse_str(&recipe_id)?;
+            let favorite = NutritionService::add_recipe_favorite(pool, fm_uuid, recipe_uuid, notes.as_deref()).await?;
+            println!("Added recipe to favorites (ID: {})", favorite.id);
+        }
+        FavoriteCommand::Remove { family_member_id, recipe_id } => {
+            let fm_uuid = Uuid::parse_str(&family_member_id)?;
+            let recipe_uuid = Uuid::parse_str(&recipe_id)?;
+            NutritionService::remove_recipe_favorite(pool, fm_uuid, recipe_uuid).await?;
+            println!("Removed recipe from favorites");
+        }
+        FavoriteCommand::List { id } => {
+            let uuid = Uuid::parse_str(&id)?;
+            let favorites = NutritionService::get_family_member_favorites(pool, uuid).await?;
+            println!("Favorite recipes ({}):", favorites.len());
+            for fav in favorites {
+                println!("- {} ({})", fav.recipe.name, fav.recipe.id);
+                if let Some(notes) = fav.favorite.notes {
+                    println!("  Notes: {}", notes);
+                }
+            }
+        }
+        FavoriteCommand::FavoritedBy { id } => {
+            let uuid = Uuid::parse_str(&id)?;
+            let family_members = NutritionService::get_recipe_favorited_by(pool, uuid).await?;
+            println!("Family members who favorited this recipe ({}):", family_members.len());
+            for fm in family_members {
+                println!("- {} ({})", fm.name, fm.id);
+            }
+        }
+    }
     Ok(())
 }
 

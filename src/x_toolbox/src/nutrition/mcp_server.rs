@@ -947,13 +947,42 @@ impl NutritionMcpServer {
                     Ok(meal_plan) => {
                         success_count += 1;
                         output.push_str(&format!(
-                            "[{}] Meal Plan: {}\n  ID: {}\n  Template: {}\n  Entries: {}\n\n",
+                            "[{}] Meal Plan: {}\n  ID: {}\n  Template: {}\n  Entries: {}\n",
                             idx + 1,
                             meal_plan.meal_plan.name,
                             meal_plan.meal_plan.id,
                             meal_plan.meal_plan.is_template,
                             meal_plan.entries.len()
                         ));
+                        
+                        // Display each entry with details
+                        for entry in &meal_plan.entries {
+                            let day_info = if let Some(date) = entry.entry.date {
+                                format!("{}", date)
+                            } else if let Some(dow) = entry.entry.day_of_week {
+                                let day_name = match dow {
+                                    0 => "Monday",
+                                    1 => "Tuesday",
+                                    2 => "Wednesday",
+                                    3 => "Thursday",
+                                    4 => "Friday",
+                                    5 => "Saturday",
+                                    6 => "Sunday",
+                                    _ => "Unknown",
+                                };
+                                day_name.to_string()
+                            } else {
+                                "No date/day".to_string()
+                            };
+                            
+                            output.push_str(&format!(
+                                "    - {}: {} - {}\n",
+                                day_info,
+                                entry.entry.meal_type,
+                                entry.recipe.name
+                            ));
+                        }
+                        output.push_str("\n");
                     }
                     Err(e) => {
                         error_count += 1;
@@ -1241,6 +1270,339 @@ impl NutritionMcpServer {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    // ========== Family Member Tools ==========
+
+    /// Create a new family member with optional preferences
+    #[tool(description = "Create a new family member with optional preferences (stored as JSON). Returns the family member ID.")]
+    async fn create_family_member(
+        &self,
+        params: Parameters<CreateFamilyMemberParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let preferences = params.0.preferences.map(|p| serde_json::json!(p));
+        let family_member = NutritionService::create_family_member(
+            &self.pool,
+            &params.0.name,
+            preferences,
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Created family member: {} (ID: {})",
+            family_member.name, family_member.id
+        ))]))
+    }
+
+    /// Get family member by ID
+    #[tool(description = "Get a family member by UUID")]
+    async fn get_family_member(
+        &self,
+        params: Parameters<GetByIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        let family_member = NutritionService::get_family_member(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        let mut output = format!("Family Member: {}\nID: {}\n", family_member.name, family_member.id);
+        if let Some(prefs) = family_member.preferences {
+            output.push_str(&format!("Preferences: {}\n", serde_json::to_string_pretty(&prefs).unwrap_or_default()));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// List family members with optional search
+    #[tool(description = "List all family members, optionally filtered by search term")]
+    async fn list_family_members(
+        &self,
+        params: Parameters<ListFamilyMembersParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let family_members = NutritionService::list_family_members(
+            &self.pool,
+            params.0.search.as_deref(),
+        )
+        .await
+        .map_err(convert_error)?;
+
+        if family_members.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("No family members found.")]));
+        }
+
+        let mut output = format!("Found {} family member(s):\n\n", family_members.len());
+        for fm in family_members {
+            output.push_str(&format!("- {} (ID: {})\n", fm.name, fm.id));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Update a family member
+    #[tool(description = "Update family member name and/or preferences by UUID")]
+    async fn update_family_member(
+        &self,
+        params: Parameters<UpdateFamilyMemberParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        let preferences = params.0.preferences.map(|p| serde_json::json!(p));
+        let family_member = NutritionService::update_family_member(
+            &self.pool,
+            uuid,
+            params.0.name.as_deref(),
+            preferences,
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updated family member: {} ({})",
+            family_member.name, family_member.id
+        ))]))
+    }
+
+    /// Delete a family member
+    #[tool(description = "Delete a family member by UUID. This will also delete associated allergies and favorites.")]
+    async fn delete_family_member(
+        &self,
+        params: Parameters<GetByIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        NutritionService::delete_family_member(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Deleted family member: {}",
+            params.0.id
+        ))]))
+    }
+
+    /// Get family member with allergies
+    #[tool(description = "Get a family member with their allergies")]
+    async fn get_family_member_with_allergies(
+        &self,
+        params: Parameters<GetByIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        let family_member = NutritionService::get_family_member_with_allergies(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        let mut output = format!("Family Member: {}\nID: {}\n\n", family_member.family_member.name, family_member.family_member.id);
+        
+        if family_member.allergies.is_empty() {
+            output.push_str("No allergies recorded.\n");
+        } else {
+            output.push_str(&format!("Allergies ({}):\n", family_member.allergies.len()));
+            for allergy in family_member.allergies {
+                output.push_str(&format!(
+                    "- {} (severity: {})\n",
+                    allergy.ingredient.name,
+                    allergy.allergy.severity.as_deref().unwrap_or("unknown")
+                ));
+                if let Some(notes) = allergy.allergy.notes {
+                    output.push_str(&format!("  Notes: {}\n", notes));
+                }
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Add an allergy to a family member
+    #[tool(description = "Add an allergy (ingredient) to a family member with optional severity and notes")]
+    async fn add_family_member_allergy(
+        &self,
+        params: Parameters<AddAllergyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let family_member_id = Uuid::parse_str(&params.0.family_member_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid family member UUID: {}", e), None)
+        })?;
+        let ingredient_id = Uuid::parse_str(&params.0.ingredient_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid ingredient UUID: {}", e), None)
+        })?;
+
+        let allergy = NutritionService::add_family_member_allergy(
+            &self.pool,
+            family_member_id,
+            ingredient_id,
+            params.0.severity.as_deref(),
+            params.0.notes.as_deref(),
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Added allergy for family member {} (ID: {})",
+            params.0.family_member_id, allergy.id
+        ))]))
+    }
+
+    /// Remove an allergy from a family member
+    #[tool(description = "Remove an allergy (ingredient) from a family member")]
+    async fn remove_family_member_allergy(
+        &self,
+        params: Parameters<RemoveAllergyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let family_member_id = Uuid::parse_str(&params.0.family_member_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid family member UUID: {}", e), None)
+        })?;
+        let ingredient_id = Uuid::parse_str(&params.0.ingredient_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid ingredient UUID: {}", e), None)
+        })?;
+
+        NutritionService::remove_family_member_allergy(&self.pool, family_member_id, ingredient_id)
+            .await
+            .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text("Removed allergy")]))
+    }
+
+    /// Check if a recipe contains allergens for a family member
+    #[tool(description = "Check if a recipe contains any allergens for a specific family member")]
+    async fn check_recipe_allergens(
+        &self,
+        params: Parameters<CheckRecipeAllergensParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let family_member_id = Uuid::parse_str(&params.0.family_member_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid family member UUID: {}", e), None)
+        })?;
+        let recipe_id = Uuid::parse_str(&params.0.recipe_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid recipe UUID: {}", e), None)
+        })?;
+
+        let allergens = NutritionService::check_recipe_allergens(&self.pool, family_member_id, recipe_id)
+            .await
+            .map_err(convert_error)?;
+
+        if allergens.is_empty() {
+            Ok(CallToolResult::success(vec![Content::text("Recipe is safe - no allergens found.")]))
+        } else {
+            let mut output = format!("⚠️  WARNING: Recipe contains {} allergen(s):\n\n", allergens.len());
+            for allergen in allergens {
+                output.push_str(&format!("- {}\n", allergen.name));
+            }
+            Ok(CallToolResult::success(vec![Content::text(output)]))
+        }
+    }
+
+    // ========== Recipe Favorite Tools ==========
+
+    /// Add a recipe to a family member's favorites
+    #[tool(description = "Add a recipe to a family member's favorites with optional notes")]
+    async fn add_recipe_favorite(
+        &self,
+        params: Parameters<AddRecipeFavoriteParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let family_member_id = Uuid::parse_str(&params.0.family_member_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid family member UUID: {}", e), None)
+        })?;
+        let recipe_id = Uuid::parse_str(&params.0.recipe_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid recipe UUID: {}", e), None)
+        })?;
+
+        let favorite = NutritionService::add_recipe_favorite(
+            &self.pool,
+            family_member_id,
+            recipe_id,
+            params.0.notes.as_deref(),
+        )
+        .await
+        .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Added recipe to favorites (ID: {})",
+            favorite.id
+        ))]))
+    }
+
+    /// Remove a recipe from a family member's favorites
+    #[tool(description = "Remove a recipe from a family member's favorites")]
+    async fn remove_recipe_favorite(
+        &self,
+        params: Parameters<RemoveRecipeFavoriteParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let family_member_id = Uuid::parse_str(&params.0.family_member_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid family member UUID: {}", e), None)
+        })?;
+        let recipe_id = Uuid::parse_str(&params.0.recipe_id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid recipe UUID: {}", e), None)
+        })?;
+
+        NutritionService::remove_recipe_favorite(&self.pool, family_member_id, recipe_id)
+            .await
+            .map_err(convert_error)?;
+
+        Ok(CallToolResult::success(vec![Content::text("Removed recipe from favorites")]))
+    }
+
+    /// Get all favorite recipes for a family member
+    #[tool(description = "Get all favorite recipes for a family member")]
+    async fn get_family_member_favorites(
+        &self,
+        params: Parameters<GetByIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        let favorites = NutritionService::get_family_member_favorites(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        if favorites.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("No favorite recipes found.")]));
+        }
+
+        let mut output = format!("Favorite recipes ({}):\n\n", favorites.len());
+        for fav in favorites {
+            output.push_str(&format!("- {} (ID: {})\n", fav.recipe.name, fav.recipe.id));
+            if let Some(notes) = fav.favorite.notes {
+                output.push_str(&format!("  Notes: {}\n", notes));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Get all family members who favorited a recipe
+    #[tool(description = "Get all family members who have favorited a specific recipe")]
+    async fn get_recipe_favorited_by(
+        &self,
+        params: Parameters<GetByIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let uuid = Uuid::parse_str(&params.0.id).map_err(|e| {
+            McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+        })?;
+
+        let family_members = NutritionService::get_recipe_favorited_by(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        if family_members.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text("No family members have favorited this recipe.")]));
+        }
+
+        let mut output = format!("Family members who favorited this recipe ({}):\n\n", family_members.len());
+        for fm in family_members {
+            output.push_str(&format!("- {} (ID: {})\n", fm.name, fm.id));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
 }
 
 // Parameter structs
@@ -1482,6 +1844,77 @@ struct ListMealPlansParams {
     start_date: Option<String>,
     /// Filter by end date (YYYY-MM-DD)
     end_date: Option<String>,
+}
+
+// Family Member parameter structs
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct CreateFamilyMemberParams {
+    /// Name of the family member
+    name: String,
+    /// Optional preferences (JSON object)
+    preferences: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct UpdateFamilyMemberParams {
+    /// UUID of the family member
+    id: String,
+    /// New name (optional)
+    name: Option<String>,
+    /// New preferences (JSON object, optional)
+    preferences: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct ListFamilyMembersParams {
+    /// Optional search term to filter by name
+    search: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct AddAllergyParams {
+    /// UUID of the family member
+    family_member_id: String,
+    /// UUID of the ingredient (allergen)
+    ingredient_id: String,
+    /// Severity level (mild, moderate, severe)
+    severity: Option<String>,
+    /// Optional notes about the allergy
+    notes: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct RemoveAllergyParams {
+    /// UUID of the family member
+    family_member_id: String,
+    /// UUID of the ingredient (allergen)
+    ingredient_id: String,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct CheckRecipeAllergensParams {
+    /// UUID of the family member
+    family_member_id: String,
+    /// UUID of the recipe to check
+    recipe_id: String,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct AddRecipeFavoriteParams {
+    /// UUID of the family member
+    family_member_id: String,
+    /// UUID of the recipe
+    recipe_id: String,
+    /// Optional notes about why this is a favorite
+    notes: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct RemoveRecipeFavoriteParams {
+    /// UUID of the family member
+    family_member_id: String,
+    /// UUID of the recipe
+    recipe_id: String,
 }
 
 // Error conversion helper

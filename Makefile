@@ -29,14 +29,14 @@ nutrition-db-stop:
 	cd src/x_toolbox && docker compose down
 
 nutrition-db-reset:
-	cd src/x_toolbox && docker compose down -v && docker compose up -d && sleep 5 && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql
+	cd src/x_toolbox && docker compose down -v && docker compose up -d && sleep 5 && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql
 
 nutrition-db-migrate:
-	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql
+	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql
 
 nutrition-db-status:
 	cd src/x_toolbox && docker compose ps
-
+host.docker.internal
 nutrition-db-logs:
 	cd src/x_toolbox && docker compose logs -f
 
@@ -55,12 +55,13 @@ nutrition-prepare-sqlx:
 	@echo "Ensuring database migrations are applied..."
 	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql 2>/dev/null || true
 	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql 2>/dev/null || true
+	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql 2>/dev/null || true
 	@echo "Preparing sqlx query cache..."
 	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && cd src/x_toolbox && cargo sqlx prepare
 
 # Nutrition MCP Server commands
 nutrition-mcp-start:
-	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 127.0.0.1:8002
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 127.0.0.1:8002
 
 nutrition-mcp-stdio:
 	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport stdio

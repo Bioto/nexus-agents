@@ -51,4 +51,10 @@ impl From<rust_decimal::Error> for ToolboxError {
     }
 }
 
+impl From<serde_json::Error> for ToolboxError {
+    fn from(err: serde_json::Error) -> Self {
+        ToolboxError::Validation(format!("JSON serialization error: {}", err))
+    }
+}
+
 

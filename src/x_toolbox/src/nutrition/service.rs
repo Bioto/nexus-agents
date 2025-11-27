@@ -1,6 +1,6 @@
 use crate::error::{Result, ToolboxError};
 use chrono::NaiveDate;
-use sqlx::{types::BigDecimal, PgPool};
+use sqlx::{types::BigDecimal, types::Json, PgPool};
 use uuid::Uuid;
 
 use super::models::*;
@@ -707,7 +707,7 @@ impl NutritionService {
     pub async fn calculate_recipe_nutrition(
         pool: &PgPool,
         recipe_id: Uuid,
-        servings: Option<i32>,
+        _servings: Option<i32>,
     ) -> Result<RecipeNutrition> {
         let recipe = Self::get_recipe(pool, recipe_id).await?;
 
@@ -1669,6 +1669,395 @@ Return only valid JSON, no markdown formatting."#,
             daily_nutrition,
             weekly_totals,
         })
+    }
+
+    // ========== Family Member Operations ==========
+
+    /// Create a new family member
+    pub async fn create_family_member(
+        pool: &PgPool,
+        name: &str,
+        preferences: Option<serde_json::Value>,
+    ) -> Result<FamilyMember> {
+        let family_member = sqlx::query_as::<_, FamilyMember>(
+            r#"
+            INSERT INTO family_members (name, preferences)
+            VALUES ($1, $2)
+            RETURNING id, name, preferences, created_at, updated_at
+            "#,
+        )
+        .bind(name)
+        .bind(preferences.as_ref().map(|v| Json(v.clone())))
+        .fetch_one(pool)
+        .await?;
+
+        Ok(family_member)
+    }
+
+    /// Get family member by ID
+    pub async fn get_family_member(pool: &PgPool, id: Uuid) -> Result<FamilyMember> {
+        let family_member = sqlx::query_as::<_, FamilyMember>(
+            r#"
+            SELECT id, name, preferences, created_at, updated_at
+            FROM family_members
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| ToolboxError::NotFound(format!("Family member with id {} not found", id)))?;
+
+        Ok(family_member)
+    }
+
+    /// List all family members with optional search
+    pub async fn list_family_members(
+        pool: &PgPool,
+        search: Option<&str>,
+    ) -> Result<Vec<FamilyMember>> {
+        let family_members = if let Some(search_term) = search {
+            sqlx::query_as::<_, FamilyMember>(
+                r#"
+                SELECT id, name, preferences, created_at, updated_at
+                FROM family_members
+                WHERE name ILIKE $1
+                ORDER BY name
+                "#,
+            )
+            .bind(format!("%{}%", search_term))
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, FamilyMember>(
+                r#"
+                SELECT id, name, preferences, created_at, updated_at
+                FROM family_members
+                ORDER BY name
+                "#,
+            )
+            .fetch_all(pool)
+            .await?
+        };
+
+        Ok(family_members)
+    }
+
+    /// Update a family member
+    pub async fn update_family_member(
+        pool: &PgPool,
+        id: Uuid,
+        name: Option<&str>,
+        preferences: Option<serde_json::Value>,
+    ) -> Result<FamilyMember> {
+        if name.is_none() && preferences.is_none() {
+            return Self::get_family_member(pool, id).await;
+        }
+
+        let family_member = if name.is_some() && preferences.is_some() {
+            sqlx::query_as::<_, FamilyMember>(
+                r#"
+                UPDATE family_members
+                SET name = $1, preferences = $2
+                WHERE id = $3
+                RETURNING id, name, preferences, created_at, updated_at
+                "#,
+            )
+            .bind(name.unwrap())
+            .bind(preferences.as_ref().map(|v| Json(v.clone())))
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+        } else if name.is_some() {
+            sqlx::query_as!(
+                FamilyMember,
+                r#"
+                UPDATE family_members
+                SET name = $1
+                WHERE id = $2
+                RETURNING id, name, preferences, created_at, updated_at
+                "#,
+                name.unwrap(),
+                id
+            )
+            .fetch_optional(pool)
+            .await?
+        } else {
+            // preferences.is_some()
+            sqlx::query_as::<_, FamilyMember>(
+                r#"
+                UPDATE family_members
+                SET preferences = $1
+                WHERE id = $2
+                RETURNING id, name, preferences, created_at, updated_at
+                "#,
+            )
+            .bind(preferences.as_ref().map(|v| Json(v.clone())))
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+        }
+        .ok_or_else(|| ToolboxError::NotFound(format!("Family member with id {} not found", id)))?;
+
+        Ok(family_member)
+    }
+
+    /// Delete a family member
+    pub async fn delete_family_member(pool: &PgPool, id: Uuid) -> Result<()> {
+        let rows_affected = sqlx::query!(
+            r#"
+            DELETE FROM family_members
+            WHERE id = $1
+            "#,
+            id
+        )
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(ToolboxError::NotFound(format!(
+                "Family member with id {} not found",
+                id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get family member with allergies
+    pub async fn get_family_member_with_allergies(
+        pool: &PgPool,
+        id: Uuid,
+    ) -> Result<FamilyMemberWithAllergies> {
+        let family_member = Self::get_family_member(pool, id).await?;
+
+        let allergies = sqlx::query_as!(
+            FamilyMemberAllergy,
+            r#"
+            SELECT id, family_member_id, ingredient_id, severity, notes, created_at
+            FROM family_member_allergies
+            WHERE family_member_id = $1
+            ORDER BY created_at
+            "#,
+            id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        // Fetch ingredient details for each allergy
+        let mut allergies_with_ingredients = Vec::new();
+        for allergy in allergies {
+            let ingredient = Self::get_ingredient(pool, allergy.ingredient_id).await?;
+            allergies_with_ingredients.push(FamilyMemberAllergyWithIngredient {
+                allergy,
+                ingredient,
+            });
+        }
+
+        Ok(FamilyMemberWithAllergies {
+            family_member,
+            allergies: allergies_with_ingredients,
+        })
+    }
+
+    /// Add an allergy to a family member
+    pub async fn add_family_member_allergy(
+        pool: &PgPool,
+        family_member_id: Uuid,
+        ingredient_id: Uuid,
+        severity: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<FamilyMemberAllergy> {
+        // Verify family member and ingredient exist
+        Self::get_family_member(pool, family_member_id).await?;
+        Self::get_ingredient(pool, ingredient_id).await?;
+
+        let allergy = sqlx::query_as!(
+            FamilyMemberAllergy,
+            r#"
+            INSERT INTO family_member_allergies (family_member_id, ingredient_id, severity, notes)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (family_member_id, ingredient_id) DO UPDATE
+            SET severity = EXCLUDED.severity, notes = EXCLUDED.notes
+            RETURNING id, family_member_id, ingredient_id, severity, notes, created_at
+            "#,
+            family_member_id,
+            ingredient_id,
+            severity,
+            notes
+        )
+        .fetch_one(pool)
+        .await?;
+
+        Ok(allergy)
+    }
+
+    /// Remove an allergy from a family member
+    pub async fn remove_family_member_allergy(
+        pool: &PgPool,
+        family_member_id: Uuid,
+        ingredient_id: Uuid,
+    ) -> Result<()> {
+        let rows_affected = sqlx::query!(
+            r#"
+            DELETE FROM family_member_allergies
+            WHERE family_member_id = $1 AND ingredient_id = $2
+            "#,
+            family_member_id,
+            ingredient_id
+        )
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(ToolboxError::NotFound(format!(
+                "Allergy for ingredient {} not found for family member {}",
+                ingredient_id, family_member_id
+            )));
+        }
+
+        Ok(())
+    }
+
+    // ========== Recipe Favorite Operations ==========
+
+    /// Add a recipe to a family member's favorites
+    pub async fn add_recipe_favorite(
+        pool: &PgPool,
+        family_member_id: Uuid,
+        recipe_id: Uuid,
+        notes: Option<&str>,
+    ) -> Result<RecipeFavorite> {
+        // Verify family member and recipe exist
+        Self::get_family_member(pool, family_member_id).await?;
+        Self::get_recipe(pool, recipe_id).await?;
+
+        let favorite = sqlx::query_as!(
+            RecipeFavorite,
+            r#"
+            INSERT INTO recipe_favorites (family_member_id, recipe_id, notes)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (family_member_id, recipe_id) DO UPDATE
+            SET notes = EXCLUDED.notes
+            RETURNING id, family_member_id, recipe_id, notes, created_at
+            "#,
+            family_member_id,
+            recipe_id,
+            notes
+        )
+        .fetch_one(pool)
+        .await?;
+
+        Ok(favorite)
+    }
+
+    /// Remove a recipe from a family member's favorites
+    pub async fn remove_recipe_favorite(
+        pool: &PgPool,
+        family_member_id: Uuid,
+        recipe_id: Uuid,
+    ) -> Result<()> {
+        let rows_affected = sqlx::query!(
+            r#"
+            DELETE FROM recipe_favorites
+            WHERE family_member_id = $1 AND recipe_id = $2
+            "#,
+            family_member_id,
+            recipe_id
+        )
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(ToolboxError::NotFound(format!(
+                "Recipe {} is not in favorites for family member {}",
+                recipe_id, family_member_id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Get all favorite recipes for a family member
+    pub async fn get_family_member_favorites(
+        pool: &PgPool,
+        family_member_id: Uuid,
+    ) -> Result<Vec<RecipeFavoriteWithRecipe>> {
+        // Verify family member exists
+        Self::get_family_member(pool, family_member_id).await?;
+
+        let favorites = sqlx::query_as!(
+            RecipeFavorite,
+            r#"
+            SELECT id, family_member_id, recipe_id, notes, created_at
+            FROM recipe_favorites
+            WHERE family_member_id = $1
+            ORDER BY created_at DESC
+            "#,
+            family_member_id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        let mut favorites_with_recipes = Vec::new();
+        for favorite in favorites {
+            let recipe = Self::get_recipe(pool, favorite.recipe_id).await?;
+            favorites_with_recipes.push(RecipeFavoriteWithRecipe { favorite, recipe });
+        }
+
+        Ok(favorites_with_recipes)
+    }
+
+    /// Get all family members who favorited a recipe
+    pub async fn get_recipe_favorited_by(
+        pool: &PgPool,
+        recipe_id: Uuid,
+    ) -> Result<Vec<FamilyMember>> {
+        // Verify recipe exists
+        Self::get_recipe(pool, recipe_id).await?;
+
+        let family_members = sqlx::query_as::<_, FamilyMember>(
+            r#"
+            SELECT fm.id, fm.name, fm.preferences, fm.created_at, fm.updated_at
+            FROM family_members fm
+            INNER JOIN recipe_favorites rf ON fm.id = rf.family_member_id
+            WHERE rf.recipe_id = $1
+            ORDER BY fm.name
+            "#,
+        )
+        .bind(recipe_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(family_members)
+    }
+
+    /// Check if a recipe contains any allergens for a family member
+    pub async fn check_recipe_allergens(
+        pool: &PgPool,
+        family_member_id: Uuid,
+        recipe_id: Uuid,
+    ) -> Result<Vec<Ingredient>> {
+        let allergens = sqlx::query_as!(
+            Ingredient,
+            r#"
+            SELECT DISTINCT i.id, i.name, i.description, i.created_at, i.updated_at
+            FROM ingredients i
+            INNER JOIN family_member_allergies fma ON i.id = fma.ingredient_id
+            INNER JOIN recipe_ingredients ri ON i.id = ri.ingredient_id
+            WHERE fma.family_member_id = $1 AND ri.recipe_id = $2
+            ORDER BY i.name
+            "#,
+            family_member_id,
+            recipe_id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(allergens)
     }
 }
 

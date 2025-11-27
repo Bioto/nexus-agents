@@ -328,3 +328,96 @@ pub struct WeeklyNutrition {
     pub average_daily_fat_g: BigDecimal,
 }
 
+// ========== Family Member Models ==========
+
+/// Family member model
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct FamilyMember {
+    pub id: Uuid,
+    pub name: String,
+    pub preferences: Option<serde_json::Value>, // JSONB field for flexible preferences
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Family member allergy model
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct FamilyMemberAllergy {
+    pub id: Uuid,
+    pub family_member_id: Uuid,
+    pub ingredient_id: Uuid,
+    pub severity: Option<String>, // 'mild', 'moderate', 'severe'
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Family member allergy with ingredient details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyMemberAllergyWithIngredient {
+    #[serde(flatten)]
+    pub allergy: FamilyMemberAllergy,
+    pub ingredient: Ingredient,
+}
+
+/// Family member with allergies
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyMemberWithAllergies {
+    #[serde(flatten)]
+    pub family_member: FamilyMember,
+    pub allergies: Vec<FamilyMemberAllergyWithIngredient>,
+}
+
+/// Recipe favorite model
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct RecipeFavorite {
+    pub id: Uuid,
+    pub family_member_id: Uuid,
+    pub recipe_id: Uuid,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Recipe favorite with recipe details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeFavoriteWithRecipe {
+    #[serde(flatten)]
+    pub favorite: RecipeFavorite,
+    pub recipe: Recipe,
+}
+
+/// Family member with favorites
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyMemberWithFavorites {
+    #[serde(flatten)]
+    pub family_member: FamilyMember,
+    pub favorites: Vec<RecipeFavoriteWithRecipe>,
+}
+
+/// Request models for family members
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFamilyMemberRequest {
+    pub name: String,
+    pub preferences: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateFamilyMemberRequest {
+    pub name: Option<String>,
+    pub preferences: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddAllergyRequest {
+    pub family_member_id: Uuid,
+    pub ingredient_id: Uuid,
+    pub severity: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddRecipeFavoriteRequest {
+    pub family_member_id: Uuid,
+    pub recipe_id: Uuid,
+    pub notes: Option<String>,
+}
+
