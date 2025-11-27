@@ -36,7 +36,7 @@ nutrition-db-migrate:
 
 nutrition-db-status:
 	cd src/x_toolbox && docker compose ps
-host.docker.internal
+
 nutrition-db-logs:
 	cd src/x_toolbox && docker compose logs -f
 

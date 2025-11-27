@@ -40,3 +40,4 @@ DROP TRIGGER IF EXISTS update_family_members_updated_at ON family_members;
 CREATE TRIGGER update_family_members_updated_at BEFORE UPDATE ON family_members
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+
