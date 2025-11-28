@@ -62,6 +62,7 @@ pub struct MultiServerConfig {
 
 impl ServerConfig {
     /// Parse bind address, returning an error if invalid
+    #[must_use = "this returns the parsed address, it doesn't modify self"]
     pub fn parse_bind_addr(&self) -> Result<SocketAddr, NexusError> {
         self.bind
             .parse()
@@ -69,6 +70,7 @@ impl ServerConfig {
     }
 
     /// Validate the configuration
+    #[must_use = "validation result must be checked"]
     pub fn validate(&self) -> Result<(), NexusError> {
         match self.transport.as_str() {
             "stdio" => Ok(()),
@@ -109,6 +111,7 @@ impl ServerConfig {
     }
 
     /// Check if this is an external server (has URL)
+    #[must_use]
     pub fn is_external(&self) -> bool {
         self.url.is_some()
     }

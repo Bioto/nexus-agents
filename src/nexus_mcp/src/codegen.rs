@@ -266,7 +266,6 @@ impl CodeGenerator {
         // Include MCP client code inline
         code.push_str("# === MCP Client Implementation (inline) ===\n");
         code.push_str("import os\n");
-        code.push_str("import re\n");
         let base_url = if self.server_url.ends_with("/mcp") {
             self.server_url.trim_end_matches("/mcp")
         } else {
@@ -547,6 +546,7 @@ impl CodeGenerator {
     }
 
     /// Convert to PascalCase
+    #[must_use]
     fn to_pascal_case(&self, s: &str) -> String {
         let mut result = String::new();
         let mut capitalize = true;
@@ -554,7 +554,7 @@ impl CodeGenerator {
             if c == '_' || c == '-' {
                 capitalize = true;
             } else if capitalize {
-                result.push(c.to_uppercase().next().unwrap_or(c));
+                result.extend(c.to_uppercase());
                 capitalize = false;
             } else {
                 result.push(c);
@@ -565,6 +565,7 @@ impl CodeGenerator {
 
     /// Convert to snake_case
     /// Converts hyphens and uppercase letters to snake_case format
+    #[must_use]
     fn to_snake_case(&self, s: &str) -> String {
         let mut result = String::new();
         let mut prev_was_separator = false;
@@ -579,7 +580,7 @@ impl CodeGenerator {
                 if !prev_was_separator && i > 0 {
                     result.push('_');
                 }
-                result.push(c.to_lowercase().next().unwrap_or(c));
+                result.extend(c.to_lowercase());
                 prev_was_separator = false;
             } else {
                 result.push(c);
@@ -587,5 +588,73 @@ impl CodeGenerator {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn generator() -> CodeGenerator {
+        CodeGenerator::new("http://localhost:8000")
+    }
+
+    #[test]
+    fn test_to_snake_case_simple() {
+        let gen = generator();
+        assert_eq!(gen.to_snake_case("helloWorld"), "hello_world");
+        assert_eq!(gen.to_snake_case("HelloWorld"), "hello_world");
+        assert_eq!(gen.to_snake_case("hello"), "hello");
+    }
+
+    #[test]
+    fn test_to_snake_case_with_hyphens() {
+        let gen = generator();
+        assert_eq!(gen.to_snake_case("hello-world"), "hello_world");
+        assert_eq!(gen.to_snake_case("get-library-docs"), "get_library_docs");
+    }
+
+    #[test]
+    fn test_to_snake_case_with_underscores() {
+        let gen = generator();
+        assert_eq!(gen.to_snake_case("hello_world"), "hello_world");
+        assert_eq!(gen.to_snake_case("HELLO_WORLD"), "h_e_l_l_o_w_o_r_l_d");
+    }
+
+    #[test]
+    fn test_to_snake_case_consecutive_separators() {
+        let gen = generator();
+        assert_eq!(gen.to_snake_case("hello--world"), "hello_world");
+        assert_eq!(gen.to_snake_case("hello__world"), "hello_world");
+    }
+
+    #[test]
+    fn test_to_pascal_case_simple() {
+        let gen = generator();
+        assert_eq!(gen.to_pascal_case("hello_world"), "HelloWorld");
+        assert_eq!(gen.to_pascal_case("hello-world"), "HelloWorld");
+        assert_eq!(gen.to_pascal_case("hello"), "Hello");
+    }
+
+    #[test]
+    fn test_to_pascal_case_already_pascal() {
+        let gen = generator();
+        assert_eq!(gen.to_pascal_case("HelloWorld"), "HelloWorld");
+    }
+
+    #[test]
+    fn test_to_pascal_case_unicode() {
+        let gen = generator();
+        // German sharp s (ß) in the middle of a word stays as-is
+        assert_eq!(gen.to_pascal_case("straße"), "Straße");
+        // Test uppercase at word boundary - ß.to_uppercase() yields SS
+        assert_eq!(gen.to_pascal_case("ße_test"), "SSeTest");
+    }
+
+    #[test]
+    fn test_to_snake_case_unicode() {
+        let gen = generator();
+        // Turkish dotted I lowercases properly
+        assert_eq!(gen.to_snake_case("İstanbul"), "i̇stanbul");
     }
 }

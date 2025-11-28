@@ -1,3 +1,10 @@
+use axum::{
+    body::Body,
+    extract::State,
+    http::{header, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+};
 use clap::Parser;
 use nexus_mcp::server::NexusMcpServer;
 use rmcp::serve_server;
@@ -26,6 +33,51 @@ struct Args {
     /// Only used when transport is "http"
     #[arg(long, default_value = "/mcp")]
     path: String,
+
+    /// Bearer token for HTTP authentication (optional)
+    /// When set, clients must include "Authorization: Bearer <token>" header
+    /// Can also be set via MCP_AUTH_TOKEN environment variable
+    #[arg(long, env = "MCP_AUTH_TOKEN")]
+    auth_token: Option<String>,
+}
+
+/// Bearer token authentication middleware
+/// Returns 401 Unauthorized with WWW-Authenticate header if token is missing or invalid
+async fn bearer_auth_middleware(
+    State(expected_token): State<String>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    // Extract Authorization header
+    let auth_header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+
+    match auth_header {
+        Some(auth) if auth.starts_with("Bearer ") => {
+            let token = &auth[7..]; // Skip "Bearer " prefix
+            if token == expected_token {
+                next.run(req).await
+            } else {
+                unauthorized_response("Invalid token")
+            }
+        }
+        Some(_) => unauthorized_response("Invalid authorization scheme, expected Bearer"),
+        None => unauthorized_response("Missing Authorization header"),
+    }
+}
+
+/// Build a 401 Unauthorized response with WWW-Authenticate header per OAuth 2.1 spec
+fn unauthorized_response(error_description: &str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [
+            (header::WWW_AUTHENTICATE, format!("Bearer error=\"invalid_token\", error_description=\"{}\"", error_description)),
+        ],
+        error_description.to_string(),
+    )
+        .into_response()
 }
 
 #[tokio::main]
@@ -64,7 +116,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 );
 
-            let router = axum::Router::new().nest_service(&args.path, service);
+            // Build router with optional Bearer auth middleware
+            let router = if let Some(ref token) = args.auth_token {
+                eprintln!("Authentication enabled (Bearer token required)");
+                axum::Router::new()
+                    .nest_service(&args.path, service)
+                    .layer(middleware::from_fn_with_state(
+                        token.clone(),
+                        bearer_auth_middleware,
+                    ))
+            } else {
+                eprintln!("Authentication disabled (no --auth-token or MCP_AUTH_TOKEN set)");
+                axum::Router::new().nest_service(&args.path, service)
+            };
+
             let tcp_listener = tokio::net::TcpListener::bind(bind_addr).await?;
             let ct = CancellationToken::new();
 

@@ -10,9 +10,9 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls"] }
 tokio = { version = "1", features = ["full"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 ratatui = "0.29"
 tokio-stream = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }

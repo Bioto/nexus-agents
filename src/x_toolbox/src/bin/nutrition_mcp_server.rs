@@ -38,9 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Starting Nutrition MCP Server...");
     eprintln!("Transport: {}", args.transport);
 
-    println!("Environment variables loaded");   
-    println!("OPENAI_API_KEY: {}", dotenvy::var("OPENAI_API_KEY").unwrap());
-    println!("OPENAI_BASE_URL: {}", dotenvy::var("OPENAI_BASE_URL").unwrap());
+    // Log OpenAI config (optional, for debugging)
+    if let Ok(key) = dotenvy::var("OPENAI_API_KEY") {
+        eprintln!("OPENAI_API_KEY: {}...", &key[..key.len().min(8)]);
+    }
+    if let Ok(url) = dotenvy::var("OPENAI_BASE_URL") {
+        eprintln!("OPENAI_BASE_URL: {}", url);
+    }
 
     match args.transport.as_str() {
         "stdio" => {

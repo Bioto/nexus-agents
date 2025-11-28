@@ -1,0 +1,79 @@
+# Docker Compose for Nutrition MCP Server
+#
+# This builds ONLY the x_toolbox crate containing the nutrition MCP server.
+# No other workspace crates (nexus_*, etc.) are included in this build.
+#
+# Modules included:
+#   - x_toolbox/src/nutrition/       (mcp_server, database, service, models, config)
+#   - x_toolbox/src/error.rs
+#   - x_toolbox/src/bin/nutrition_mcp_server.rs
+#   - x_toolbox/migrations/          (PostgreSQL schema)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nutrition_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nutrition
+    ports:
+      - "5433:5432"
+    volumes:
+      - nutrition_postgres_data:/var/lib/postgresql/data
+      # Mount migrations for easy access
+      - ../src/x_toolbox/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nutrition-mcp-server:
+    build:
+      context: ..
+      dockerfile: .docker/Dockerfile.nutrition-mcp
+    container_name: nutrition_mcp_server
+    ports:
+      - "8002:8002"
+    environment:
+      # Database config - defaults connect to the postgres service in this compose
+      # Override with host env vars to connect to external database
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-nutrition}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/nutrition}
+      # Pass through from host environment (for extract_recipe_from_url tool)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Optional: Bearer token for HTTP auth
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  nutrition_postgres_data:
+
+# Usage:
+#
+# Start the stack:
+#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d
+#
+# Apply migrations (after first start):
+#   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql
+#   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql
+#   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
+#
+# View logs:
+#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml logs -f
+#
+# Stop:
+#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml down
+#
+# Stop and remove volumes:
+#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v
+

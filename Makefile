@@ -61,10 +61,34 @@ nutrition-prepare-sqlx:
 
 # Nutrition MCP Server commands
 nutrition-mcp-start:
-	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 127.0.0.1:8002
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 0.0.0.0:8002
 
 nutrition-mcp-stdio:
 	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport stdio
+
+# Docker-based Nutrition MCP Server commands
+nutrition-mcp-docker-build:
+	docker buildx build -f .docker/Dockerfile.nutrition-mcp -t nutrition-mcp-server .
+
+nutrition-mcp-docker-up:
+	docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d
+
+nutrition-mcp-docker-down:
+	docker compose -f .docker/docker-compose.nutrition-mcp.yaml down
+
+nutrition-mcp-docker-logs:
+	docker compose -f .docker/docker-compose.nutrition-mcp.yaml logs -f
+
+nutrition-mcp-docker-migrate:
+	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql && \
+	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql && \
+	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
+
+nutrition-mcp-docker-reset:
+	docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v && \
+	docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d && \
+	sleep 5 && \
+	$(MAKE) nutrition-mcp-docker-migrate
 
 # Nutrition CLI commands
 # Usage: make nutrition-import FILE=__test_files__/recipes.csv

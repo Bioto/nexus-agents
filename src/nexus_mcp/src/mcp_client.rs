@@ -148,10 +148,13 @@ impl McpClient {
             initialized_request = initialized_request.header("mcp-session-id", sid);
         }
 
-        let _ = initialized_request
+        if let Err(e) = initialized_request
             .json(&initialized_notification)
             .send()
-            .await;
+            .await
+        {
+            eprintln!("[WARN] Failed to send initialized notification: {}", e);
+        }
 
         // Step 3: Request tools list
         let tools_request = json!({
@@ -294,5 +297,132 @@ impl McpClient {
             "No 'data: ' line found in SSE response and not valid JSON. Response preview: {}",
             preview
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client() -> McpClient {
+        McpClient::new("http://localhost:8000")
+    }
+
+    #[test]
+    fn test_parse_sse_response_direct_json() {
+        let client = client();
+        let input = r#"{"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}"#;
+        let result = client.parse_sse_response(input).unwrap();
+
+        assert_eq!(result["jsonrpc"], "2.0");
+        assert_eq!(result["id"], 1);
+    }
+
+    #[test]
+    fn test_parse_sse_response_with_whitespace() {
+        let client = client();
+        let input = r#"
+            {"jsonrpc": "2.0", "id": 1, "result": {}}
+        "#;
+        let result = client.parse_sse_response(input).unwrap();
+
+        assert_eq!(result["jsonrpc"], "2.0");
+    }
+
+    #[test]
+    fn test_parse_sse_response_sse_format() {
+        let client = client();
+        let input = "data: {\"jsonrpc\": \"2.0\", \"id\": 1, \"result\": {\"tools\": []}}";
+        let result = client.parse_sse_response(input).unwrap();
+
+        assert_eq!(result["jsonrpc"], "2.0");
+        assert!(result["result"]["tools"].is_array());
+    }
+
+    #[test]
+    fn test_parse_sse_response_sse_with_event_lines() {
+        let client = client();
+        let input = "event: message\ndata: {\"jsonrpc\": \"2.0\", \"id\": 1}\n\n";
+        let result = client.parse_sse_response(input).unwrap();
+
+        assert_eq!(result["jsonrpc"], "2.0");
+    }
+
+    #[test]
+    fn test_parse_sse_response_multiple_data_lines() {
+        let client = client();
+        // Some servers split JSON across multiple data lines
+        let input = "data: {\"jsonrpc\": \"2.0\",\ndata:  \"id\": 1}";
+        let result = client.parse_sse_response(input).unwrap();
+
+        assert_eq!(result["jsonrpc"], "2.0");
+        assert_eq!(result["id"], 1);
+    }
+
+    #[test]
+    fn test_parse_sse_response_invalid_json() {
+        let client = client();
+        let input = "this is not json at all";
+        let result = client.parse_sse_response(input);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, NexusError::Parse(_)));
+    }
+
+    #[test]
+    fn test_parse_sse_response_empty_data_line() {
+        let client = client();
+        let input = "data: ";
+        let result = client.parse_sse_response(input);
+
+        // Empty data line should fail to parse
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_tool_definition() {
+        let client = client();
+        let tool_json = json!({
+            "name": "test_tool",
+            "description": "A test tool",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "arg1": {"type": "string"}
+                }
+            }
+        });
+
+        let tool_def = client.parse_tool_definition(&tool_json).unwrap();
+
+        assert_eq!(tool_def.name, "test_tool");
+        assert_eq!(tool_def.description, "A test tool");
+        assert!(tool_def.input_schema["properties"]["arg1"].is_object());
+    }
+
+    #[test]
+    fn test_parse_tool_definition_missing_name() {
+        let client = client();
+        let tool_json = json!({
+            "description": "A tool without a name"
+        });
+
+        let result = client.parse_tool_definition(&tool_json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_tool_definition_optional_fields() {
+        let client = client();
+        let tool_json = json!({
+            "name": "minimal_tool"
+        });
+
+        let tool_def = client.parse_tool_definition(&tool_json).unwrap();
+
+        assert_eq!(tool_def.name, "minimal_tool");
+        assert_eq!(tool_def.description, ""); // Should default to empty
+        assert_eq!(tool_def.input_schema, json!({})); // Should default to empty object
     }
 }

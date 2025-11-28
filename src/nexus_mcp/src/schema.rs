@@ -21,6 +21,7 @@ pub struct SchemaConverter;
 
 impl SchemaConverter {
     /// Convert JSON Schema to Python TypedDict
+    #[must_use = "this returns the generated code, it doesn't have side effects"]
     pub fn schema_to_typed_dict(schema: &Value, type_name: &str) -> Result<String, SchemaError> {
         // Handle empty schema or missing properties
         let properties = schema.get("properties").and_then(|p| p.as_object());
@@ -64,6 +65,7 @@ impl SchemaConverter {
     }
 
     /// Convert JSON Schema type to Python type
+    #[must_use = "this returns the Python type string, it doesn't have side effects"]
     pub fn json_type_to_python(prop: &Value) -> Result<String, SchemaError> {
         let type_str = prop
             .get("type")
@@ -72,16 +74,8 @@ impl SchemaConverter {
 
         Ok(match type_str {
             "string" => "str".to_string(),
-            "number" | "integer" => {
-                // Check for integer specifically
-                if type_str == "integer"
-                    || prop.get("type").and_then(|t| t.as_str()) == Some("integer")
-                {
-                    "int".to_string()
-                } else {
-                    "float".to_string()
-                }
-            }
+            "integer" => "int".to_string(),
+            "number" => "float".to_string(),
             "boolean" => "bool".to_string(),
             "array" => {
                 let items = prop.get("items");
@@ -95,5 +89,126 @@ impl SchemaConverter {
             "object" => "Dict[str, Any]".to_string(),
             _ => "Any".to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_json_type_to_python_string() {
+        let prop = json!({"type": "string"});
+        assert_eq!(SchemaConverter::json_type_to_python(&prop).unwrap(), "str");
+    }
+
+    #[test]
+    fn test_json_type_to_python_integer() {
+        let prop = json!({"type": "integer"});
+        assert_eq!(SchemaConverter::json_type_to_python(&prop).unwrap(), "int");
+    }
+
+    #[test]
+    fn test_json_type_to_python_number() {
+        let prop = json!({"type": "number"});
+        assert_eq!(
+            SchemaConverter::json_type_to_python(&prop).unwrap(),
+            "float"
+        );
+    }
+
+    #[test]
+    fn test_json_type_to_python_boolean() {
+        let prop = json!({"type": "boolean"});
+        assert_eq!(SchemaConverter::json_type_to_python(&prop).unwrap(), "bool");
+    }
+
+    #[test]
+    fn test_json_type_to_python_array_with_items() {
+        let prop = json!({"type": "array", "items": {"type": "string"}});
+        assert_eq!(
+            SchemaConverter::json_type_to_python(&prop).unwrap(),
+            "list[str]"
+        );
+    }
+
+    #[test]
+    fn test_json_type_to_python_array_without_items() {
+        let prop = json!({"type": "array"});
+        assert_eq!(
+            SchemaConverter::json_type_to_python(&prop).unwrap(),
+            "list[Any]"
+        );
+    }
+
+    #[test]
+    fn test_json_type_to_python_object() {
+        let prop = json!({"type": "object"});
+        assert_eq!(
+            SchemaConverter::json_type_to_python(&prop).unwrap(),
+            "Dict[str, Any]"
+        );
+    }
+
+    #[test]
+    fn test_json_type_to_python_unknown_defaults_to_any() {
+        let prop = json!({"type": "unknown_type"});
+        assert_eq!(SchemaConverter::json_type_to_python(&prop).unwrap(), "Any");
+    }
+
+    #[test]
+    fn test_json_type_to_python_missing_type_defaults_to_string() {
+        let prop = json!({});
+        assert_eq!(SchemaConverter::json_type_to_python(&prop).unwrap(), "str");
+    }
+
+    #[test]
+    fn test_schema_to_typed_dict_empty_schema() {
+        let schema = json!({});
+        let result = SchemaConverter::schema_to_typed_dict(&schema, "EmptyInput").unwrap();
+        assert_eq!(result, "class EmptyInput(TypedDict):\n    pass\n");
+    }
+
+    #[test]
+    fn test_schema_to_typed_dict_with_required_fields() {
+        let schema = json!({
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"}
+            },
+            "required": ["name"]
+        });
+        let result = SchemaConverter::schema_to_typed_dict(&schema, "PersonInput").unwrap();
+
+        // name should be required, age should be optional
+        assert!(result.contains("name: str"));
+        assert!(result.contains("age: Optional[int]"));
+        assert!(result.starts_with("class PersonInput(TypedDict):"));
+    }
+
+    #[test]
+    fn test_schema_to_typed_dict_all_optional() {
+        let schema = json!({
+            "properties": {
+                "color": {"type": "string"}
+            }
+        });
+        let result = SchemaConverter::schema_to_typed_dict(&schema, "OptionalInput").unwrap();
+
+        assert!(result.contains("color: Optional[str]"));
+    }
+
+    #[test]
+    fn test_schema_to_typed_dict_nested_array() {
+        let schema = json!({
+            "properties": {
+                "items": {"type": "array", "items": {"type": "integer"}}
+            },
+            "required": ["items"]
+        });
+        let result = SchemaConverter::schema_to_typed_dict(&schema, "ListInput").unwrap();
+
+        assert!(result.contains("items: list[int]"));
     }
 }
