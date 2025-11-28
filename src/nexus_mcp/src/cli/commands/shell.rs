@@ -1,7 +1,10 @@
+//! Interactive MCP shell command.
+
 use crate::error::NexusError;
 use clap::Args;
 use std::io::{self, Write};
 
+/// Arguments for the shell command.
 #[derive(Args, Debug)]
 #[command(about = "Start an interactive MCP shell")]
 pub struct ShellArgs {
@@ -10,6 +13,7 @@ pub struct ShellArgs {
     pub verbose: bool,
 }
 
+/// Run the shell command.
 pub fn run_shell(args: ShellArgs) -> Result<(), NexusError> {
     println!("Nexus MCP Shell v0.1.0");
     println!("Type 'help' for available commands, 'exit' or 'quit' to exit");
@@ -19,12 +23,10 @@ pub fn run_shell(args: ShellArgs) -> Result<(), NexusError> {
 
     loop {
         print!("mcp> ");
-        io::stdout().flush().map_err(|e| NexusError::Io(e))?;
+        io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .map_err(|e| NexusError::Io(e))?;
+        io::stdin().read_line(&mut input)?;
         let input = input.trim();
 
         if input.is_empty() {

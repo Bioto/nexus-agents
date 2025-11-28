@@ -1,0 +1,14 @@
+FROM nginx:alpine
+COPY nginx-default.conf /etc/nginx/conf.d/default.conf
+# Copy HTTPS config to a location nginx won't auto-process (not .template extension)
+COPY nginx-https.conf /etc/nginx/nginx-https.conf.inactive
+# Copy SSL certificates (required for HTTPS)
+# Files: ssl/cert.pem and ssl/key.pem
+RUN mkdir -p /etc/nginx/ssl
+COPY ssl/cert.pem ssl/key.pem /etc/nginx/ssl/
+RUN chmod 644 /etc/nginx/ssl/cert.pem && chmod 600 /etc/nginx/ssl/key.pem
+COPY docker-entrypoint-nginx.sh /docker-entrypoint-nginx.sh
+RUN chmod +x /docker-entrypoint-nginx.sh
+ENTRYPOINT ["/docker-entrypoint-nginx.sh"]
+CMD ["nginx", "-g", "daemon off;"]
+

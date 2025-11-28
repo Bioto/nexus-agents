@@ -1,3 +1,5 @@
+//! JSON Schema to Python type conversion.
+
 use serde_json::Value;
 
 /// Error type for schema conversion
@@ -212,3 +214,4 @@ mod tests {
         assert!(result.contains("items: list[int]"));
     }
 }
+

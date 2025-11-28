@@ -1,21 +1,16 @@
-use crate::config::{MultiServerConfig, ServerConfig};
+//! Start multiple MCP servers from configuration.
+
+use crate::config::MultiServerConfig;
 use crate::error::NexusError;
-use crate::server::NexusMcpServer;
+use crate::services::ServerManager;
 use clap::Args;
-use rmcp::transport::streamable_http_server::{
-    session::local::LocalSessionManager, tower::StreamableHttpService, StreamableHttpServerConfig,
-};
-use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
-use x_toolbox::nutrition::mcp_server::NutritionMcpServer;
 
 fn load_dotenv() {
     dotenv::dotenv().ok();
 }
 
+/// Arguments for the start-servers command.
 #[derive(Args, Debug)]
 #[command(about = "Start multiple MCP servers from a configuration file")]
 pub struct StartServersArgs {
@@ -24,118 +19,7 @@ pub struct StartServersArgs {
     pub config: PathBuf,
 }
 
-/// Handle for a running server instance
-struct ServerHandle {
-    name: String,
-    #[allow(dead_code)] // Reserved for future manual shutdown functionality
-    shutdown_tx: oneshot::Sender<()>,
-    join_handle: tokio::task::JoinHandle<Result<(), NexusError>>,
-}
-
-/// Start a single HTTP server instance
-async fn start_http_server(
-    config: ServerConfig,
-    shutdown_token: CancellationToken,
-) -> Result<ServerHandle, NexusError> {
-    let bind_addr: SocketAddr = config.parse_bind_addr()?;
-    let path = config.path.clone();
-    let name = config.name.clone();
-    let server_type = config.server_type.clone();
-    let name_for_logging = name.clone();
-
-    eprintln!(
-        "[{}] Starting {} HTTP server on {} (path: {})",
-        name, server_type, bind_addr, path
-    );
-
-    let router = match server_type.as_str() {
-        "nexus" => {
-            let service: StreamableHttpService<NexusMcpServer, LocalSessionManager> =
-                StreamableHttpService::new(
-                    || Ok(NexusMcpServer::new()),
-                    Arc::new(LocalSessionManager::default()),
-                    StreamableHttpServerConfig {
-                        stateful_mode: true,
-                        sse_keep_alive: None,
-                    },
-                );
-            axum::Router::new().nest_service(&path, service)
-        }
-        "nutrition" => {
-            // Initialize database connection for nutrition server
-            let db = x_toolbox::nutrition::Database::new().await.map_err(|e| {
-                NexusError::Config(format!("Failed to initialize nutrition database: {}", e))
-            })?;
-            let nutrition_server = NutritionMcpServer::with_database(db).await.map_err(|e| {
-                NexusError::Config(format!("Failed to create nutrition server: {}", e))
-            })?;
-
-            let service: StreamableHttpService<NutritionMcpServer, LocalSessionManager> =
-                StreamableHttpService::new(
-                    move || Ok(nutrition_server.clone()),
-                    Arc::new(LocalSessionManager::default()),
-                    StreamableHttpServerConfig {
-                        stateful_mode: true,
-                        sse_keep_alive: None,
-                    },
-                );
-            axum::Router::new().nest_service(&path, service)
-        }
-        _ => {
-            return Err(NexusError::Config(format!(
-                "Unknown server type '{}' for server '{}'. Supported types: nexus, nutrition",
-                server_type, name
-            )));
-        }
-    };
-
-    let tcp_listener = tokio::net::TcpListener::bind(bind_addr)
-        .await
-        .map_err(|e| NexusError::Io(e))?;
-
-    eprintln!(
-        "[{}] HTTP server started. Endpoint: http://{}{}",
-        name, bind_addr, path
-    );
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-
-    let join_handle = tokio::spawn(async move {
-        let shutdown_future = async move {
-            shutdown_token.cancelled().await;
-            shutdown_rx.await.ok();
-        };
-
-        axum::serve(tcp_listener, router)
-            .with_graceful_shutdown(shutdown_future)
-            .await
-            .map_err(|e| NexusError::Io(e))?;
-
-        eprintln!("[{}] Server shutdown complete", name_for_logging);
-        Ok(())
-    });
-
-    Ok(ServerHandle {
-        name,
-        shutdown_tx,
-        join_handle,
-    })
-}
-
-/// Start a single stdio server instance
-async fn start_stdio_server(
-    config: ServerConfig,
-    _shutdown_token: CancellationToken,
-) -> Result<ServerHandle, NexusError> {
-    Err(NexusError::Config(format!(
-        "stdio transport is not supported in multi-server mode. \
-            Server '{}' cannot use stdio transport as it requires exclusive access to stdin/stdout. \
-            Please use HTTP transport for multi-server setups or run stdio servers separately.",
-        config.name
-    )))
-}
-
-/// Start all servers from configuration
+/// Run the start-servers command.
 pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError> {
     load_dotenv();
     eprintln!("Loading configuration from: {}", args.config.display());
@@ -143,8 +27,8 @@ pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError>
 
     eprintln!("Found {} server(s) in configuration", config.servers.len());
 
-    // Create a cancellation token for graceful shutdown
-    let shutdown_token = CancellationToken::new();
+    let manager = ServerManager::new();
+    let shutdown_token = manager.shutdown_token();
 
     // Spawn all servers
     let mut handles = Vec::new();
@@ -163,8 +47,8 @@ pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError>
         }
 
         let handle = match server_config.transport.as_str() {
-            "http" => start_http_server(server_config, shutdown_token.clone()).await?,
-            "stdio" => start_stdio_server(server_config, shutdown_token.clone()).await?,
+            "http" => manager.start_http_server(server_config).await?,
+            "stdio" => manager.start_stdio_server(server_config).await?,
             _ => {
                 return Err(NexusError::Config(format!(
                     "Unsupported transport type: {}",
@@ -186,29 +70,5 @@ pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError>
     });
 
     // Wait for all servers to complete
-    let mut results = Vec::new();
-    for handle in handles {
-        let name = handle.name.clone();
-        match handle.join_handle.await {
-            Ok(Ok(())) => {
-                eprintln!("[{}] Server exited successfully", name);
-            }
-            Ok(Err(e)) => {
-                eprintln!("[{}] Server error: {}", name, e);
-                results.push(Err(e));
-            }
-            Err(e) => {
-                eprintln!("[{}] Server task error: {}", name, e);
-                results.push(Err(NexusError::Server(format!("Task join error: {}", e))));
-            }
-        }
-    }
-
-    // Return error if any server failed
-    if let Some(err) = results.into_iter().find(|r| r.is_err()) {
-        err
-    } else {
-        eprintln!("All servers shutdown successfully");
-        Ok(())
-    }
+    manager.wait_for_servers(handles).await
 }

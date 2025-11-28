@@ -32,9 +32,7 @@ RUN sed -i \
 # Build only the nutrition-mcp-server binary in release mode
 # Uses SQLx offline mode (queries verified against .sqlx cache)
 ENV SQLX_OFFLINE=true
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    cd src/x_toolbox && \
+RUN cd src/x_toolbox && \
     cargo build --release --bin nutrition-mcp-server && \
     cp /build/target/release/nutrition-mcp-server /nutrition-mcp-server
 

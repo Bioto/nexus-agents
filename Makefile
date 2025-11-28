@@ -61,14 +61,14 @@ nutrition-prepare-sqlx:
 
 # Nutrition MCP Server commands
 nutrition-mcp-start:
-	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 0.0.0.0:8002
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 0.0.0.0:80
 
 nutrition-mcp-stdio:
 	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport stdio
 
 # Docker-based Nutrition MCP Server commands
 nutrition-mcp-docker-build:
-	docker buildx build -f .docker/Dockerfile.nutrition-mcp -t nutrition-mcp-server .
+	docker build -f .docker/Dockerfile.nutrition-mcp -t bioto/mcp:latest .
 
 nutrition-mcp-docker-up:
 	docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d

@@ -1,3 +1,5 @@
+//! Standalone MCP server binary supporting stdio and HTTP transports.
+
 use axum::{
     body::Body,
     extract::State,
@@ -41,8 +43,8 @@ struct Args {
     auth_token: Option<String>,
 }
 
-/// Bearer token authentication middleware
-/// Returns 401 Unauthorized with WWW-Authenticate header if token is missing or invalid
+/// Bearer token authentication middleware.
+/// Returns 401 Unauthorized with WWW-Authenticate header if token is missing or invalid.
 async fn bearer_auth_middleware(
     State(expected_token): State<String>,
     req: Request<Body>,
@@ -68,13 +70,17 @@ async fn bearer_auth_middleware(
     }
 }
 
-/// Build a 401 Unauthorized response with WWW-Authenticate header per OAuth 2.1 spec
+/// Build a 401 Unauthorized response with WWW-Authenticate header per OAuth 2.1 spec.
 fn unauthorized_response(error_description: &str) -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        [
-            (header::WWW_AUTHENTICATE, format!("Bearer error=\"invalid_token\", error_description=\"{}\"", error_description)),
-        ],
+        [(
+            header::WWW_AUTHENTICATE,
+            format!(
+                "Bearer error=\"invalid_token\", error_description=\"{}\"",
+                error_description
+            ),
+        )],
         error_description.to_string(),
     )
         .into_response()
@@ -87,9 +93,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use stderr for logging/debugging - stdout is reserved for MCP protocol when using stdio
     eprintln!("Starting Nexus MCP Server...");
     eprintln!("Transport: {}", args.transport);
-
-    // Create server instance
-    // let server = NexusMcpServer::new(); // Not needed here as HTTP service creates its own
 
     match args.transport.as_str() {
         "stdio" => {

@@ -29,13 +29,39 @@ services:
       timeout: 5s
       retries: 5
 
-  nutrition-mcp-server:
+  test-server:
     build:
-      context: ..
-      dockerfile: .docker/Dockerfile.nutrition-mcp
-    container_name: nutrition_mcp_server
+      context: .
+      dockerfile: Dockerfile.test-server
+    image: test-server:latest
+    container_name: nutrition_test_server
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    image: nutrition-nginx:latest
+    container_name: nutrition_nginx
     ports:
-      - "8002:8002"
+      - "80:80"
+      - "443:443"
+    # SSL certificates are built into the image (see Dockerfile.nginx)
+    # To update certs: place new cert.pem and key.pem in .docker/ssl/ and rebuild
+    depends_on:
+      - nutrition-mcp-server
+      - test-server
+    restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+
+  nutrition-mcp-server:
+    image: bioto/mcp:latest
+    container_name: nutrition_mcp_server
+    expose:
+      - "8002"
     environment:
       # Database config - defaults connect to the postgres service in this compose
       # Override with host env vars to connect to external database
@@ -76,4 +102,11 @@ volumes:
 #
 # Stop and remove volumes:
 #   docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v
-
+#
+# SSL Setup (for Cloudflare):
+#   1. Add your Cloudflare Origin Certificate to .docker/ssl/cert.pem
+#   2. Add your private key to .docker/ssl/key.pem
+#   3. Rebuild nginx: docker compose -f .docker/docker-compose.nutrition-mcp.yaml build nginx
+#   4. Restart: docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d nginx
+#   5. Set Cloudflare SSL mode to "Full" or "Full (strict)"
+#   See .docker/ssl/README.md for detailed instructions

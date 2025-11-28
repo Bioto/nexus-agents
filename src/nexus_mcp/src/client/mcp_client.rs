@@ -1,36 +1,29 @@
+//! MCP protocol client for fetching tool definitions.
+
 use crate::error::NexusError;
+use crate::types::ToolDefinition;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
-/// Tool definition structure
-#[derive(Debug, Clone)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub input_schema: Value,
-}
-
-/// MCP protocol client for fetching tool definitions
+/// MCP protocol client for fetching tool definitions.
 pub struct McpClient {
     server_url: String,
     client: reqwest::Client,
-    headers: std::collections::HashMap<String, String>,
+    headers: HashMap<String, String>,
 }
 
 impl McpClient {
-    /// Create a new MCP client
+    /// Create a new MCP client.
     pub fn new(server_url: impl Into<String>) -> Self {
         Self {
             server_url: server_url.into(),
             client: reqwest::Client::new(),
-            headers: std::collections::HashMap::new(),
+            headers: HashMap::new(),
         }
     }
 
-    /// Create a new MCP client with custom headers
-    pub fn with_headers(
-        server_url: impl Into<String>,
-        headers: std::collections::HashMap<String, String>,
-    ) -> Self {
+    /// Create a new MCP client with custom headers.
+    pub fn with_headers(server_url: impl Into<String>, headers: HashMap<String, String>) -> Self {
         Self {
             server_url: server_url.into(),
             client: reqwest::Client::new(),
@@ -38,7 +31,7 @@ impl McpClient {
         }
     }
 
-    /// Fetch tool definitions from MCP server
+    /// Fetch tool definitions from MCP server.
     pub async fn fetch_tools(&self) -> Result<Vec<ToolDefinition>, NexusError> {
         // Handle both cases: server_url with or without /mcp
         let url = if self.server_url.ends_with("/mcp") {
@@ -219,7 +212,7 @@ impl McpClient {
         Ok(tool_defs)
     }
 
-    /// Parse a single tool definition from JSON
+    /// Parse a single tool definition from JSON.
     fn parse_tool_definition(&self, tool: &Value) -> Result<ToolDefinition, NexusError> {
         let name = tool
             .get("name")
@@ -245,9 +238,10 @@ impl McpClient {
         })
     }
 
-    /// Parse SSE (Server-Sent Events) format response
-    /// Looks for lines starting with "data: " and extracts JSON
-    /// Handles multiple data lines by accumulating them if needed, or picking the last valid one
+    /// Parse SSE (Server-Sent Events) format response.
+    ///
+    /// Looks for lines starting with "data: " and extracts JSON.
+    /// Handles multiple data lines by accumulating them if needed, or picking the last valid one.
     fn parse_sse_response(&self, text: &str) -> Result<Value, NexusError> {
         // First, try to parse as direct JSON (some servers return JSON directly)
         if let Ok(json) = serde_json::from_str::<Value>(text.trim()) {
@@ -426,3 +420,4 @@ mod tests {
         assert_eq!(tool_def.input_schema, json!({})); // Should default to empty object
     }
 }
+

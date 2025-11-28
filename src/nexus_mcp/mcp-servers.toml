@@ -3,7 +3,7 @@
 name = "nutrition"
 server_type = "nutrition"
 transport = "http"
-bind = "127.0.0.1:8002"
+bind = "127.0.0.1:80"
 path = "/mcp"
 
 

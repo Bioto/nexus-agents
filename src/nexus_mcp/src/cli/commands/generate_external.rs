@@ -1,8 +1,10 @@
+//! Generate Python code API for external MCP servers.
+
 use crate::error::NexusError;
-use crate::external_servers::generate_external_server_tools;
 use clap::Args;
 use std::path::PathBuf;
 
+/// Arguments for the generate-external command.
 #[derive(Args, Debug)]
 #[command(about = "Generate Python code API for external MCP servers from configuration file")]
 pub struct GenerateExternalArgs {
@@ -15,12 +17,13 @@ pub struct GenerateExternalArgs {
     pub output: PathBuf,
 }
 
+/// Run the generate-external command.
 pub async fn run_generate_external(args: GenerateExternalArgs) -> Result<(), NexusError> {
     println!("Generating Python code API for external MCP servers...");
     println!("Config file: {}", args.config.display());
     println!("Output directory: {}", args.output.display());
 
-    generate_external_server_tools(&args.config, &args.output).await?;
+    crate::generate_external_server_tools(&args.config, &args.output).await?;
 
     println!(
         "Successfully generated code API for external servers in directory {}",

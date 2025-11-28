@@ -1,3 +1,12 @@
+//! MCP Server implementation.
+//!
+//! This module contains the `NexusMcpServer` which provides tools, prompts,
+//! and resources for the MCP protocol.
+
+mod types;
+
+pub use types::*;
+
 use crate::codegen::CodeGenerator;
 use rmcp::{
     handler::server::{
@@ -7,13 +16,12 @@ use rmcp::{
         ServerHandler,
     },
     model::*,
-    prompt, prompt_router, schemars, tool, tool_router, ErrorData as McpError,
+    prompt, prompt_router, tool, tool_router, ErrorData as McpError,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
-/// MCP Server with tools, resources, and prompts for testing
+/// MCP Server with tools, resources, and prompts for testing.
 #[derive(Clone)]
 pub struct NexusMcpServer {
     counter: Arc<AtomicI32>,
@@ -26,6 +34,7 @@ pub struct NexusMcpServer {
 // Tool definitions
 #[tool_router]
 impl NexusMcpServer {
+    /// Create a new MCP server instance.
     pub fn new() -> Self {
         Self {
             counter: Arc::new(AtomicI32::new(0)),
@@ -34,7 +43,7 @@ impl NexusMcpServer {
         }
     }
 
-    /// Echo tool - echoes the input back
+    /// Echo tool - echoes the input back.
     #[tool(description = "Echoes the input string back to the user")]
     async fn echo(&self, params: Parameters<EchoParams>) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![Content::text(format!(
@@ -43,7 +52,7 @@ impl NexusMcpServer {
         ))]))
     }
 
-    /// Add tool - adds two numbers
+    /// Add tool - adds two numbers.
     #[tool(description = "Adds two numbers together")]
     async fn add(&self, params: Parameters<AddParams>) -> Result<Json<AddResult>, McpError> {
         let result = params.0.a + params.0.b;
@@ -53,7 +62,7 @@ impl NexusMcpServer {
         }))
     }
 
-    /// Counter tool - increments and returns counter value
+    /// Counter tool - increments and returns counter value.
     #[tool(description = "Increments an internal counter and returns the new value")]
     async fn increment_counter(&self) -> Result<CallToolResult, McpError> {
         let new_value = self.counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -63,7 +72,7 @@ impl NexusMcpServer {
         ))]))
     }
 
-    /// Get counter tool - returns current counter value
+    /// Get counter tool - returns current counter value.
     #[tool(description = "Returns the current value of the internal counter")]
     async fn get_counter(&self) -> Result<CallToolResult, McpError> {
         let counter = self.counter.load(Ordering::SeqCst);
@@ -73,7 +82,7 @@ impl NexusMcpServer {
         ))]))
     }
 
-    /// Generate code API tool - generates Python code API for all MCP tools
+    /// Generate code API tool - generates Python code API for all MCP tools.
     #[tool(
         description = "Generates Python code API files in directory structure (servers/nexus-mcp-server/) following the Anthropic code execution pattern. Returns the path where files were generated."
     )]
@@ -90,7 +99,7 @@ impl NexusMcpServer {
 
         let output_path = std::path::Path::new(&output_dir);
         match generator.generate_code_files(output_path).await {
-            Ok(_) => {
+            Ok(()) => {
                 let message = format!(
                     "Successfully generated code API in directory: {}\nStructure:\n  {}/_mcp_client.py\n  {}/nexus-mcp-server/",
                     output_dir, output_dir, output_dir
@@ -98,7 +107,6 @@ impl NexusMcpServer {
                 Ok(CallToolResult::success(vec![Content::text(message)]))
             }
             Err(e) => {
-                // Convert error to string for error message
                 let error_str = e.to_string();
                 Err(McpError::internal_error(
                     "Failed to generate code API",
@@ -112,7 +120,7 @@ impl NexusMcpServer {
 // Prompt definitions
 #[prompt_router]
 impl NexusMcpServer {
-    /// Simple prompt template
+    /// Simple prompt template.
     #[prompt(name = "greeting", description = "A simple greeting prompt")]
     async fn greeting_prompt(
         &self,
@@ -127,7 +135,7 @@ impl NexusMcpServer {
         })
     }
 
-    /// Code review prompt
+    /// Code review prompt.
     #[prompt(
         name = "code_review",
         description = "A prompt template for code review"
@@ -148,7 +156,7 @@ impl NexusMcpServer {
         })
     }
 
-    /// Analysis prompt
+    /// Analysis prompt.
     #[prompt(name = "analyze", description = "A prompt template for analysis tasks")]
     async fn analyze_prompt(
         &self,
@@ -167,51 +175,10 @@ impl NexusMcpServer {
     }
 }
 
-// Parameter types for tools
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct EchoParams {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AddParams {
-    pub a: f64,
-    pub b: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AddResult {
-    pub result: f64,
-    pub operation: String,
-}
-
-// Parameter types for prompts
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GreetingParams {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct CodeReviewParams {
-    pub code: String,
-    pub language: String,
-    pub focus: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AnalyzeParams {
-    pub topic: String,
-    pub context: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GenerateCodeApiParams {
-    /// MCP server URL (default: http://127.0.0.1:8000)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub server_url: Option<String>,
-    /// Output directory path (default: servers)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_dir: Option<String>,
+impl Default for NexusMcpServer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // Implement ServerHandler
