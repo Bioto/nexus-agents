@@ -60,20 +60,22 @@ pub async fn run_mcp_agent(args: McpAgentArgs) -> Result<()> {
         )));
     }
 
-    // Get API key
+    // Get API key - try LLM_API_KEY first, fall back to OPENAI_API_KEY for backward compatibility
     let api_key = args
         .api_key
+        .or_else(|| std::env::var("LLM_API_KEY").ok())
         .or_else(|| std::env::var("OPENAI_API_KEY").ok())
         .ok_or_else(|| {
             nexus_core::models::Error::Configuration(
-                "API key not provided. Set OPENAI_API_KEY environment variable or use --api-key"
+                "API key not provided. Set LLM_API_KEY (or OPENAI_API_KEY) environment variable or use --api-key"
                     .to_string(),
             )
         })?;
 
-    // Get base URL
+    // Get base URL - try LLM_BASE_URL first, fall back to OPENAI_BASE_URL for backward compatibility
     let base_url = args
         .base_url
+        .or_else(|| std::env::var("LLM_BASE_URL").ok())
         .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
         .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
 

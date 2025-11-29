@@ -159,10 +159,14 @@ impl Default for ProcessingConfig {
             enabled: true,
             frame_count: 3,
             frame_interval_ms: 1_000,
-            per_frame_model: env::var("NEXUS_LOGGER_CLICK_CONTEXT_MODEL")
-                .unwrap_or_else(|_| "gpt-4o-mini123".to_string()),
-            summary_model: env::var("NEXUS_LOGGER_CLICK_CONTEXT_SUMMARY_MODEL")
-                .unwrap_or_else(|_| "gpt-4o-mini123".to_string()),
+            // Try VISION_MODEL first, then NEXUS_LOGGER_CLICK_CONTEXT_MODEL for backward compatibility
+            per_frame_model: env::var("VISION_MODEL")
+                .or_else(|_| env::var("NEXUS_LOGGER_CLICK_CONTEXT_MODEL"))
+                .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
+            // Try VISION_MODEL first, then NEXUS_LOGGER_CLICK_CONTEXT_SUMMARY_MODEL for backward compatibility
+            summary_model: env::var("VISION_MODEL")
+                .or_else(|_| env::var("NEXUS_LOGGER_CLICK_CONTEXT_SUMMARY_MODEL"))
+                .unwrap_or_else(|_| "gpt-4o-mini".to_string()),
             monitor_index: env::var("NEXUS_LOGGER_CLICK_CONTEXT_MONITOR")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok()),
@@ -221,7 +225,8 @@ pub struct ProcessingService;
 
 impl ProcessingService {
     pub fn start(config: ProcessingConfig, db: Database) -> Result<ProcessingHandle> {
-        let api_service = Arc::new(NexusApiService::from_env()?);
+        // Use vision-specific API service for image processing
+        let api_service = Arc::new(NexusApiService::from_env_vision()?);
         let screen_recorder = Arc::new(ScreenRecorder::new()?);
         let db = Arc::new(db);
         let config = Arc::new(config);

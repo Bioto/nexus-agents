@@ -1,7 +1,7 @@
 ---
-alwaysApply: true
+description: When thinking about performance
+alwaysApply: false
 ---
-
 Rust Performance Optimization
 
 - **Measure First**: Profile with `perf`, `cargo flamegraph`, or `criterion` before optimizing; optimize hot paths, not cold code.

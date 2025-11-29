@@ -1,7 +1,6 @@
 ---
 alwaysApply: true
 ---
-
 Rust Code Standards
 
 - Prefer `cargo fmt` defaults; enforce `rustfmt.toml` settings if present.

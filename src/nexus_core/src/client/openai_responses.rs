@@ -43,18 +43,52 @@ impl ResponsesClient {
         Self::new(api_key, "https://api.openai.com/v1")
     }
 
-    /// Create a client from environment variables
+    /// Create a client from environment variables for general LLM use
     ///
-    /// Reads `OPENAI_API_KEY` for the API key and optionally
-    /// `OPENAI_BASE_URL` for the base URL (defaults to OpenAI's URL)
+    /// Reads `LLM_API_KEY` (or `OPENAI_API_KEY` for backward compatibility) for the API key
+    /// and optionally `LLM_BASE_URL` (or `OPENAI_BASE_URL`) for the base URL (defaults to OpenAI's URL)
     pub fn from_env() -> Result<Self> {
         load_env();
 
-        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-            Error::Configuration("OPENAI_API_KEY environment variable not set".to_string())
-        })?;
+        // Try LLM_API_KEY first, fall back to OPENAI_API_KEY for backward compatibility
+        let api_key = std::env::var("LLM_API_KEY")
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .map_err(|_| {
+                Error::Configuration(
+                    "LLM_API_KEY or OPENAI_API_KEY environment variable not set".to_string(),
+                )
+            })?;
 
-        let base_url = std::env::var("OPENAI_BASE_URL")
+        // Try LLM_BASE_URL first, fall back to OPENAI_BASE_URL for backward compatibility
+        let base_url = std::env::var("LLM_BASE_URL")
+            .or_else(|_| std::env::var("OPENAI_BASE_URL"))
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+        Ok(Self::new(api_key, base_url))
+    }
+
+    /// Create a client from environment variables for vision/image processing
+    ///
+    /// Reads `VISION_API_KEY` for the API key and optionally
+    /// `VISION_BASE_URL` for the base URL (defaults to OpenAI's URL).
+    /// Falls back to general LLM env vars if vision-specific ones are not set.
+    pub fn from_env_vision() -> Result<Self> {
+        load_env();
+
+        // Try VISION_API_KEY first, fall back to general LLM env vars
+        let api_key = std::env::var("VISION_API_KEY")
+            .or_else(|_| std::env::var("LLM_API_KEY"))
+            .or_else(|_| std::env::var("OPENAI_API_KEY"))
+            .map_err(|_| {
+                Error::Configuration(
+                    "VISION_API_KEY (or LLM_API_KEY/OPENAI_API_KEY) environment variable not set".to_string(),
+                )
+            })?;
+
+        // Try VISION_BASE_URL first, fall back to general LLM env vars
+        let base_url = std::env::var("VISION_BASE_URL")
+            .or_else(|_| std::env::var("LLM_BASE_URL"))
+            .or_else(|_| std::env::var("OPENAI_BASE_URL"))
             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
         Ok(Self::new(api_key, base_url))

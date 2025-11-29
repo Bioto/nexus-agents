@@ -1,7 +1,6 @@
 ---
-alwaysApply: true
+alwaysApply: false
 ---
-
 Rust Testing Standards
 
 - **Test Organization**: Unit tests in `#[cfg(test)]` modules alongside code; integration tests in `tests/` directory; doc tests in documentation comments.

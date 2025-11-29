@@ -171,11 +171,21 @@ impl NexusApiService {
         Self { client }
     }
 
-    /// Create a new NexusApiService from environment variables
+    /// Create a new NexusApiService from environment variables for general LLM use
     ///
-    /// Reads `OPENAI_API_KEY` and optionally `OPENAI_BASE_URL` from environment
+    /// Reads `LLM_API_KEY` (or `OPENAI_API_KEY` for backward compatibility) and optionally
+    /// `LLM_BASE_URL` (or `OPENAI_BASE_URL`) from environment
     pub fn from_env() -> Result<Self> {
         let client = ResponsesClient::from_env()?;
+        Ok(Self::new(client))
+    }
+
+    /// Create a new NexusApiService from environment variables for vision/image processing
+    ///
+    /// Reads `VISION_API_KEY` for the API key and optionally `VISION_BASE_URL` for the base URL.
+    /// Falls back to general LLM env vars if vision-specific ones are not set.
+    pub fn from_env_vision() -> Result<Self> {
+        let client = ResponsesClient::from_env_vision()?;
         Ok(Self::new(client))
     }
 

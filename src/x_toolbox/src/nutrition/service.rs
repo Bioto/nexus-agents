@@ -850,13 +850,16 @@ impl NutritionService {
             text_content
         };
 
-        // Call LLM API to extract recipe
-        let llm_api_key = env::var("OPENAI_API_KEY")
+        // Call LLM API to extract recipe (text-only, not vision)
+        // Use general LLM env vars, fall back to OPENAI_* for backward compatibility
+        let llm_api_key = env::var("LLM_API_KEY")
+            .or_else(|_| env::var("OPENAI_API_KEY"))
             .map_err(|_| ToolboxError::Configuration(
-                "OPENAI_API_KEY environment variable not set".to_string()
+                "LLM_API_KEY or OPENAI_API_KEY environment variable not set".to_string()
             ))?;
 
-        let llm_base_url = env::var("OPENAI_BASE_URL")
+        let llm_base_url = env::var("LLM_BASE_URL")
+            .or_else(|_| env::var("OPENAI_BASE_URL"))
             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
         let model = env::var("DEFAULT_MODEL")

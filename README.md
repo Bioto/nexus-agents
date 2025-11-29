@@ -327,9 +327,14 @@ See `env.example` for a complete configuration template with all available optio
 
 ### Core Configuration
 
-- `DEFAULT_MODEL` - Default LLM model (default: `gpt-5-nano-2025-08-07`)
-- `OPENAI_API_KEY` - OpenAI API key (required for LLM features)
-- `OPENAI_BASE_URL` - Base URL for OpenAI-compatible API (default: `https://api.openai.com/v1`)
+- `DEFAULT_MODEL` - Default LLM model for general text processing (default: `gpt-5-nano-2025-08-07`)
+- `LLM_API_KEY` - API key for general LLM/text processing (falls back to `OPENAI_API_KEY` for backward compatibility)
+- `LLM_BASE_URL` - Base URL for general LLM API (falls back to `OPENAI_BASE_URL`, default: `https://api.openai.com/v1`)
+- `OPENAI_API_KEY` - OpenAI API key (deprecated, use `LLM_API_KEY`; kept for backward compatibility)
+- `OPENAI_BASE_URL` - Base URL for OpenAI-compatible API (deprecated, use `LLM_BASE_URL`; kept for backward compatibility)
+- `VISION_API_KEY` - API key for vision/image processing models (falls back to `LLM_API_KEY` or `OPENAI_API_KEY`)
+- `VISION_BASE_URL` - Base URL for vision/image processing API (falls back to `LLM_BASE_URL` or `OPENAI_BASE_URL`, default: `https://api.openai.com/v1`)
+- `VISION_MODEL` - Model for vision/image processing tasks (falls back to `NEXUS_LOGGER_CLICK_CONTEXT_MODEL`, default: `gpt-4o-mini`)
 - `RUST_LOG` - Log level (`trace`, `debug`, `info`, `warn`, `error`)
 
 ### Module-Specific
@@ -341,12 +346,14 @@ See `env.example` for a complete configuration template with all available optio
 - `NEXUS_LOGGER_CLICK_CONTEXT_ENABLED` - Enable/disable click analysis (default: `true`)
 - `NEXUS_LOGGER_CLICK_CONTEXT_FRAME_COUNT` - Number of frames to capture per click, 1-6 (default: `3`)
 - `NEXUS_LOGGER_CLICK_CONTEXT_FRAME_INTERVAL_MS` - Delay between frames in milliseconds, min 250 (default: `1000`)
-- `NEXUS_LOGGER_CLICK_CONTEXT_MODEL` - AI model for per-frame analysis (default: `gpt-4o-mini`)
-- `NEXUS_LOGGER_CLICK_CONTEXT_SUMMARY_MODEL` - AI model for generating summary (default: `gpt-4o-mini`)
+- `NEXUS_LOGGER_CLICK_CONTEXT_MODEL` - AI model for per-frame analysis (deprecated, use `VISION_MODEL`; kept for backward compatibility, default: `gpt-4o-mini`)
+- `NEXUS_LOGGER_CLICK_CONTEXT_SUMMARY_MODEL` - AI model for generating summary (deprecated, use `VISION_MODEL`; kept for backward compatibility, default: `gpt-4o-mini`)
 - `NEXUS_LOGGER_CLICK_CONTEXT_FRAME_TOKENS` - Max tokens for per-frame analysis (default: `200`)
 - `NEXUS_LOGGER_CLICK_CONTEXT_SUMMARY_TOKENS` - Max tokens for summary (default: `120`)
 - `NEXUS_LOGGER_CLICK_CONTEXT_MONITOR` - Monitor index to capture from (optional)
 - `NEXUS_LOGGER_CLICK_CONTEXT_SAVE_FRAMES` - Directory to save frame images (optional)
+
+**Note**: Click context analysis uses vision/image processing models. Set `VISION_API_KEY`, `VISION_BASE_URL`, and `VISION_MODEL` to use different models/APIs for image processing vs. general text processing.
 
 #### ClickHouse Configuration
 - `CLICKHOUSE_HOST` - ClickHouse host (default: `localhost`)

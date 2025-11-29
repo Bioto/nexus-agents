@@ -32,11 +32,11 @@ pub struct CommonArgs {
     #[arg(long)]
     pub presence_penalty: Option<f32>,
 
-    /// Base URL for the API (defaults to OpenAI or OPENAI_BASE_URL env var)
+    /// Base URL for the API (defaults to LLM_BASE_URL or OPENAI_BASE_URL env var)
     #[arg(long)]
     pub base_url: Option<String>,
 
-    /// API key (defaults to OPENAI_API_KEY env var)
+    /// API key (defaults to LLM_API_KEY or OPENAI_API_KEY env var)
     #[arg(long)]
     pub api_key: Option<String>,
 }
