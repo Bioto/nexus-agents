@@ -72,10 +72,10 @@ nutrition-mcp-docker-build:
 	DOCKER_BUILDKIT=1 docker build -f .docker/nutrition-mcp/Dockerfile -t bioto/mcp:latest .
 
 nutrition-mcp-docker-up:
-	docker compose -f .docker/nutrition-mcp/docker-compose.yaml up -d
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml --profile public up -d
 
 nutrition-mcp-docker-down:
-	docker compose -f .docker/nutrition-mcp/docker-compose.yaml down
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml --profile public down
 
 nutrition-mcp-docker-logs:
 	docker compose -f .docker/nutrition-mcp/docker-compose.yaml logs -f
@@ -95,8 +95,8 @@ nutrition-mcp-docker-migrate-all:
 	$(MAKE) nutrition-mcp-docker-migrate-public
 
 nutrition-mcp-docker-reset:
-	docker compose -f .docker/nutrition-mcp/docker-compose.yaml down -v && \
-	docker compose -f .docker/nutrition-mcp/docker-compose.yaml up -d && \
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml --profile public down -v && \
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml --profile public up -d && \
 	sleep 5 && \
 	$(MAKE) nutrition-mcp-docker-migrate
 
