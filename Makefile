@@ -84,6 +84,15 @@ nutrition-mcp-docker-migrate:
 	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql && \
 	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
 
+nutrition-mcp-docker-migrate-public:
+	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql && \
+	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql && \
+	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
+
+nutrition-mcp-docker-migrate-all:
+	$(MAKE) nutrition-mcp-docker-migrate
+	$(MAKE) nutrition-mcp-docker-migrate-public
+
 nutrition-mcp-docker-reset:
 	docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v && \
 	docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d && \

@@ -8,8 +8,15 @@
 #   - x_toolbox/src/error.rs
 #   - x_toolbox/src/bin/nutrition_mcp_server.rs
 #   - x_toolbox/migrations/          (PostgreSQL schema)
+#
+# Two instances (both via nginx with SSL):
+#   - Personal (Nick): /mcp -> mcp-server:8002, postgres on 5433
+#   - Public (Friend): /mcp-public -> mcp-server-public:8002, postgres on 5434
 
 services:
+  # =============================================================================
+  # PERSONAL INSTANCE (Nick) - via nginx on ports 80/443
+  # =============================================================================
   postgres:
     image: postgres:16-alpine
     container_name: nutrition_postgres
@@ -52,6 +59,7 @@ services:
     # To update certs: place new cert.pem and key.pem in .docker/ssl/ and rebuild
     depends_on:
       - nutrition-mcp-server
+      - nutrition-mcp-server-public
       - test-server
     restart: unless-stopped
     cap_add:
@@ -81,18 +89,67 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # =============================================================================
+  # PUBLIC INSTANCE (Friend) - via nginx on /mcp-public
+  # =============================================================================
+  postgres-public:
+    image: postgres:16-alpine
+    container_name: nutrition_postgres_public
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: nutrition
+    ports:
+      - "5434:5432"
+    volumes:
+      - nutrition_postgres_public_data:/var/lib/postgresql/data
+      - ../src/x_toolbox/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nutrition-mcp-server-public:
+    image: bioto/mcp:latest
+    container_name: nutrition_mcp_server_public
+    expose:
+      - "8002"
+    environment:
+      POSTGRES_HOST: postgres-public
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: nutrition
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres-public:5432/nutrition
+      # Pass through from host environment (for extract_recipe_from_url tool)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Optional: Bearer token for HTTP auth (can use different token for public)
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN_PUBLIC}
+    depends_on:
+      postgres-public:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   nutrition_postgres_data:
+  nutrition_postgres_public_data:
 
 # Usage:
 #
 # Start the stack:
 #   docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d
 #
-# Apply migrations (after first start):
+# Apply migrations - Personal instance (after first start):
 #   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql
 #   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql
 #   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
+#
+# Apply migrations - Public instance (after first start):
+#   docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql
+#   docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql
+#   docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
 #
 # View logs:
 #   docker compose -f .docker/docker-compose.nutrition-mcp.yaml logs -f
@@ -102,6 +159,10 @@ volumes:
 #
 # Stop and remove volumes:
 #   docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v
+#
+# Access (both via nginx with SSL):
+#   Personal (Nick): https://your-domain/mcp
+#   Public (Friend): https://your-domain/mcp-public
 #
 # SSL Setup (for Cloudflare):
 #   1. Add your Cloudflare Origin Certificate to .docker/ssl/cert.pem
