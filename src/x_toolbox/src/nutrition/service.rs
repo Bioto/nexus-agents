@@ -883,15 +883,17 @@ impl NutritionService {
             r#"Extract recipe information from the following HTML content. Return a JSON object with the following structure:
 {{
   "name": "Recipe name",
-  "description": "Optional description",
-  "servings": optional_number,
-  "prep_time_minutes": optional_number,
-  "cook_time_minutes": optional_number,
+  "description": "Optional description (can be null)",
+  "servings": optional_number_or_null,
+  "prep_time_minutes": optional_number_or_null,
+  "cook_time_minutes": optional_number_or_null,
   "ingredients": [
-    {{"name": "ingredient name", "quantity": number, "unit": "unit string"}}
+    {{"name": "ingredient name", "quantity": number_or_null, "unit": "unit string or null"}}
   ],
   "steps": ["step 1", "step 2", ...]
 }}
+
+Note: If quantity or unit cannot be determined for an ingredient, use null. All numeric fields can be null if not found.
 
 HTML content:
 {}

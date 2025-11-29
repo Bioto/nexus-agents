@@ -494,7 +494,11 @@ impl NutritionMcpServer {
 
         output.push_str("\nIngredients:\n");
         for ing in &extracted.ingredients {
-            output.push_str(&format!("  - {} {} {}\n", ing.quantity, ing.unit, ing.name));
+            let qty_str = ing.quantity
+                .map(|q| q.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let unit_str = ing.unit.as_deref().unwrap_or("?");
+            output.push_str(&format!("  - {} {} {}\n", qty_str, unit_str, ing.name));
         }
 
         output.push_str("\nSteps:\n");
@@ -887,7 +891,13 @@ impl NutritionMcpServer {
             let term = term.clone();
             let ingredient_uuid = ingredient_uuid;
             async move {
-                NutritionService::list_recipes(pool, Some(&term), ingredient_uuid)
+                // If query is empty, pass None to list all recipes
+                let search_term = if term.is_empty() {
+                    None
+                } else {
+                    Some(term.as_str())
+                };
+                NutritionService::list_recipes(pool, search_term, ingredient_uuid)
                     .await
                     .map_err(convert_error)
             }
@@ -901,9 +911,14 @@ impl NutritionMcpServer {
         for (idx, result) in results.into_iter().enumerate() {
             match result {
                 Ok(recipes) => {
+                    let query_display = if params.0.queries[idx].is_empty() {
+                        "(all recipes)"
+                    } else {
+                        &params.0.queries[idx]
+                    };
                     output.push_str(&format!(
                         "Search '{}' found {} recipes\n",
-                        params.0.queries[idx],
+                        query_display,
                         recipes.len()
                     ));
                     for recipe in recipes {

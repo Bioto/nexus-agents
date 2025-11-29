@@ -169,8 +169,10 @@ pub struct ExtractedRecipe {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedIngredient {
     pub name: String,
-    pub quantity: f64,
-    pub unit: String,
+    #[serde(default)]
+    pub quantity: Option<f64>,
+    #[serde(default)]
+    pub unit: Option<String>,
 }
 
 // ========== Meal Plan Models ==========
