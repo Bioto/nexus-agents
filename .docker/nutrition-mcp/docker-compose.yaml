@@ -11,7 +11,8 @@
 #
 # Two instances (both via nginx with SSL):
 #   - Personal (Nick): /mcp -> mcp-server:8002, postgres on 5433
-#   - Public (Friend): /mcp-public -> mcp-server-public:8002, postgres on 5434
+#   - Public (Friend): /mcp-public -> mcp-server-public:9000, postgres on 5434
+#   - Fitness: /fitness -> fitness-mcp-server:8003
 
 services:
   # =============================================================================
@@ -58,10 +59,13 @@ services:
     # To update certs: place new cert.pem and key.pem in ssl/ and rebuild
     depends_on:
       - nutrition-mcp-server
+      - fitness-mcp-server
       - test-server
     restart: unless-stopped
     cap_add:
       - NET_BIND_SERVICE
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   nutrition-mcp-server:
     image: bioto/mcp:latest
@@ -81,6 +85,37 @@ services:
       POSTGRES_PASSWORD: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/nutrition
       # Pass through from host environment (for extract_recipe_from_url tool)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Optional: Bearer token for HTTP auth
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # =============================================================================
+  # FITNESS MCP SERVER - via nginx on /fitness
+  # =============================================================================
+  fitness-mcp-server:
+    image: bioto/mcp:latest
+    container_name: fitness_mcp_server
+    entrypoint: ["fitness-mcp-server"]
+    command: ["--transport", "http", "--bind", "0.0.0.0:8003", "--path", "/mcp"]
+    expose:
+      - "8003"
+    ports:
+      # Direct access for local development (bypass nginx)
+      - "8003:8003"
+    environment:
+      # Database config - uses the same postgres service as personal instance
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: nutrition
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/nutrition
+      # Pass through from host environment
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # Optional: Bearer token for HTTP auth
@@ -119,8 +154,12 @@ services:
       - public
     image: bioto/mcp:latest
     container_name: nutrition_mcp_server_public
+    command: ["--transport", "http", "--bind", "0.0.0.0:9000", "--path", "/mcp"]
     expose:
-      - "8002"
+      - "9000"
+    ports:
+      # Direct access for local development (bypass nginx)
+      - "9000:9000"
     environment:
       POSTGRES_HOST: postgres-public
       POSTGRES_PORT: 5432
@@ -170,10 +209,14 @@ volumes:
 #   docker compose -f .docker/nutrition-mcp/docker-compose.yaml down -v
 #
 # Access:
-#   Direct (local dev, bypasses nginx): http://localhost:8002/mcp
+#   Direct (local dev, bypasses nginx):
+#     Personal: http://localhost:8002/mcp
+#     Public: http://localhost:9000/mcp
+#     Fitness: http://localhost:8003/mcp
 #   Via nginx with SSL (production):
 #     Personal (Nick): https://your-domain/mcp
 #     Public (Friend): https://your-domain/mcp-public (only if started with --profile public)
+#     Fitness: https://your-domain/fitness
 #
 # SSL Setup (for Cloudflare):
 #   1. Add your Cloudflare Origin Certificate to ssl/cert.pem

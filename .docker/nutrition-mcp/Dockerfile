@@ -32,20 +32,22 @@ COPY src/x_toolbox/src ./src/x_toolbox/src
 COPY src/x_toolbox/migrations ./src/x_toolbox/migrations
 COPY src/x_toolbox/.sqlx ./src/x_toolbox/.sqlx
 
-# Build the binary with SQLx offline mode
+# Build the binaries with SQLx offline mode
 ENV CARGO_TARGET_DIR=/build/target
 ENV SQLX_OFFLINE=true
 RUN cd src/x_toolbox && \
-    cargo build --release --bin nutrition-mcp-server && \
-    cp /build/target/release/nutrition-mcp-server /nutrition-mcp-server
+    cargo build --release --bin nutrition-mcp-server --bin fitness-mcp-server && \
+    cp /build/target/release/nutrition-mcp-server /nutrition-mcp-server && \
+    cp /build/target/release/fitness-mcp-server /fitness-mcp-server
 
 # Runtime stage
 FROM alpine:3.20 AS runtime
 
 RUN apk add --no-cache ca-certificates
 
-# Copy binary
+# Copy binaries
 COPY --from=builder /nutrition-mcp-server /usr/local/bin/nutrition-mcp-server
+COPY --from=builder /fitness-mcp-server /usr/local/bin/fitness-mcp-server
 
 # Copy migrations (sqlx::migrate! runs at startup)
 WORKDIR /app/src/x_toolbox
