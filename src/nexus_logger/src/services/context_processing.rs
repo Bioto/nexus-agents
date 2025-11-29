@@ -533,12 +533,63 @@ impl ProcessingService {
                         let (width, height) = tokio::task::spawn_blocking({
                             let path_clone = path.clone();
                             move || -> Result<(u32, u32)> {
+                                // Check file exists and has content
+                                let metadata = std::fs::metadata(&path_clone)
+                                    .map_err(|e| LoggerError::Other(format!(
+                                        "Failed to get metadata for {}: {}", 
+                                        path_clone.display(), e
+                                    )))?;
+                                
+                                if metadata.len() == 0 {
+                                    return Err(LoggerError::Other(format!(
+                                        "Image file is empty: {}", 
+                                        path_clone.display()
+                                    )));
+                                }
+                                
+                                // Read first few bytes to check format
+                                let mut file = std::fs::File::open(&path_clone)
+                                    .map_err(|e| LoggerError::Io(std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        format!("Failed to open {}: {}", path_clone.display(), e)
+                                    )))?;
+                                
+                                let mut header = [0u8; 8];
+                                use std::io::Read;
+                                file.read_exact(&mut header).map_err(|e| {
+                                    LoggerError::Other(format!(
+                                        "Failed to read header from {}: {}", 
+                                        path_clone.display(), e
+                                    ))
+                                })?;
+                                
+                                // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+                                let png_signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+                                if header != png_signature {
+                                    return Err(LoggerError::Other(format!(
+                                        "File {} does not have PNG signature. \
+                                        First 8 bytes: {:02X?}. File size: {} bytes. \
+                                        Expected PNG signature: 89 50 4E 47 0D 0A 1A 0A",
+                                        path_clone.display(),
+                                        header,
+                                        metadata.len()
+                                    )));
+                                }
+                                
+                                // Reset file and decode with explicit format
                                 let reader = ImageReader::new(BufReader::new(
                                     std::fs::File::open(&path_clone).map_err(LoggerError::Io)?
                                 ));
-                                let img = reader.decode().map_err(|e| {
-                                    LoggerError::Other(format!("Failed to decode image: {}", e))
-                                })?;
+                                let img = reader.with_guessed_format()
+                                    .map_err(|e| LoggerError::Other(format!(
+                                        "Failed to create ImageReader for {}: {}", 
+                                        path_clone.display(), e
+                                    )))?
+                                    .decode()
+                                    .map_err(|e| LoggerError::Other(format!(
+                                        "Failed to decode PNG image from {} (size: {} bytes): {}", 
+                                        path_clone.display(), metadata.len(), e
+                                    )))?;
                                 Ok((img.width(), img.height()))
                             }
                         })
@@ -685,12 +736,63 @@ impl ProcessingService {
                         let (width, height) = tokio::task::spawn_blocking({
                             let path_clone = path.clone();
                             move || -> Result<(u32, u32)> {
+                                // Check file exists and has content
+                                let metadata = std::fs::metadata(&path_clone)
+                                    .map_err(|e| LoggerError::Other(format!(
+                                        "Failed to get metadata for {}: {}", 
+                                        path_clone.display(), e
+                                    )))?;
+                                
+                                if metadata.len() == 0 {
+                                    return Err(LoggerError::Other(format!(
+                                        "Image file is empty: {}", 
+                                        path_clone.display()
+                                    )));
+                                }
+                                
+                                // Read first few bytes to check format
+                                let mut file = std::fs::File::open(&path_clone)
+                                    .map_err(|e| LoggerError::Io(std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        format!("Failed to open {}: {}", path_clone.display(), e)
+                                    )))?;
+                                
+                                let mut header = [0u8; 8];
+                                use std::io::Read;
+                                file.read_exact(&mut header).map_err(|e| {
+                                    LoggerError::Other(format!(
+                                        "Failed to read header from {}: {}", 
+                                        path_clone.display(), e
+                                    ))
+                                })?;
+                                
+                                // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+                                let png_signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+                                if header != png_signature {
+                                    return Err(LoggerError::Other(format!(
+                                        "File {} does not have PNG signature. \
+                                        First 8 bytes: {:02X?}. File size: {} bytes. \
+                                        Expected PNG signature: 89 50 4E 47 0D 0A 1A 0A",
+                                        path_clone.display(),
+                                        header,
+                                        metadata.len()
+                                    )));
+                                }
+                                
+                                // Reset file and decode with explicit format
                                 let reader = ImageReader::new(BufReader::new(
                                     std::fs::File::open(&path_clone).map_err(LoggerError::Io)?
                                 ));
-                                let img = reader.decode().map_err(|e| {
-                                    LoggerError::Other(format!("Failed to decode image: {}", e))
-                                })?;
+                                let img = reader.with_guessed_format()
+                                    .map_err(|e| LoggerError::Other(format!(
+                                        "Failed to create ImageReader for {}: {}", 
+                                        path_clone.display(), e
+                                    )))?
+                                    .decode()
+                                    .map_err(|e| LoggerError::Other(format!(
+                                        "Failed to decode PNG image from {} (size: {} bytes): {}", 
+                                        path_clone.display(), metadata.len(), e
+                                    )))?;
                                 Ok((img.width(), img.height()))
                             }
                         })
@@ -779,8 +881,10 @@ impl ProcessingService {
             .arg(video_path)
             .arg("-frames:v")
             .arg("1")
-            .arg("-q:v")
-            .arg("2")
+            .arg("-vcodec")
+            .arg("png")
+            .arg("-pix_fmt")
+            .arg("rgb24")
             .arg("-y")
             .arg(output_path)
             .stderr(std::process::Stdio::piped())
@@ -797,11 +901,24 @@ impl ProcessingService {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            eprintln!("⚠️  FFmpeg extraction failed for {} at {:.2}s", output_path.display(), timestamp);
+            eprintln!("   Command: ffmpeg -ss {:.3} -i {} -frames:v 1 -vcodec png -pix_fmt rgb24 -y {}", 
+                timestamp, video_path.display(), output_path.display());
+            eprintln!("   Exit code: {}", output.status.code().unwrap_or(-1));
+            if !stderr.is_empty() {
+                eprintln!("   Stderr:\n{}", stderr.lines().take(20).collect::<Vec<_>>().join("\n"));
+            }
+            if !stdout.is_empty() {
+                eprintln!("   Stdout:\n{}", stdout.lines().take(20).collect::<Vec<_>>().join("\n"));
+            }
             return Err(LoggerError::Other(format!(
-                "FFmpeg frame extraction failed at {:.2}s from {}: {}",
+                "FFmpeg frame extraction failed at {:.2}s from {}:\n  Exit code: {}\n  Stderr: {}\n  Stdout: {}",
                 timestamp,
                 video_path.display(),
-                stderr.lines().take(5).collect::<Vec<_>>().join(" | ")
+                output.status.code().unwrap_or(-1),
+                stderr.lines().take(10).collect::<Vec<_>>().join("\n    "),
+                stdout.lines().take(10).collect::<Vec<_>>().join("\n    ")
             )));
         }
 
@@ -811,6 +928,31 @@ impl ProcessingService {
                 output_path.display()
             )));
         }
+
+        // Verify the file has content (not empty)
+        let metadata = std::fs::metadata(&output_path).map_err(|e| {
+            LoggerError::Other(format!(
+                "Failed to get metadata for extracted frame {}: {}",
+                output_path.display(),
+                e
+            ))
+        })?;
+        
+        if metadata.len() == 0 {
+            return Err(LoggerError::Other(format!(
+                "FFmpeg extracted empty file at {}: {}",
+                timestamp,
+                output_path.display()
+            )));
+        }
+
+        // Log successful extraction for debugging
+        eprintln!(
+            "✅ Extracted frame at {:.2}s: {} ({} bytes)",
+            timestamp,
+            output_path.display(),
+            metadata.len()
+        );
 
         Ok(())
     }

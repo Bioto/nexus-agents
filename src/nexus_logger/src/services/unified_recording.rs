@@ -1281,6 +1281,37 @@ impl UnifiedRecordingService {
         Ok(())
     }
 
+    /// Check if FFmpeg is available in the system PATH
+    fn check_ffmpeg_available() -> Result<()> {
+        use std::process::Command;
+
+        let output = Command::new("ffmpeg")
+            .arg("-version")
+            .output();
+
+        match output {
+            Ok(result) if result.status.success() => Ok(()),
+            Ok(_) => Err(LoggerError::Other(
+                "FFmpeg is installed but returned an error. Please check your FFmpeg installation.".to_string(),
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(LoggerError::Other(format!(
+                    "FFmpeg is not installed or not found in PATH. \
+                    Please install FFmpeg to enable video overlays:\n\
+                    - Linux (Ubuntu/Debian): sudo apt-get install ffmpeg\n\
+                    - macOS: brew install ffmpeg\n\
+                    - Or download from: https://ffmpeg.org/download.html\n\
+                    Error: {}",
+                    e
+                )))
+            }
+            Err(e) => Err(LoggerError::Other(format!(
+                "Failed to check FFmpeg availability: {}",
+                e
+            ))),
+        }
+    }
+
     /// Apply overlays to video using FFmpeg
     pub fn apply_video_overlays(
         video_path: &PathBuf,
@@ -1289,6 +1320,9 @@ impl UnifiedRecordingService {
         show_labels: bool,
     ) -> Result<()> {
         use std::process::Command;
+
+        // Check if FFmpeg is available before attempting to use it
+        Self::check_ffmpeg_available()?;
 
         // Create temporary output file
         let temp_output = video_path.with_extension("tmp.mp4");
