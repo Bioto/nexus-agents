@@ -29,7 +29,7 @@ services:
     volumes:
       - nutrition_postgres_data:/var/lib/postgresql/data
       # Mount migrations for easy access
-      - ../src/x_toolbox/migrations:/migrations:ro
+      - ../../src/x_toolbox/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -38,8 +38,7 @@ services:
 
   test-server:
     build:
-      context: .
-      dockerfile: Dockerfile.test-server
+      context: ./test-server
     image: test-server:latest
     container_name: nutrition_test_server
     expose:
@@ -49,17 +48,16 @@ services:
   nginx:
     build:
       context: .
-      dockerfile: Dockerfile.nginx
+      dockerfile: nginx/Dockerfile
     image: nutrition-nginx:latest
     container_name: nutrition_nginx
     ports:
       - "80:80"
       - "443:443"
-    # SSL certificates are built into the image (see Dockerfile.nginx)
-    # To update certs: place new cert.pem and key.pem in .docker/ssl/ and rebuild
+    # SSL certificates are built into the image (see nginx/Dockerfile)
+    # To update certs: place new cert.pem and key.pem in ssl/ and rebuild
     depends_on:
       - nutrition-mcp-server
-      - nutrition-mcp-server-public
       - test-server
     restart: unless-stopped
     cap_add:
@@ -70,15 +68,18 @@ services:
     container_name: nutrition_mcp_server
     expose:
       - "8002"
+    ports:
+      # Direct access for local development (bypass nginx)
+      - "8002:8002"
     environment:
-      # Database config - defaults connect to the postgres service in this compose
-      # Override with host env vars to connect to external database
-      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-nutrition}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/nutrition}
+      # Database config - always uses the local postgres service in this compose
+      # For personal instance, always connect to local postgres container
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: nutrition
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/nutrition
       # Pass through from host environment (for extract_recipe_from_url tool)
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -91,8 +92,11 @@ services:
 
   # =============================================================================
   # PUBLIC INSTANCE (Friend) - via nginx on /mcp-public
+  # Only started with --profile public flag
   # =============================================================================
   postgres-public:
+    profiles:
+      - public
     image: postgres:16-alpine
     container_name: nutrition_postgres_public
     environment:
@@ -103,7 +107,7 @@ services:
       - "5434:5432"
     volumes:
       - nutrition_postgres_public_data:/var/lib/postgresql/data
-      - ../src/x_toolbox/migrations:/migrations:ro
+      - ../../src/x_toolbox/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -111,6 +115,8 @@ services:
       retries: 5
 
   nutrition-mcp-server-public:
+    profiles:
+      - public
     image: bioto/mcp:latest
     container_name: nutrition_mcp_server_public
     expose:
@@ -119,7 +125,7 @@ services:
       POSTGRES_HOST: postgres-public
       POSTGRES_PORT: 5432
       POSTGRES_DATABASE: nutrition
-      POSTGRES_USER: postgres
+      POSTGRES_USER: postgres 
       POSTGRES_PASSWORD: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres-public:5432/nutrition
       # Pass through from host environment (for extract_recipe_from_url tool)
@@ -138,36 +144,42 @@ volumes:
 
 # Usage:
 #
-# Start the stack:
-#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d
+# Start the stack (personal instance only, for local dev):
+#   docker compose -f .docker/nutrition-mcp/docker-compose.yaml up -d
+#
+# Start with public instance (production):
+#   docker compose -f .docker/nutrition-mcp/docker-compose.yaml --profile public up -d
 #
 # Apply migrations - Personal instance (after first start):
 #   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql
 #   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql
 #   docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
 #
-# Apply migrations - Public instance (after first start):
+# Apply migrations - Public instance (after first start, if using --profile public):
 #   docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql
 #   docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql
 #   docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
 #
 # View logs:
-#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml logs -f
+#   docker compose -f .docker/nutrition-mcp/docker-compose.yaml logs -f
 #
 # Stop:
-#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml down
+#   docker compose -f .docker/nutrition-mcp/docker-compose.yaml down
 #
 # Stop and remove volumes:
-#   docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v
+#   docker compose -f .docker/nutrition-mcp/docker-compose.yaml down -v
 #
-# Access (both via nginx with SSL):
-#   Personal (Nick): https://your-domain/mcp
-#   Public (Friend): https://your-domain/mcp-public
+# Access:
+#   Direct (local dev, bypasses nginx): http://localhost:8002/mcp
+#   Via nginx with SSL (production):
+#     Personal (Nick): https://your-domain/mcp
+#     Public (Friend): https://your-domain/mcp-public (only if started with --profile public)
 #
 # SSL Setup (for Cloudflare):
-#   1. Add your Cloudflare Origin Certificate to .docker/ssl/cert.pem
-#   2. Add your private key to .docker/ssl/key.pem
-#   3. Rebuild nginx: docker compose -f .docker/docker-compose.nutrition-mcp.yaml build nginx
-#   4. Restart: docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d nginx
+#   1. Add your Cloudflare Origin Certificate to ssl/cert.pem
+#   2. Add your private key to ssl/key.pem
+#   3. Rebuild nginx: docker compose -f .docker/nutrition-mcp/docker-compose.yaml build nginx
+#   4. Restart: docker compose -f .docker/nutrition-mcp/docker-compose.yaml up -d nginx
 #   5. Set Cloudflare SSL mode to "Full" or "Full (strict)"
-#   See .docker/ssl/README.md for detailed instructions
+#   See ssl/README.md for detailed instructions
+

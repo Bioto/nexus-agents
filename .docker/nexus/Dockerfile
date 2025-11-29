@@ -90,7 +90,7 @@ ENTRYPOINT ["nexus"]
 
 # Build instructions:
 # From workspace root:
-#   docker build -f .docker/Dockerfile -t nexus-agents .
+#   docker build -f .docker/nexus/Dockerfile -t nexus-agents .
 #
 # Run:
 #   docker run --rm nexus-agents --help

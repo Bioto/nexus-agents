@@ -10,7 +10,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse
-      - ./clickhouse-config/cors.xml:/etc/clickhouse-server/config.d/cors.xml:ro
+      - ./config/cors.xml:/etc/clickhouse-server/config.d/cors.xml:ro
     environment:
       - CLICKHOUSE_DB=default
       - CLICKHOUSE_USER=default

@@ -7,19 +7,19 @@ tts-start:
 
 # ClickHouse commands
 clickhouse-up:
-	docker compose -f .docker/docker-compose.clickhouse.yaml up -d
+	docker compose -f .docker/clickhouse/docker-compose.yaml up -d
 
 clickhouse-down:
-	docker compose -f .docker/docker-compose.clickhouse.yaml down
+	docker compose -f .docker/clickhouse/docker-compose.yaml down
 
 clickhouse-logs:
-	docker compose -f .docker/docker-compose.clickhouse.yaml logs -f
+	docker compose -f .docker/clickhouse/docker-compose.yaml logs -f
 
 clickhouse-status:
-	docker compose -f .docker/docker-compose.clickhouse.yaml ps
+	docker compose -f .docker/clickhouse/docker-compose.yaml ps
 
 clickhouse-restart:
-	docker compose -f .docker/docker-compose.clickhouse.yaml restart
+	docker compose -f .docker/clickhouse/docker-compose.yaml restart
 
 # X Toolbox Nutrition Database commands
 nutrition-db-start:
@@ -67,17 +67,18 @@ nutrition-mcp-stdio:
 	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport stdio
 
 # Docker-based Nutrition MCP Server commands
+# Uses BuildKit for cache mounts (requires BuildKit enabled in Docker daemon)
 nutrition-mcp-docker-build:
-	docker build -f .docker/Dockerfile.nutrition-mcp -t bioto/mcp:latest .
+	DOCKER_BUILDKIT=1 docker build -f .docker/nutrition-mcp/Dockerfile -t bioto/mcp:latest .
 
 nutrition-mcp-docker-up:
-	docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml up -d
 
 nutrition-mcp-docker-down:
-	docker compose -f .docker/docker-compose.nutrition-mcp.yaml down
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml down
 
 nutrition-mcp-docker-logs:
-	docker compose -f .docker/docker-compose.nutrition-mcp.yaml logs -f
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml logs -f
 
 nutrition-mcp-docker-migrate:
 	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql && \
@@ -94,8 +95,8 @@ nutrition-mcp-docker-migrate-all:
 	$(MAKE) nutrition-mcp-docker-migrate-public
 
 nutrition-mcp-docker-reset:
-	docker compose -f .docker/docker-compose.nutrition-mcp.yaml down -v && \
-	docker compose -f .docker/docker-compose.nutrition-mcp.yaml up -d && \
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml down -v && \
+	docker compose -f .docker/nutrition-mcp/docker-compose.yaml up -d && \
 	sleep 5 && \
 	$(MAKE) nutrition-mcp-docker-migrate
 
