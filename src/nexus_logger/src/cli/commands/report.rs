@@ -18,6 +18,10 @@ pub struct ReportArgs {
     /// Show detailed event breakdown
     #[arg(short, long)]
     pub detailed: bool,
+
+    /// Show all events (no limit). Only applies when --detailed is used.
+    #[arg(short, long)]
+    pub all: bool,
 }
 
 /// Runs the report command based on args.
@@ -28,12 +32,12 @@ pub async fn run_report(args: ReportArgs) -> Result<()> {
         // Get the last session ID
         let last_session_id = get_last_session_id(&db).await?;
         if let Some(session_id) = last_session_id {
-            generate_session_report(&db, &session_id, args.detailed).await?;
+            generate_session_report(&db, &session_id, args.detailed, args.all).await?;
         } else {
             println!("⚠️  No sessions found in database.");
         }
     } else if let Some(session_id) = args.session_id {
-        generate_session_report(&db, &session_id, args.detailed).await?;
+        generate_session_report(&db, &session_id, args.detailed, args.all).await?;
     } else {
         generate_summary_report(&db, args.detailed).await?;
     }
@@ -396,7 +400,7 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
     Ok(())
 }
 
-async fn generate_session_report(db: &Database, session_id: &str, detailed: bool) -> Result<()> {
+async fn generate_session_report(db: &Database, session_id: &str, detailed: bool, all_events: bool) -> Result<()> {
     println!("\n╔══════════════════════════════════════════════════════════════════════════════╗");
     println!("║              📊 Session Report: {:<40} ║", session_id);
     println!("╠══════════════════════════════════════════════════════════════════════════════╣");
@@ -456,129 +460,12 @@ async fn generate_session_report(db: &Database, session_id: &str, detailed: bool
         match db.get_session_events(session_id).await {
             Ok(events) => {
                 println!("📋 Event Timeline ({} events):\n", events.len());
-                for event in events.iter().take(100) {
-                    let time_str = if let Some(tc) = event.timecode {
-                        format!("{:.2}s", tc)
-                    } else {
-                        event.timestamp.with_timezone(&Local).format("%H:%M:%S%.3f").to_string()
-                    };
-                    match event.event_type.as_str() {
-                        "keyboard" => {
-                            if let Some(key) = &event.key {
-                                let action = if event.pressed.unwrap_or(false) { "PRESS" } else { "RELEASE" };
-                                println!("  [{}] ⌨️  {}: {}", time_str, action, key);
-                            }
-                        }
-                        "mouse" => {
-                            if let Some(subtype) = &event.event_subtype {
-                                match subtype.as_str() {
-                                    "click" => {
-                                        let button = event.button.as_deref().unwrap_or("unknown");
-                                        let coords = if let (Some(x), Some(y)) = (event.x, event.y) {
-                                            format!("({}, {})", x, y)
-                                        } else {
-                                            String::new()
-                                        };
-                                        println!("  [{}] 🖱️  CLICK: {} {}", time_str, button, coords);
-                                    }
-                                    "move" => {
-                                        let coords = if let (Some(x), Some(y)) = (event.x, event.y) {
-                                            format!("({}, {})", x, y)
-                                        } else {
-                                            String::new()
-                                        };
-                                        println!("  [{}] 🖱️  MOVE: {}", time_str, coords);
-                                    }
-                                    _ => {
-                                        println!("  [{}] 🖱️  {}: {:?}", time_str, subtype, event.button);
-                                    }
-                                }
-                            }
-                        }
-                        "transcription" => {
-                            // Get transcription text
-                            let text = event.metadata.get("text")
-                                .and_then(|v| v.as_str())
-                                .or_else(|| event.key.as_deref());
-                            
-                            if let Some(text) = text {
-                                // Determine source from metadata
-                                let source = if let Some(metadata) = event.metadata.as_object() {
-                                    if let Some(source_str) = metadata.get("source").and_then(|v| v.as_str()) {
-                                        match source_str {
-                                            "monitor_output" => "📺 Desktop Audio",
-                                            "microphone" => "🎤 Microphone",
-                                            _ => "🎤 Transcription"
-                                        }
-                                    } else if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
-                                        if monitor_desktop.as_bool().unwrap_or(false) {
-                                            "📺 Desktop Audio"
-                                        } else {
-                                            "🎤 Microphone"
-                                        }
-                                    } else {
-                                        "🎤 Transcription"
-                                    }
-                                } else {
-                                    "🎤 Transcription"
-                                };
-                                
-                                // Skip [BLANK_AUDIO] transcriptions to reduce noise
-                                if text != "[BLANK_AUDIO]" {
-                                    println!("  [{}] {}: {}", time_str, source, text);
-                                }
-                            }
-                        }
-                        "analysis" => {
-                            if let Some(summary) = event.metadata.get("summary").and_then(|v| v.as_str()) {
-                                println!("  [{}] 🧠 Analysis: {}", time_str, summary);
-                            }
-                        }
-                        "overlay" => {
-                            if let Some(text) = event.metadata.get("text").and_then(|v| v.as_str()) {
-                                println!("  [{}] 🏷️  Overlay: {}", time_str, text);
-                            }
-                        }
-                        "audio" => {
-                            if let Some(subtype) = &event.event_subtype {
-                                // Check metadata to determine if it's microphone or desktop audio
-                                let audio_source = if let Some(metadata) = event.metadata.as_object() {
-                                    if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
-                                        if monitor_desktop.as_bool().unwrap_or(false) {
-                                            "📺 Desktop Audio"
-                                        } else {
-                                            "🎤 Microphone"
-                                        }
-                                    } else {
-                                        "🎙️  Audio"
-                                    }
-                                } else {
-                                    "🎙️  Audio"
-                                };
-                                
-                                // Show output path if available
-                                let path_info = if let Some(metadata) = event.metadata.as_object() {
-                                    if let Some(path) = metadata.get("output_path").and_then(|v| v.as_str()) {
-                                        format!(" → {}", path)
-                                    } else {
-                                        String::new()
-                                    }
-                                } else {
-                                    String::new()
-                                };
-                                
-                                println!("  [{}] {} {}: {}{}", time_str, audio_source, subtype, 
-                                    if subtype == "recording_start" { "started" } else { "stopped" },
-                                    path_info);
-                            }
-                        }
-                        _ => {
-                            println!("  [{}] {}: {:?}", time_str, event.event_type, event.event_subtype);
-                        }
-                    }
+                let limit = if all_events { events.len() } else { 100.min(events.len()) };
+                for event in events.iter().take(limit) {
+                    print_event(event);
                 }
-                if events.len() > 100 {
-                    println!("\n... and {} more events", events.len() - 100);
+                if !all_events && events.len() > 100 {
+                    println!("\n... and {} more events (use --all to show all events)", events.len() - 100);
                 }
             }
             Err(e) => {
@@ -588,6 +475,128 @@ async fn generate_session_report(db: &Database, session_id: &str, detailed: bool
     }
 
     Ok(())
+}
+
+fn print_event(event: &crate::services::database::TimelineEvent) {
+    let time_str = if let Some(tc) = event.timecode {
+        format!("{:.2}s", tc)
+    } else {
+        event.timestamp.with_timezone(&Local).format("%H:%M:%S%.3f").to_string()
+    };
+    match event.event_type.as_str() {
+        "keyboard" => {
+            if let Some(key) = &event.key {
+                let action = if event.pressed.unwrap_or(false) { "PRESS" } else { "RELEASE" };
+                println!("  [{}] ⌨️  {}: {}", time_str, action, key);
+            }
+        }
+        "mouse" => {
+            if let Some(subtype) = &event.event_subtype {
+                match subtype.as_str() {
+                    "click" => {
+                        let button = event.button.as_deref().unwrap_or("unknown");
+                        let coords = if let (Some(x), Some(y)) = (event.x, event.y) {
+                            format!("({}, {})", x, y)
+                        } else {
+                            String::new()
+                        };
+                        println!("  [{}] 🖱️  CLICK: {} {}", time_str, button, coords);
+                    }
+                    "move" => {
+                        let coords = if let (Some(x), Some(y)) = (event.x, event.y) {
+                            format!("({}, {})", x, y)
+                        } else {
+                            String::new()
+                        };
+                        println!("  [{}] 🖱️  MOVE: {}", time_str, coords);
+                    }
+                    _ => {
+                        println!("  [{}] 🖱️  {}: {:?}", time_str, subtype, event.button);
+                    }
+                }
+            }
+        }
+        "transcription" => {
+            // Get transcription text
+            let text = event.metadata.get("text")
+                .and_then(|v| v.as_str())
+                .or_else(|| event.key.as_deref());
+            
+            if let Some(text) = text {
+                // Determine source from metadata
+                let source = if let Some(metadata) = event.metadata.as_object() {
+                    if let Some(source_str) = metadata.get("source").and_then(|v| v.as_str()) {
+                        match source_str {
+                            "monitor_output" => "📺 Desktop Audio",
+                            "microphone" => "🎤 Microphone",
+                            _ => "🎤 Transcription"
+                        }
+                    } else if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
+                        if monitor_desktop.as_bool().unwrap_or(false) {
+                            "📺 Desktop Audio"
+                        } else {
+                            "🎤 Microphone"
+                        }
+                    } else {
+                        "🎤 Transcription"
+                    }
+                } else {
+                    "🎤 Transcription"
+                };
+                
+                // Skip [BLANK_AUDIO] transcriptions to reduce noise
+                if text != "[BLANK_AUDIO]" {
+                    println!("  [{}] {}: {}", time_str, source, text);
+                }
+            }
+        }
+        "analysis" => {
+            if let Some(summary) = event.metadata.get("summary").and_then(|v| v.as_str()) {
+                println!("  [{}] 🧠 Analysis: {}", time_str, summary);
+            }
+        }
+        "overlay" => {
+            if let Some(text) = event.metadata.get("text").and_then(|v| v.as_str()) {
+                println!("  [{}] 🏷️  Overlay: {}", time_str, text);
+            }
+        }
+        "audio" => {
+            if let Some(subtype) = &event.event_subtype {
+                // Check metadata to determine if it's microphone or desktop audio
+                let audio_source = if let Some(metadata) = event.metadata.as_object() {
+                    if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
+                        if monitor_desktop.as_bool().unwrap_or(false) {
+                            "📺 Desktop Audio"
+                        } else {
+                            "🎤 Microphone"
+                        }
+                    } else {
+                        "🎙️  Audio"
+                    }
+                } else {
+                    "🎙️  Audio"
+                };
+                
+                // Show output path if available
+                let path_info = if let Some(metadata) = event.metadata.as_object() {
+                    if let Some(path) = metadata.get("output_path").and_then(|v| v.as_str()) {
+                        format!(" → {}", path)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                
+                println!("  [{}] {} {}: {}{}", time_str, audio_source, subtype, 
+                    if subtype == "recording_start" { "started" } else { "stopped" },
+                    path_info);
+            }
+        }
+        _ => {
+            println!("  [{}] {}: {:?}", time_str, event.event_type, event.event_subtype);
+        }
+    }
 }
 
 fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
