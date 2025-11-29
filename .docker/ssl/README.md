@@ -75,3 +75,8 @@ Make sure your Cloudflare SSL/TLS encryption mode is set to:
 
 Do NOT use "Flexible" mode with this setup, as it will cause SSL issues.
 
+
+
+
+
+
