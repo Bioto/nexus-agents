@@ -11,6 +11,10 @@ pub struct ReportArgs {
     #[arg(short, long)]
     pub session_id: Option<String>,
 
+    /// Show report for the last (most recent) session
+    #[arg(short, long)]
+    pub last: bool,
+
     /// Show detailed event breakdown
     #[arg(short, long)]
     pub detailed: bool,
@@ -20,13 +24,63 @@ pub struct ReportArgs {
 pub async fn run_report(args: ReportArgs) -> Result<()> {
     let db = Database::new().await?;
 
-    if let Some(session_id) = args.session_id {
+    if args.last {
+        // Get the last session ID
+        let last_session_id = get_last_session_id(&db).await?;
+        if let Some(session_id) = last_session_id {
+            generate_session_report(&db, &session_id, args.detailed).await?;
+        } else {
+            println!("⚠️  No sessions found in database.");
+        }
+    } else if let Some(session_id) = args.session_id {
         generate_session_report(&db, &session_id, args.detailed).await?;
     } else {
         generate_summary_report(&db, args.detailed).await?;
     }
 
     Ok(())
+}
+
+/// Get the most recent session ID from the database
+async fn get_last_session_id(_db: &Database) -> Result<Option<String>> {
+    use nexus_core::services::ClickHouseConfig;
+    
+    let config = ClickHouseConfig::from_env();
+    let http_port = if config.port == 9000 { 8123 } else { config.port };
+    let url = format!("http://{}:{}", config.host, http_port);
+    
+    let query = "SELECT id FROM sessions ORDER BY start_time DESC LIMIT 1 FORMAT JSONEachRow";
+    
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .query(&[("database", &config.database)])
+        .basic_auth(&config.username, Some(&config.password))
+        .body(query)
+        .send()
+        .await
+        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+    
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    
+    let text = response.text().await.map_err(|e| {
+        crate::error::LoggerError::Other(format!("Failed to read HTTP response: {}", e))
+    })?;
+    
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(row) = serde_json::from_str::<Value>(line) {
+            if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
+                return Ok(Some(id.to_string()));
+            }
+        }
+    }
+    
+    Ok(None)
 }
 
 async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
@@ -442,8 +496,37 @@ async fn generate_session_report(db: &Database, session_id: &str, detailed: bool
                             }
                         }
                         "transcription" => {
-                            if let Some(text) = event.metadata.get("text").and_then(|v| v.as_str()) {
-                                println!("  [{}] 🎤 Transcription: {}", time_str, text);
+                            // Get transcription text
+                            let text = event.metadata.get("text")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| event.key.as_deref());
+                            
+                            if let Some(text) = text {
+                                // Determine source from metadata
+                                let source = if let Some(metadata) = event.metadata.as_object() {
+                                    if let Some(source_str) = metadata.get("source").and_then(|v| v.as_str()) {
+                                        match source_str {
+                                            "monitor_output" => "📺 Desktop Audio",
+                                            "microphone" => "🎤 Microphone",
+                                            _ => "🎤 Transcription"
+                                        }
+                                    } else if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
+                                        if monitor_desktop.as_bool().unwrap_or(false) {
+                                            "📺 Desktop Audio"
+                                        } else {
+                                            "🎤 Microphone"
+                                        }
+                                    } else {
+                                        "🎤 Transcription"
+                                    }
+                                } else {
+                                    "🎤 Transcription"
+                                };
+                                
+                                // Skip [BLANK_AUDIO] transcriptions to reduce noise
+                                if text != "[BLANK_AUDIO]" {
+                                    println!("  [{}] {}: {}", time_str, source, text);
+                                }
                             }
                         }
                         "analysis" => {
@@ -458,7 +541,35 @@ async fn generate_session_report(db: &Database, session_id: &str, detailed: bool
                         }
                         "audio" => {
                             if let Some(subtype) = &event.event_subtype {
-                                println!("  [{}] 🎙️  Audio: {}", time_str, subtype);
+                                // Check metadata to determine if it's microphone or desktop audio
+                                let audio_source = if let Some(metadata) = event.metadata.as_object() {
+                                    if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
+                                        if monitor_desktop.as_bool().unwrap_or(false) {
+                                            "📺 Desktop Audio"
+                                        } else {
+                                            "🎤 Microphone"
+                                        }
+                                    } else {
+                                        "🎙️  Audio"
+                                    }
+                                } else {
+                                    "🎙️  Audio"
+                                };
+                                
+                                // Show output path if available
+                                let path_info = if let Some(metadata) = event.metadata.as_object() {
+                                    if let Some(path) = metadata.get("output_path").and_then(|v| v.as_str()) {
+                                        format!(" → {}", path)
+                                    } else {
+                                        String::new()
+                                    }
+                                } else {
+                                    String::new()
+                                };
+                                
+                                println!("  [{}] {} {}: {}{}", time_str, audio_source, subtype, 
+                                    if subtype == "recording_start" { "started" } else { "stopped" },
+                                    path_info);
                             }
                         }
                         _ => {

@@ -470,59 +470,105 @@ impl Database {
 
     /// Get session metrics
     pub async fn get_session_metrics(&self, session_id: &str) -> Result<Metrics> {
-        // Get session data
-        let block = self
-            .service
-            .query(&format!(
-                "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
-                    mouse_events, mouse_clicks, mouse_releases, mouse_moves
-             FROM sessions
-             WHERE id = '{}'
-             ORDER BY created_at DESC
-             LIMIT 1",
-                session_id.replace('\'', "''")
-            ))
-            .await
-            .map_err(|e| LoggerError::Other(format!("Failed to query session: {}", e)))?;
+        use nexus_core::services::ClickHouseConfig;
+        
+        // Use HTTP interface to avoid DateTime64 type issues with native protocol
+        let config = ClickHouseConfig::from_env();
+        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let url = format!("http://{}:{}", config.host, http_port);
+        
+        let query = format!(
+            "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
+                mouse_events, mouse_clicks, mouse_releases, mouse_moves
+            FROM sessions
+            WHERE id = '{}'
+            ORDER BY created_at DESC
+            LIMIT 1
+            FORMAT JSONEachRow",
+            session_id.replace('\'', "''")
+        );
 
-        if block.row_count() == 0 {
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .query(&[("database", &config.database)])
+            .basic_auth(&config.username, Some(&config.password))
+            .body(query)
+            .send()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LoggerError::Other(format!(
+                "ClickHouse HTTP query failed: {}",
+                error_text
+            )));
+        }
+
+        let text = response.text().await.map_err(|e| {
+            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
+        })?;
+
+        // Parse the first row
+        let mut found = false;
+        let mut start_time_str = String::new();
+        let mut end_time_opt: Option<String> = None;
+        let mut keyboard_events = 0u64;
+        let mut keyboard_presses = 0u64;
+        let mut keyboard_releases = 0u64;
+        let mut mouse_events = 0u64;
+        let mut mouse_clicks = 0u64;
+        let mut mouse_releases = 0u64;
+        let mut mouse_moves = 0u64;
+
+        for line in text.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
+                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
+            })?;
+
+            start_time_str = row.get("start_time")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| LoggerError::Other("Failed to get start_time".to_string()))?
+                .to_string();
+            end_time_opt = row.get("end_time")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            keyboard_events = row.get("keyboard_events")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            keyboard_presses = row.get("keyboard_presses")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            keyboard_releases = row.get("keyboard_releases")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            mouse_events = row.get("mouse_events")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            mouse_clicks = row.get("mouse_clicks")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            mouse_releases = row.get("mouse_releases")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            mouse_moves = row.get("mouse_moves")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            
+            found = true;
+            break; // Only process first row
+        }
+
+        if !found {
             return Err(LoggerError::Other(format!(
                 "Session {} not found",
                 session_id
             )));
         }
-
-        // Parse session data using rows iterator
-        let mut rows = block.rows();
-        let row = rows
-            .next()
-            .ok_or_else(|| LoggerError::Other("No session data found".to_string()))?;
-
-        let start_time_str: String = row
-            .get("start_time")
-            .map_err(|_| LoggerError::Other("Failed to get start_time".to_string()))?;
-        let end_time_opt: Option<String> = row.get("end_time").ok();
-        let keyboard_events: u64 = row
-            .get("keyboard_events")
-            .map_err(|_| LoggerError::Other("Failed to get keyboard_events".to_string()))?;
-        let keyboard_presses: u64 = row
-            .get("keyboard_presses")
-            .map_err(|_| LoggerError::Other("Failed to get keyboard_presses".to_string()))?;
-        let keyboard_releases: u64 = row
-            .get("keyboard_releases")
-            .map_err(|_| LoggerError::Other("Failed to get keyboard_releases".to_string()))?;
-        let mouse_events: u64 = row
-            .get("mouse_events")
-            .map_err(|_| LoggerError::Other("Failed to get mouse_events".to_string()))?;
-        let mouse_clicks: u64 = row
-            .get("mouse_clicks")
-            .map_err(|_| LoggerError::Other("Failed to get mouse_clicks".to_string()))?;
-        let mouse_releases: u64 = row
-            .get("mouse_releases")
-            .map_err(|_| LoggerError::Other("Failed to get mouse_releases".to_string()))?;
-        let mouse_moves: u64 = row
-            .get("mouse_moves")
-            .map_err(|_| LoggerError::Other("Failed to get mouse_moves".to_string()))?;
 
         let start_time = match DateTime::parse_from_rfc3339(&start_time_str) {
             Ok(dt) => dt.with_timezone(&Utc),

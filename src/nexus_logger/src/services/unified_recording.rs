@@ -1547,7 +1547,6 @@ impl RecordingSession {
                 None,
                 None,
                 None,
-                None,
                 &timestamp,
                 None, // timecode
                 Some(video_metadata),
@@ -1844,7 +1843,6 @@ impl RecordingSession {
                 &self.session_id,
                 "recording",
                 Some("video_stop"),
-                None,
                 None,
                 None,
                 None,
