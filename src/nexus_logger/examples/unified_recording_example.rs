@@ -7,8 +7,8 @@
 //! 4. Start and stop recording
 
 use nexus_logger::{
-    EventCallback, InputCaptureConfig, InputEvent, ScreenRecordingConfig, UnifiedRecordingConfig,
-    UnifiedRecordingService,
+    EventCallback, InputCaptureConfig, InputEvent, OverlayLabel, ScreenRecordingConfig,
+    UnifiedRecordingConfig, UnifiedRecordingService,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +17,7 @@ use std::sync::Arc;
 /// Custom callback that timestamps video based on keyboard events
 struct VideoTimestampCallback {
     /// Track video timestamps for important events
+    #[allow(dead_code)]
     important_events: Vec<(String, f64)>,
 }
 
@@ -26,7 +27,7 @@ impl EventCallback for VideoTimestampCallback {
         event: &InputEvent,
         video_timestamp: f64,
         _recording_start: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
+    ) -> (bool, Option<OverlayLabel>) {
         if let InputEvent::Keyboard { key, pressed, .. } = event {
             if *pressed {
                 // Example: Mark important keys (like Enter, Escape, etc.)
@@ -42,7 +43,7 @@ impl EventCallback for VideoTimestampCallback {
                 }
             }
         }
-        true // Store all events
+        (true, None) // Store all events, no overlay label
     }
 
     fn on_mouse_event(
@@ -50,7 +51,7 @@ impl EventCallback for VideoTimestampCallback {
         event: &InputEvent,
         video_timestamp: f64,
         _recording_start: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
+    ) -> (bool, Option<OverlayLabel>) {
         if let InputEvent::Mouse {
             event_type, button, ..
         } = event
@@ -63,7 +64,7 @@ impl EventCallback for VideoTimestampCallback {
                 );
             }
         }
-        true // Store all events
+        (true, None) // Store all events, no overlay label
     }
 }
 
@@ -77,11 +78,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             duration_secs: None, // Record until stopped
             monitor_index: None, // Primary monitor
             include_audio: true,
+            segment_duration_secs: None, // No video segmentation
         },
         input_config: InputCaptureConfig {
             output_file: Some(PathBuf::from("example_events.json")),
             format: "json".to_string(),
         },
+        audio_configs: Vec::new(), // No separate audio configs
         database_path: PathBuf::from("example_events.db"),
         capture_keyboard: true,
         capture_mouse: true,
@@ -89,6 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         show_timestamp: true,
         show_labels: true,
         context_fps: Some(1.0),
+        // Use default (legacy) file writing and database inserts
+        // Set these to Some(...) to enable optimized rotating writer and batch inserter
+        event_writer_config: None,
+        batch_inserter_config: None,
     };
 
     // Create callback

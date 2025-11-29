@@ -293,6 +293,110 @@ impl Database {
         Ok(())
     }
 
+    /// Insert multiple events in a single batch operation.
+    ///
+    /// This is much more efficient than individual inserts for high-volume scenarios.
+    pub async fn batch_insert_events(&self, events: &[crate::services::batch_inserter::BatchEvent]) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        // Helper to properly escape strings for ClickHouse SQL
+        fn escape_sql_string(s: &str) -> String {
+            s.replace('\\', "\\\\").replace('\'', "\\'")
+        }
+
+        // Build batch INSERT statement
+        let mut values = Vec::with_capacity(events.len());
+
+        for event in events {
+            let metadata_str = event
+                .metadata
+                .as_ref()
+                .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()))
+                .unwrap_or_else(|| "{}".to_string());
+
+            let event_subtype_str = event
+                .event_subtype
+                .as_ref()
+                .map(|s| format!("'{}'", escape_sql_string(s)))
+                .unwrap_or_else(|| "NULL".to_string());
+            let key_str = event
+                .key
+                .as_ref()
+                .map(|s| format!("'{}'", escape_sql_string(s)))
+                .unwrap_or_else(|| "NULL".to_string());
+            let button_str = event
+                .button
+                .as_ref()
+                .map(|s| format!("'{}'", escape_sql_string(s)))
+                .unwrap_or_else(|| "NULL".to_string());
+            let x_str = event
+                .x
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
+            let y_str = event
+                .y
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
+            let pressed_str = event
+                .pressed
+                .map(|v| if v { "1" } else { "0" })
+                .unwrap_or("NULL");
+            let timecode_str = event
+                .timecode
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "NULL".to_string());
+            let screenshot_id_str = event
+                .screenshot_id
+                .as_ref()
+                .map(|s| format!("'{}'", escape_sql_string(s)))
+                .unwrap_or_else(|| "NULL".to_string());
+
+            // Parse timestamp - support both RFC3339 and other formats
+            let timestamp_dt = if let Ok(dt) = DateTime::parse_from_rfc3339(&event.timestamp) {
+                dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string()
+            } else if let Ok(dt) =
+                chrono::NaiveDateTime::parse_from_str(&event.timestamp, "%Y-%m-%d %H:%M:%S%.f")
+            {
+                format!("{}", dt.format("%Y-%m-%d %H:%M:%S%.3f"))
+            } else {
+                event.timestamp.clone()
+            };
+
+            values.push(format!(
+                "('{}', '{}', {}, {}, {}, {}, {}, {}, '{}', {}, '{}', {})",
+                escape_sql_string(&event.session_id),
+                escape_sql_string(&event.event_type),
+                event_subtype_str,
+                key_str,
+                button_str,
+                x_str,
+                y_str,
+                pressed_str,
+                timestamp_dt,
+                timecode_str,
+                escape_sql_string(&metadata_str),
+                screenshot_id_str
+            ));
+        }
+
+        let query = format!(
+            "INSERT INTO events (
+                session_id, event_type, event_subtype, key, button, x, y, pressed,
+                timestamp, timecode, metadata, screenshot_id
+            ) VALUES {}",
+            values.join(", ")
+        );
+
+        self.service
+            .insert(&query)
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to batch insert events: {}", e)))?;
+
+        Ok(())
+    }
+
     /// Store a screenshot/frame reference for click analysis
     pub async fn insert_screenshot(
         &self,

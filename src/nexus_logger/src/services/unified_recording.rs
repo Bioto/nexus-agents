@@ -1,8 +1,10 @@
 use crate::error::{LoggerError, Result};
+use crate::services::batch_inserter::{BatchEvent, BatchEventInserter, BatchInserterConfig};
 use crate::services::capture::InputEvent;
 use crate::services::click_context::{ClickContextHandle, ClickContextService};
 use crate::services::context_processing::ProcessingJob;
 use crate::services::database::Database;
+use crate::services::rotating_writer::{EventWriterConfig, RotatingEventWriter, RotatingEventWriterHandle};
 use chrono::{DateTime, Local, Utc};
 use nexus_audio::{AudioRecorder, RecordingConfig as NexusAudioRecordingConfig};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
@@ -151,6 +153,10 @@ pub struct UnifiedRecordingConfig {
     pub show_labels: bool,
     /// Frames per second for post-recording context analysis (None = disabled)
     pub context_fps: Option<f64>,
+    /// Event file writer configuration (buffered writes, rotation, compression)
+    pub event_writer_config: Option<EventWriterConfig>,
+    /// Batch inserter configuration (batched database inserts)
+    pub batch_inserter_config: Option<BatchInserterConfig>,
 }
 
 /// Screen recording configuration.
@@ -166,6 +172,9 @@ pub struct ScreenRecordingConfig {
     pub monitor_index: Option<usize>,
     /// Include audio
     pub include_audio: bool,
+    /// Video segment duration in seconds (None = no segmentation, Some(3600) = 1 hour segments)
+    /// When enabled, creates files like: recording_000.mp4, recording_001.mp4, etc.
+    pub segment_duration_secs: Option<u64>,
 }
 
 impl Default for ScreenRecordingConfig {
@@ -176,6 +185,7 @@ impl Default for ScreenRecordingConfig {
             duration_secs: None,
             monitor_index: None,
             include_audio: true,
+            segment_duration_secs: None, // No segmentation by default
         }
     }
 }
@@ -248,6 +258,40 @@ impl Default for UnifiedRecordingConfig {
             show_timestamp: true,
             show_labels: true,
             context_fps: None,
+            event_writer_config: None, // Use legacy file writing by default
+            batch_inserter_config: None, // Use individual inserts by default
+        }
+    }
+}
+
+/// Helper enum to support both bounded and unbounded event senders
+enum EventSender {
+    Bounded(mpsc::Sender<(InputEvent, Instant)>),
+    Unbounded(mpsc::UnboundedSender<(InputEvent, Instant)>),
+}
+
+impl EventSender {
+    /// Try to send an event (non-blocking)
+    fn try_send(&self, event: (InputEvent, Instant)) -> bool {
+        match self {
+            EventSender::Bounded(tx) => tx.try_send(event).is_ok(),
+            EventSender::Unbounded(tx) => tx.send(event).is_ok(),
+        }
+    }
+}
+
+/// Helper enum to support both bounded and unbounded event receivers
+enum EventReceiver {
+    Bounded(mpsc::Receiver<(InputEvent, Instant)>),
+    Unbounded(mpsc::UnboundedReceiver<(InputEvent, Instant)>),
+}
+
+impl EventReceiver {
+    /// Receive an event asynchronously
+    async fn recv(&mut self) -> Option<(InputEvent, Instant)> {
+        match self {
+            EventReceiver::Bounded(rx) => rx.recv().await,
+            EventReceiver::Unbounded(rx) => rx.recv().await,
         }
     }
 }
@@ -328,7 +372,32 @@ impl UnifiedRecordingService {
         let db = Arc::new(db);
 
         // Channel for events from input capture
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<(InputEvent, Instant)>();
+        // Use bounded channel if batch inserter is configured for backpressure
+        const EVENT_CHANNEL_SIZE: usize = 10_000;
+        let (event_tx, event_rx) = if self.config.batch_inserter_config.is_some() {
+            let (tx, rx) = mpsc::channel::<(InputEvent, Instant)>(EVENT_CHANNEL_SIZE);
+            (EventSender::Bounded(tx), EventReceiver::Bounded(rx))
+        } else {
+            let (tx, rx) = mpsc::unbounded_channel::<(InputEvent, Instant)>();
+            (EventSender::Unbounded(tx), EventReceiver::Unbounded(rx))
+        };
+
+        // Start batch inserter if configured
+        let batch_inserter = if let Some(ref batch_config) = self.config.batch_inserter_config {
+            let (handle, task) = BatchEventInserter::spawn(batch_config.clone(), stop_signal.clone())?;
+            Some((handle, task))
+        } else {
+            None
+        };
+
+        // Start rotating event writer if configured
+        let rotating_writer = if let Some(ref writer_config) = self.config.event_writer_config {
+            let (handle, task) = RotatingEventWriter::spawn(writer_config.clone(), stop_signal.clone())?;
+            Some((handle, task))
+        } else {
+            None
+        };
+        let rotating_writer_handle = rotating_writer.as_ref().map(|(h, _)| h.clone());
 
         // Start input capture in background
         let input_config = self.config.input_config.clone();
@@ -344,6 +413,7 @@ impl UnifiedRecordingService {
         let click_context_for_input = click_context.clone();
         let session_id_for_input = session_id.clone();
         let video_path_for_input = self.config.screen_config.output_path.clone();
+        let rotating_writer_for_input = rotating_writer_handle.clone();
         let input_handle = tokio::task::spawn_blocking(move || {
             Self::run_input_capture_blocking(
                 capture_keyboard,
@@ -352,6 +422,7 @@ impl UnifiedRecordingService {
                 input_config,
                 event_tx,
                 stop_signal_input,
+                rotating_writer_for_input,
                 click_context_for_input,
                 session_id_for_input,
                 video_path_for_input,
@@ -459,9 +530,13 @@ impl UnifiedRecordingService {
         let overlay_labels = Arc::new(std::sync::Mutex::new(Vec::<OverlayLabel>::new()));
         let overlay_labels_clone = overlay_labels.clone();
 
+        // Extract batch inserter handle if available
+        let batch_inserter_handle = batch_inserter.as_ref().map(|(h, _)| h.clone());
+
         // Process events and call callbacks
         let stop_signal_process = stop_signal.clone();
         let video_start_time = recording_start_instant;
+        let mut event_rx = event_rx;
         let process_handle = tokio::spawn(async move {
             loop {
                 // Check stop signal first
@@ -508,7 +583,7 @@ impl UnifiedRecordingService {
                 if let Some(label) = overlay_label {
                     overlay_labels_clone.lock().unwrap().push(label.clone());
                     
-                    // Log overlay label to database
+                    // Log overlay label to database (always use direct insert for overlay labels)
                     let db_for_label = db_clone.clone();
                     let session_id_for_label = session_id_clone.clone();
                     let label_text = label.text.clone();
@@ -549,106 +624,197 @@ impl UnifiedRecordingService {
                 if should_store {
                     // Store in database (errors are logged but don't stop recording)
                     let timestamp = Local::now().to_rfc3339();
-                    let video_timestamp_for_db = video_timestamp; // Capture video timestamp for database
-                    match &event {
-                        InputEvent::Keyboard { key, pressed, .. } => {
-                            let db_for_event = db_clone.clone();
-                            let session_id_for_event = session_id_clone.clone();
-                            let key_for_event = key.clone();
-                            let timestamp_for_event = timestamp.clone();
-                            let pressed_for_event = *pressed;
-                            tokio::spawn(async move {
-                                if let Err(e) = db_for_event
-                                    .insert_event(
-                                        &session_id_for_event,
-                                        "keyboard",
-                                        Some(if pressed_for_event {
-                                            "press"
-                                        } else {
-                                            "release"
-                                        }),
-                                        Some(&key_for_event),
-                                        None,
-                                        None,
-                                        None,
-                                        Some(pressed_for_event),
-                                        &timestamp_for_event,
-                                        Some(video_timestamp_for_db), // timecode - store video timestamp
-                                        None, // metadata
-                                        None, // screenshot_id
-                                    )
-                                    .await
-                                {
-                                    eprintln!(
-                                        "⚠️  Failed to store keyboard event in database: {}",
-                                        e
-                                    );
+                    let video_timestamp_for_db = video_timestamp;
+
+                    // Use batch inserter if available, otherwise fall back to direct inserts
+                    if let Some(ref inserter) = batch_inserter_handle {
+                        match &event {
+                            InputEvent::Keyboard { key, pressed, .. } => {
+                                let batch_event = BatchEvent {
+                                    session_id: session_id_clone.clone(),
+                                    event_type: "keyboard".to_string(),
+                                    event_subtype: Some(if *pressed { "press" } else { "release" }.to_string()),
+                                    key: Some(key.clone()),
+                                    button: None,
+                                    x: None,
+                                    y: None,
+                                    pressed: Some(*pressed),
+                                    timestamp: timestamp.clone(),
+                                    timecode: Some(video_timestamp_for_db),
+                                    metadata: None,
+                                    screenshot_id: None,
+                                };
+                                if !inserter.try_insert(batch_event) {
+                                    eprintln!("⚠️  Batch inserter buffer full, event dropped");
                                 }
 
-                                if pressed_for_event {
-                                    if let Err(e) = db_for_event
-                                        .update_key_frequency(&session_id_for_event, &key_for_event)
-                                        .await
-                                    {
-                                        eprintln!("⚠️  Failed to update key frequency: {}", e);
-                                    }
-                                }
-                            });
-                        }
-                        InputEvent::Mouse {
-                            event_type,
-                            button,
-                            x,
-                            y,
-                            timestamp: _,
-                        } => {
-                            let db_for_event = db_clone.clone();
-                            let session_id_for_event = session_id_clone.clone();
-                            let event_type_for_event = event_type.clone();
-                            let button_for_event = button.clone();
-                            let x_for_event = *x;
-                            let y_for_event = *y;
-                            let timestamp_for_event = timestamp.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = db_for_event
-                                    .insert_event(
-                                        &session_id_for_event,
-                                        "mouse",
-                                        Some(&event_type_for_event),
-                                        None,
-                                        button_for_event.as_deref(),
-                                        x_for_event,
-                                        y_for_event,
-                                        None,
-                                        &timestamp_for_event,
-                                        Some(video_timestamp_for_db), // timecode - store video timestamp
-                                        None, // metadata
-                                        None, // screenshot_id
-                                    )
-                                    .await
-                                {
-                                    eprintln!("⚠️  Failed to store mouse event in database: {}", e);
-                                }
-
-                                if event_type_for_event == "click" {
-                                    if let Some(ref btn) = button_for_event {
-                                        if let Err(e) = db_for_event
-                                            .update_mouse_button_frequency(
-                                                &session_id_for_event,
-                                                btn,
-                                            )
+                                // Update key frequency (still direct since it's aggregate data)
+                                if *pressed {
+                                    let db_for_freq = db_clone.clone();
+                                    let session_id_for_freq = session_id_clone.clone();
+                                    let key_for_freq = key.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = db_for_freq
+                                            .update_key_frequency(&session_id_for_freq, &key_for_freq)
                                             .await
                                         {
-                                            eprintln!(
-                                                "⚠️  Failed to update mouse button frequency: {}",
-                                                e
-                                            );
+                                            eprintln!("⚠️  Failed to update key frequency: {}", e);
                                         }
+                                    });
+                                }
+                            }
+                            InputEvent::Mouse {
+                                event_type,
+                                button,
+                                x,
+                                y,
+                                timestamp: _,
+                            } => {
+                                let batch_event = BatchEvent {
+                                    session_id: session_id_clone.clone(),
+                                    event_type: "mouse".to_string(),
+                                    event_subtype: Some(event_type.clone()),
+                                    key: None,
+                                    button: button.clone(),
+                                    x: *x,
+                                    y: *y,
+                                    pressed: None,
+                                    timestamp: timestamp.clone(),
+                                    timecode: Some(video_timestamp_for_db),
+                                    metadata: None,
+                                    screenshot_id: None,
+                                };
+                                if !inserter.try_insert(batch_event) {
+                                    eprintln!("⚠️  Batch inserter buffer full, event dropped");
+                                }
+
+                                // Update button frequency (still direct since it's aggregate data)
+                                if event_type == "click" {
+                                    if let Some(ref btn) = button {
+                                        let db_for_freq = db_clone.clone();
+                                        let session_id_for_freq = session_id_clone.clone();
+                                        let btn_for_freq = btn.clone();
+                                        tokio::spawn(async move {
+                                            if let Err(e) = db_for_freq
+                                                .update_mouse_button_frequency(&session_id_for_freq, &btn_for_freq)
+                                                .await
+                                            {
+                                                eprintln!("⚠️  Failed to update mouse button frequency: {}", e);
+                                            }
+                                        });
                                     }
                                 }
-                            });
+                            }
+                        }
+                    } else {
+                        // Legacy direct insert path
+                        match &event {
+                            InputEvent::Keyboard { key, pressed, .. } => {
+                                let db_for_event = db_clone.clone();
+                                let session_id_for_event = session_id_clone.clone();
+                                let key_for_event = key.clone();
+                                let timestamp_for_event = timestamp.clone();
+                                let pressed_for_event = *pressed;
+                                tokio::spawn(async move {
+                                    if let Err(e) = db_for_event
+                                        .insert_event(
+                                            &session_id_for_event,
+                                            "keyboard",
+                                            Some(if pressed_for_event {
+                                                "press"
+                                            } else {
+                                                "release"
+                                            }),
+                                            Some(&key_for_event),
+                                            None,
+                                            None,
+                                            None,
+                                            Some(pressed_for_event),
+                                            &timestamp_for_event,
+                                            Some(video_timestamp_for_db),
+                                            None,
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        eprintln!(
+                                            "⚠️  Failed to store keyboard event in database: {}",
+                                            e
+                                        );
+                                    }
+
+                                    if pressed_for_event {
+                                        if let Err(e) = db_for_event
+                                            .update_key_frequency(&session_id_for_event, &key_for_event)
+                                            .await
+                                        {
+                                            eprintln!("⚠️  Failed to update key frequency: {}", e);
+                                        }
+                                    }
+                                });
+                            }
+                            InputEvent::Mouse {
+                                event_type,
+                                button,
+                                x,
+                                y,
+                                timestamp: _,
+                            } => {
+                                let db_for_event = db_clone.clone();
+                                let session_id_for_event = session_id_clone.clone();
+                                let event_type_for_event = event_type.clone();
+                                let button_for_event = button.clone();
+                                let x_for_event = *x;
+                                let y_for_event = *y;
+                                let timestamp_for_event = timestamp.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = db_for_event
+                                        .insert_event(
+                                            &session_id_for_event,
+                                            "mouse",
+                                            Some(&event_type_for_event),
+                                            None,
+                                            button_for_event.as_deref(),
+                                            x_for_event,
+                                            y_for_event,
+                                            None,
+                                            &timestamp_for_event,
+                                            Some(video_timestamp_for_db),
+                                            None,
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        eprintln!("⚠️  Failed to store mouse event in database: {}", e);
+                                    }
+
+                                    if event_type_for_event == "click" {
+                                        if let Some(ref btn) = button_for_event {
+                                            if let Err(e) = db_for_event
+                                                .update_mouse_button_frequency(
+                                                    &session_id_for_event,
+                                                    btn,
+                                                )
+                                                .await
+                                            {
+                                                eprintln!(
+                                                    "⚠️  Failed to update mouse button frequency: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                });
+                            }
                         }
                     }
+                }
+            }
+
+            // Flush batch inserter if used
+            if let Some(ref inserter) = batch_inserter_handle {
+                if let Err(e) = inserter.flush().await {
+                    eprintln!("⚠️  Failed to flush batch inserter: {}", e);
                 }
             }
 
@@ -681,8 +847,9 @@ impl UnifiedRecordingService {
         capture_mouse: bool,
         capture_mouse_moves: bool,
         input_config: InputCaptureConfig,
-        event_tx: mpsc::UnboundedSender<(InputEvent, Instant)>,
+        event_tx: EventSender,
         stop_signal: Arc<AtomicBool>,
+        rotating_writer: Option<RotatingEventWriterHandle>,
         _click_context: Option<ClickContextHandle>,
         _session_id: String,
         _video_path: PathBuf,
@@ -697,21 +864,25 @@ impl UnifiedRecordingService {
         let mut last_mouse_pos: Option<(i32, i32)> = None;
         let _recording_start_instant = Instant::now();
 
-        // Open output file if specified
+        // Open output file if specified (only if not using rotating writer)
         let mut file_handle: Option<std::fs::File> =
-            if let Some(ref path) = input_config.output_file {
-                Some(
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                        .map_err(|e| {
-                            LoggerError::Io(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("Failed to open output file: {}", e),
-                            ))
-                        })?,
-                )
+            if rotating_writer.is_none() {
+                if let Some(ref path) = input_config.output_file {
+                    Some(
+                        OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                            .map_err(|e| {
+                                LoggerError::Io(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    format!("Failed to open output file: {}", e),
+                                ))
+                            })?,
+                    )
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -734,8 +905,8 @@ impl UnifiedRecordingService {
                             pressed: true,
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
-                        let _ = event_tx.send((event, event_time));
+                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        let _ = event_tx.try_send((event, event_time));
                     }
                 }
 
@@ -746,8 +917,8 @@ impl UnifiedRecordingService {
                             pressed: false,
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
-                        let _ = event_tx.send((event, event_time));
+                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        let _ = event_tx.try_send((event, event_time));
                     }
                 }
 
@@ -781,8 +952,8 @@ impl UnifiedRecordingService {
                             y: Some(mouse.coords.1),
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
-                        let _ = event_tx.send((event, event_time));
+                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        let _ = event_tx.try_send((event, event_time));
                         // Don't process clicks during recording; batch-process after video is complete
                     } else if !pressed && was_pressed {
                         let event = InputEvent::Mouse {
@@ -792,8 +963,8 @@ impl UnifiedRecordingService {
                             y: Some(mouse.coords.1),
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
-                        let _ = event_tx.send((event, event_time));
+                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        let _ = event_tx.try_send((event, event_time));
                     }
                 }
 
@@ -805,8 +976,8 @@ impl UnifiedRecordingService {
                         y: Some(mouse.coords.1),
                         timestamp: timestamp.clone(),
                     };
-                    Self::write_event_output(&event, &input_config.format, &mut file_handle)?;
-                    let _ = event_tx.send((event, event_time));
+                    Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                    let _ = event_tx.try_send((event, event_time));
                 }
 
                 last_mouse_buttons = mouse.button_pressed.clone();
@@ -828,23 +999,31 @@ impl UnifiedRecordingService {
         let recording_config = RecordingConfig {
             framerate: config.framerate,
             duration_secs: config.duration_secs,
-            output_path: config.output_path,
+            output_path: config.output_path.clone(),
             monitor_index: config.monitor_index,
             window_id: None,
             window_title: None,
             include_audio: config.include_audio,
             fast: false,
+            segment_duration_secs: config.segment_duration_secs,
         };
 
-        // Create recorder
-        let recorder = ScreenRecorder::new_with_config(recording_config.clone()).map_err(|e| {
-            LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
-        })?;
+        // Use segmented recording if configured, otherwise use standard recording
+        if config.segment_duration_secs.is_some() {
+            eprintln!("📹 Using FFmpeg CLI for segmented video recording");
+            ScreenRecorder::record_with_segmentation(recording_config, stop_signal)
+                .map_err(|e| LoggerError::Other(format!("Segmented screen recording failed: {}", e)))?;
+        } else {
+            // Create recorder
+            let recorder = ScreenRecorder::new_with_config(recording_config.clone()).map_err(|e| {
+                LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
+            })?;
 
-        // Start recording (this is blocking)
-        recorder
-            .record(recording_config, stop_signal)
-            .map_err(|e| LoggerError::Other(format!("Screen recording failed: {}", e)))?;
+            // Start recording (this is blocking)
+            recorder
+                .record(recording_config, stop_signal)
+                .map_err(|e| LoggerError::Other(format!("Screen recording failed: {}", e)))?;
+        }
 
         Ok(())
     }
@@ -1453,13 +1632,13 @@ impl UnifiedRecordingService {
         Ok(())
     }
 
-    fn write_event_output(
+    /// Write event output, using rotating writer if available, otherwise falling back to legacy file handle.
+    fn write_event_output_with_rotation(
         event: &InputEvent,
         format: &str,
         file_handle: &mut Option<std::fs::File>,
+        rotating_writer: &Option<RotatingEventWriterHandle>,
     ) -> Result<()> {
-        use std::io::Write;
-
         let output = match format {
             "json" => serde_json::to_string(event)
                 .map_err(|e| LoggerError::Other(format!("Failed to serialize event: {}", e)))?,
@@ -1476,7 +1655,16 @@ impl UnifiedRecordingService {
             _ => return Err(LoggerError::Configuration("Invalid format".to_string())),
         };
 
-        if let Some(ref mut file) = file_handle {
+        // Use rotating writer if available
+        if let Some(writer) = rotating_writer {
+            // Use non-blocking try_write since we're in a blocking context
+            if let Err(e) = writer.try_write(output.clone()) {
+                eprintln!("⚠️  Failed to write event to rotating writer: {}", e);
+                // Fall through to print to stdout as fallback
+                println!("{}", output);
+            }
+        } else if let Some(ref mut file) = file_handle {
+            use std::io::Write;
             writeln!(file, "{}", output).map_err(|e| {
                 LoggerError::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,

@@ -91,6 +91,7 @@ pub async fn run_record(args: RecordArgs) -> Result<()> {
         window_title: None,
         include_audio: !args.no_audio,
         fast: args.fast,
+        segment_duration_secs: None, // No video segmentation in CLI for now
     };
 
     // Create recorder with config

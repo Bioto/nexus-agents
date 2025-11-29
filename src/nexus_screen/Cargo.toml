@@ -25,6 +25,10 @@ serde_json = "1"
 ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg" }
 image = "0.25"
 tracing = "0.1"  # Added for debug/info logging in recording loop
+glob = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

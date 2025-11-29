@@ -152,6 +152,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             },
             monitor_index: args.monitor,
             include_audio: !args.no_audio,
+            segment_duration_secs: None, // TODO: Add CLI arg for video segmentation
         },
         input_config: InputCaptureConfig {
             output_file: args.events.clone(),
@@ -285,6 +286,9 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         } else {
             None
         },
+        // Use optimized writers by default for better performance
+        event_writer_config: None, // Use legacy file writing (rotating writer not enabled by default)
+        batch_inserter_config: None, // Use legacy direct inserts (batch inserter not enabled by default)
     };
 
     println!("🎬 Starting unified recording...");

@@ -35,6 +35,9 @@ pub struct RecordingConfig {
     pub window_title: Option<String>, // Record a specific window by title pattern
     pub include_audio: bool,
     pub fast: bool, // Capture as fast as possible, ignore target FPS
+    /// Video segment duration in seconds (None = no segmentation)
+    /// When enabled, creates files like: recording_000.mp4, recording_001.mp4, etc.
+    pub segment_duration_secs: Option<u64>,
 }
 
 /// Information about available monitors/displays.
@@ -62,6 +65,7 @@ impl Default for RecordingConfig {
             window_title: None,
             include_audio: true,
             fast: false,
+            segment_duration_secs: None,
         }
     }
 }
@@ -1197,6 +1201,244 @@ impl ScreenRecorder {
         }
 
         octx.write_trailer()?;
+        Ok(())
+    }
+
+    /// Records the screen using FFmpeg CLI with automatic video segmentation.
+    ///
+    /// This creates multiple video files (e.g., recording_000.mp4, recording_001.mp4)
+    /// at the specified segment duration. Uses FFmpeg's segment muxer for clean cuts.
+    ///
+    /// # Arguments
+    /// * `config` - Recording configuration with `segment_duration_secs` set
+    /// * `stop_signal` - Signal to stop recording
+    ///
+    /// # Returns
+    /// * `Ok(Vec<PathBuf>)` - List of created segment files
+    /// * `Err` - If recording fails
+    pub fn record_with_segmentation(
+        config: RecordingConfig,
+        stop_signal: Arc<AtomicBool>,
+    ) -> Result<Vec<PathBuf>> {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        let segment_duration = config.segment_duration_secs.unwrap_or(3600);
+        
+        // Generate output pattern: recording.mp4 -> recording_%03d.mp4
+        let stem = config.output_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("recording");
+        let ext = config.output_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("mp4");
+        let parent = config.output_path.parent().unwrap_or(std::path::Path::new("."));
+        
+        // Create output directory if needed
+        std::fs::create_dir_all(parent).map_err(|e| {
+            ScreenError::Configuration(format!("Failed to create output directory: {}", e))
+        })?;
+        
+        let output_pattern = parent.join(format!("{}_%03d.{}", stem, ext));
+        let segment_list_path = parent.join(format!("{}_segments.txt", stem));
+        
+        // Build FFmpeg command
+        // We use x11grab on Linux for screen capture
+        let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+        
+        // Get screen resolution using xdpyinfo or default
+        let screen_size = Self::get_screen_size_for_ffmpeg(config.monitor_index);
+        
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-y"]) // Overwrite output files
+            .args(["-f", "x11grab"])
+            .args(["-framerate", &config.framerate.to_string()])
+            .args(["-video_size", &screen_size])
+            .args(["-i", &format!("{}+0,0", display)])
+            .args(["-c:v", "libx264"])
+            .args(["-preset", "ultrafast"])
+            .args(["-tune", "zerolatency"])
+            .args(["-pix_fmt", "yuv420p"])
+            // Segment muxer options
+            .args(["-f", "segment"])
+            .args(["-segment_time", &segment_duration.to_string()])
+            .args(["-segment_format", "mp4"])
+            .args(["-segment_list", segment_list_path.to_str().unwrap()])
+            .args(["-segment_list_type", "flat"])
+            .args(["-reset_timestamps", "1"])
+            .args(["-strftime", "0"]) // Use sequential numbering, not timestamps
+            .arg(&output_pattern)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        eprintln!("🎬 Starting segmented recording with FFmpeg CLI");
+        eprintln!("   Output pattern: {}", output_pattern.display());
+        eprintln!("   Segment duration: {} seconds", segment_duration);
+        eprintln!("   Framerate: {} fps", config.framerate);
+        eprintln!("   Screen size: {}", screen_size);
+
+        let mut child = cmd.spawn().map_err(|e| {
+            ScreenError::VideoEncoding(format!(
+                "Failed to start FFmpeg: {}. Make sure ffmpeg is installed.",
+                e
+            ))
+        })?;
+
+        // Spawn thread to read stderr and print progress
+        let stderr = child.stderr.take();
+        let stderr_handle = std::thread::spawn(move || {
+            if let Some(stderr) = stderr {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().flatten() {
+                    // Print frame progress lines
+                    if line.contains("frame=") || line.contains("fps=") {
+                        eprint!("\r📹 {}", line.trim());
+                    } else if !line.trim().is_empty() {
+                        eprintln!("   FFmpeg: {}", line);
+                    }
+                }
+            }
+        });
+
+        // Monitor stop signal
+        while !stop_signal.load(std::sync::atomic::Ordering::Relaxed) {
+            // Check if ffmpeg is still running
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        return Err(ScreenError::VideoEncoding(format!(
+                            "FFmpeg exited with status: {}",
+                            status
+                        )));
+                    }
+                    break;
+                }
+                Ok(None) => {
+                    // Still running, continue monitoring
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    return Err(ScreenError::VideoEncoding(format!(
+                        "Failed to check FFmpeg status: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        // Send SIGINT to FFmpeg for clean shutdown (allows it to finalize the current segment)
+        eprintln!("\n🛑 Stopping FFmpeg...");
+        Self::send_sigint_to_child(&mut child)?;
+
+        // Wait for FFmpeg to finish with timeout
+        let wait_start = std::time::Instant::now();
+        let timeout = Duration::from_secs(10);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if wait_start.elapsed() > timeout {
+                        eprintln!("⚠️  FFmpeg didn't exit gracefully, killing...");
+                        let _ = child.kill();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => {
+                    eprintln!("⚠️  Error waiting for FFmpeg: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // Wait for stderr reader to finish
+        let _ = stderr_handle.join();
+
+        // Read segment list to return created files
+        let segments = if segment_list_path.exists() {
+            std::fs::read_to_string(&segment_list_path)
+                .map(|content| {
+                    content
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .map(|line| parent.join(line.trim()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            // Fall back to globbing for segment files
+            let pattern = parent.join(format!("{}_*.{}", stem, ext));
+            glob::glob(pattern.to_str().unwrap())
+                .map(|paths| paths.filter_map(|p| p.ok()).collect())
+                .unwrap_or_default()
+        };
+
+        eprintln!("✅ Recording complete. Created {} segment(s)", segments.len());
+        for seg in &segments {
+            eprintln!("   📁 {}", seg.display());
+        }
+
+        Ok(segments)
+    }
+
+    /// Get screen size string for FFmpeg (e.g., "1920x1080")
+    fn get_screen_size_for_ffmpeg(_monitor_index: Option<usize>) -> String {
+        // Try to get from xdpyinfo first
+        if let Ok(output) = Command::new("xdpyinfo").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                if line.contains("dimensions:") {
+                    // Parse "  dimensions:    1920x1080 pixels"
+                    if let Some(dims) = line.split_whitespace().nth(1) {
+                        if dims.contains('x') {
+                            return dims.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Fall back to xrandr
+        if let Ok(output) = Command::new("xrandr").args(["--current"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                // Look for primary monitor or first connected
+                if line.contains(" connected") {
+                    // Parse "HDMI-1 connected primary 1920x1080+0+0"
+                    for part in line.split_whitespace() {
+                        if part.contains('x') && part.contains('+') {
+                            if let Some(res) = part.split('+').next() {
+                                return res.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Default fallback
+        eprintln!("⚠️  Could not detect screen size, using 1920x1080");
+        "1920x1080".to_string()
+    }
+
+    /// Send SIGINT to a child process (Unix only)
+    #[cfg(unix)]
+    fn send_sigint_to_child(child: &mut std::process::Child) -> Result<()> {
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGINT);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    fn send_sigint_to_child(child: &mut std::process::Child) -> Result<()> {
+        // On non-Unix, just kill the process
+        child.kill().map_err(|e| {
+            ScreenError::VideoEncoding(format!("Failed to stop FFmpeg: {}", e))
+        })?;
         Ok(())
     }
 }
