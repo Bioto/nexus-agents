@@ -10,6 +10,9 @@ use std::sync::OnceLock;
 pub struct ServerConfig {
     /// Server name/identifier
     pub name: String,
+    /// Human-readable description of the server's purpose and capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Server type: "nexus" or "nutrition" (default: "nexus")
     /// Determines which server implementation to use
     #[serde(default = "default_server_type")]

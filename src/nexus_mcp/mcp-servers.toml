@@ -1,6 +1,7 @@
 # Nutrition MCP Server - local nutrition/recipe management
 [[servers]]
 name = "nutrition"
+description = "Nutrition database management system. Manage ingredients, recipes, meal plans, and nutritional information. Provides 14+ MCP tools for full CRUD operations on ingredients, recipes, and nutritional data."
 server_type = "nutrition"
 transport = "http"
 bind = "127.0.0.1:80"

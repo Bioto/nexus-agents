@@ -33,6 +33,17 @@ pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError>
     // Spawn all servers
     let mut handles = Vec::new();
     for server_config in config.servers {
+        // Display server information
+        if let Some(description) = &server_config.description {
+            eprintln!(
+                "[{}] {}",
+                server_config.name,
+                description
+            );
+        } else {
+            eprintln!("[{}] Starting server...", server_config.name);
+        }
+
         // Skip external servers - they are configured but not started locally
         if server_config.is_external() {
             eprintln!(

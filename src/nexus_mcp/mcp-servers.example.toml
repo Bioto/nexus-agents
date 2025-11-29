@@ -3,12 +3,14 @@
 
 [[servers]]
 name = "server-1"
+description = "Example server 1 - add a description of what this server does"
 transport = "http"
 bind = "127.0.0.1:8000"
 path = "/mcp"
 
 [[servers]]
 name = "server-2"
+description = "Example server 2 - add a description of what this server does"
 transport = "http"
 bind = "127.0.0.1:8001"
 path = "/mcp"
@@ -28,6 +30,7 @@ path = "/mcp"
 # You can use either ${VAR_NAME} or $VAR_NAME syntax
 [[servers]]
 name = "context7"
+description = "Context7 MCP server - external documentation and context provider"
 transport = "http"
 url = "https://mcp.context7.com/mcp"
 headers = { CONTEXT7_API_KEY = "${CONTEXT7_API_KEY}" }
