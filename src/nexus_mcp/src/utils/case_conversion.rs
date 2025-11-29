@@ -121,4 +121,3 @@ mod tests {
         assert_eq!(to_snake_case("İstanbul"), "i̇stanbul");
     }
 }
-

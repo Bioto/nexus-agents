@@ -15,6 +15,7 @@ nexus-screen = { path = "../nexus_screen" }
 tokio = { workspace = true }
 nexus-gui = { path = "../nexus_gui" }
 nexus-core = { path = "../nexus_core" }
+nexus_mcp = { path = "../nexus_mcp" }
 log = "0.4.22"
 simplelog = "0.12.2"
 chrono = "0.4.38"

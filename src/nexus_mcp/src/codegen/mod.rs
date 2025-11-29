@@ -9,4 +9,3 @@ mod schema_converter;
 
 pub use generator::CodeGenerator;
 pub use schema_converter::{SchemaConverter, SchemaError};
-

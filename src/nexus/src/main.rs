@@ -6,6 +6,7 @@ use cli::{Cli, Commands};
 use nexus_audio::{self, Commands as AudioCommands};
 use nexus_core::{self, Commands as CoreCommands};
 use nexus_gui::{self, Commands as GuiCommands};
+use nexus_mcp::{self, Commands as McpCommands};
 use nexus_screen::{self, Commands as ScreenCommands};
 use simplelog::{
     ColorChoice, CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger,
@@ -96,11 +97,25 @@ async fn main() -> anyhow::Result<()> {
             CoreCommands::Chat(args) => nexus_core::run_chat(args)
                 .await
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            CoreCommands::TestPython(args) => nexus_core::run_test_python(args)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        },
+        Commands::Mcp { command } => match command {
+            McpCommands::Shell(args) => {
+                nexus_mcp::run_shell(args).map_err(|e| anyhow::anyhow!(e.to_string()))?
+            }
+            McpCommands::GenerateCode(args) => nexus_mcp::run_generate_code(args)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            McpCommands::GenerateExternal(args) => nexus_mcp::run_generate_external(args)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            McpCommands::StartServers(args) => nexus_mcp::run_start_servers(args)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         },
         Commands::McpAgent(args) => cli::commands::mcp_agent::run_mcp_agent(args)
-            .await
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
-        Commands::TestPython(args) => cli::commands::test_python::run_test_python(args)
             .await
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         Commands::SearchMcpTools(args) => {

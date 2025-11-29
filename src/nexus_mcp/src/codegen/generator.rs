@@ -172,15 +172,11 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("X-Api-Key".to_string(), "test-key".to_string());
 
-        let gen = CodeGenerator::with_config(
-            "http://example.com",
-            "test-server",
-            Some(headers.clone()),
-        );
+        let gen =
+            CodeGenerator::with_config("http://example.com", "test-server", Some(headers.clone()));
 
         assert_eq!(gen.server_url, "http://example.com");
         assert_eq!(gen.server_name, "test-server");
         assert!(gen.headers.is_some());
     }
 }
-

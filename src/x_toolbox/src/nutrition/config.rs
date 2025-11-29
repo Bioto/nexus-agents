@@ -88,8 +88,7 @@ impl PostgresConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(5432),
-            database: env::var("POSTGRES_DATABASE")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            database: env::var("POSTGRES_DATABASE").unwrap_or_else(|_| "postgres".to_string()),
             username: env::var("POSTGRES_USER")
                 .or_else(|_| env::var("POSTGRES_USERNAME"))
                 .unwrap_or_else(|_| "postgres".to_string()),
@@ -110,7 +109,8 @@ impl PostgresConfig {
         let raw_url = original_url.to_string();
 
         // Remove the scheme prefix for parsing
-        let url = original_url.strip_prefix("postgresql://")
+        let url = original_url
+            .strip_prefix("postgresql://")
             .or_else(|| original_url.strip_prefix("postgres://"))?;
 
         // Split off query params (we'll preserve them via raw_url)
@@ -197,4 +197,3 @@ impl PostgresConfig {
         }
     }
 }
-

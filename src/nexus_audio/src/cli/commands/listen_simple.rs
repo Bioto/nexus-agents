@@ -70,11 +70,7 @@ pub struct ListenArgs {
     pub min_speech_ms: u32,
 
     /// Path to Whisper model file
-    #[arg(
-        short,
-        long,
-        default_value = ".models/ggml-small-fp16.bin"
-    )]
+    #[arg(short, long, default_value = ".models/ggml-small-fp16.bin")]
     pub model: PathBuf,
 
     /// List all available audio input devices and exit
@@ -91,27 +87,26 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
     if args.list_devices {
         let recorder = AudioRecorder::new()?;
         let devices = recorder.list_input_devices()?;
-        
+
         // Separate CPAL-enumerated devices from ALSA-only devices
         let mut cpal_devices = Vec::new();
         let mut alsa_only_devices = Vec::new();
-        
+
         #[cfg(target_os = "linux")]
         {
             let alsa_devices = AudioRecorder::list_alsa_devices();
-            let cpal_device_names: std::collections::HashSet<String> = devices.iter()
-                .map(|d| d.name.clone())
-                .collect();
-            
+            let cpal_device_names: std::collections::HashSet<String> =
+                devices.iter().map(|d| d.name.clone()).collect();
+
             for device in devices.iter() {
                 // Check if this device name matches an ALSA pattern
-                let is_alsa_pattern = device.name.contains("CARD=") || 
-                                     device.name.contains("hw:") ||
-                                     device.name.contains("sysdefault:") ||
-                                     device.name.contains("plughw:") ||
-                                     device.name.contains("front:") ||
-                                     device.name.contains("dsnoop:");
-                
+                let is_alsa_pattern = device.name.contains("CARD=")
+                    || device.name.contains("hw:")
+                    || device.name.contains("sysdefault:")
+                    || device.name.contains("plughw:")
+                    || device.name.contains("front:")
+                    || device.name.contains("dsnoop:");
+
                 if is_alsa_pattern && !cpal_device_names.contains(&device.name) {
                     // This is an ALSA device that CPAL enumerated
                     cpal_devices.push(device.clone());
@@ -120,7 +115,7 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
                     cpal_devices.push(device.clone());
                 }
             }
-            
+
             // Find ALSA devices that aren't in CPAL enumeration
             for alsa_device in alsa_devices {
                 if !cpal_device_names.contains(&alsa_device.name) {
@@ -132,7 +127,7 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
         {
             cpal_devices = devices;
         }
-        
+
         println!("📡 Available audio input devices:\n");
         for (i, device) in cpal_devices.iter().enumerate() {
             let default_marker = if device.default { " [DEFAULT]" } else { "" };
@@ -141,7 +136,7 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
                 println!("     → {}", device.name);
             }
         }
-        
+
         #[cfg(target_os = "linux")]
         {
             if !alsa_only_devices.is_empty() {
@@ -156,7 +151,7 @@ pub fn run_listen(args: ListenArgs) -> Result<()> {
                 }
             }
         }
-        
+
         println!("\n💡 Tip: Use the technical name (after →) with --device");
         println!("💡 If your device isn't listed, try: --device sysdefault:CARD=<CardName>");
         return Ok(());

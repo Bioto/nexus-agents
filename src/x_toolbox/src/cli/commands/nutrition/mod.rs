@@ -16,9 +16,8 @@ pub use commands::*;
 use batch::handle_batch_operation;
 use db::handle_db_command;
 use import::{
-    import_recipes_from_csv, import_usda_branded_ingredients,
-    import_usda_branded_ingredients_json, import_usda_ingredients,
-    import_usda_ingredients_json,
+    import_recipes_from_csv, import_usda_branded_ingredients, import_usda_branded_ingredients_json,
+    import_usda_ingredients, import_usda_ingredients_json,
 };
 use meal_plan::handle_meal_plan_command;
 
@@ -48,8 +47,13 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
         }
         NutritionCommands::Add { item } => match item {
             AddItem::Ingredient { name, description } => {
-                let ingredient = NutritionService::create_ingredient(pool, &name, description.as_deref()).await?;
-                println!("Created ingredient: {} ({})", ingredient.name, ingredient.id);
+                let ingredient =
+                    NutritionService::create_ingredient(pool, &name, description.as_deref())
+                        .await?;
+                println!(
+                    "Created ingredient: {} ({})",
+                    ingredient.name, ingredient.id
+                );
             }
             AddItem::NutritionalInfo {
                 ingredient_id,
@@ -64,15 +68,35 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                 let nutritional_info = NutritionService::upsert_nutritional_info(
                     pool,
                     ingredient_uuid,
-                    calories.to_string().parse().map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
-                    protein.to_string().parse().map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
-                    carbs.to_string().parse().map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
-                    fat.to_string().parse().map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
-                    fiber.map(|f| f.to_string().parse()).transpose().map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
-                    sugar.map(|s| s.to_string().parse()).transpose().map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
+                    calories
+                        .to_string()
+                        .parse()
+                        .map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
+                    protein
+                        .to_string()
+                        .parse()
+                        .map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
+                    carbs
+                        .to_string()
+                        .parse()
+                        .map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
+                    fat.to_string()
+                        .parse()
+                        .map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
+                    fiber
+                        .map(|f| f.to_string().parse())
+                        .transpose()
+                        .map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
+                    sugar
+                        .map(|s| s.to_string().parse())
+                        .transpose()
+                        .map_err(|e| ToolboxError::Validation(format!("Invalid decimal: {}", e)))?,
                 )
                 .await?;
-                println!("Created/updated nutritional info for ingredient: {}", nutritional_info.ingredient_id);
+                println!(
+                    "Created/updated nutritional info for ingredient: {}",
+                    nutritional_info.ingredient_id
+                );
             }
             AddItem::Recipe {
                 name,
@@ -96,7 +120,11 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
             }
         },
         NutritionCommands::Update { item } => match item {
-            UpdateItem::Ingredient { id, name, description } => {
+            UpdateItem::Ingredient {
+                id,
+                name,
+                description,
+            } => {
                 let ingredient_uuid = Uuid::parse_str(&id)?;
                 let ingredient = NutritionService::update_ingredient(
                     pool,
@@ -105,7 +133,10 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                     description.as_deref(),
                 )
                 .await?;
-                println!("Updated ingredient: {} ({})", ingredient.name, ingredient.id);
+                println!(
+                    "Updated ingredient: {} ({})",
+                    ingredient.name, ingredient.id
+                );
             }
             UpdateItem::Recipe {
                 id,
@@ -141,9 +172,13 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                 println!("Deleted recipe: {}", id);
             }
         },
-        NutritionCommands::Calculate { recipe_id, servings } => {
+        NutritionCommands::Calculate {
+            recipe_id,
+            servings,
+        } => {
             let recipe_uuid = Uuid::parse_str(&recipe_id)?;
-            let nutrition = NutritionService::calculate_recipe_nutrition(pool, recipe_uuid, servings).await?;
+            let nutrition =
+                NutritionService::calculate_recipe_nutrition(pool, recipe_uuid, servings).await?;
             println!("Nutritional information for recipe {}:", recipe_id);
             println!("Total calories: {}", nutrition.total_calories);
             println!("Total protein: {}g", nutrition.total_protein_g);
@@ -172,17 +207,44 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
         NutritionCommands::Import { file, skip_errors } => {
             import_recipes_from_csv(pool, &file, skip_errors).await?;
         }
-        NutritionCommands::ImportIngredients { directory, skip_errors } => {
+        NutritionCommands::ImportIngredients {
+            directory,
+            skip_errors,
+        } => {
             import_usda_ingredients(pool, &directory, skip_errors).await?;
         }
-        NutritionCommands::ImportBrandedIngredients { directory, skip_errors, limit } => {
+        NutritionCommands::ImportBrandedIngredients {
+            directory,
+            skip_errors,
+            limit,
+        } => {
             import_usda_branded_ingredients(pool, &directory, skip_errors, limit).await?;
         }
-        NutritionCommands::ImportIngredientsJson { file, skip_errors, batch_size, concurrent_batches } => {
-            import_usda_ingredients_json(pool, &file, skip_errors, batch_size, concurrent_batches).await?;
+        NutritionCommands::ImportIngredientsJson {
+            file,
+            skip_errors,
+            batch_size,
+            concurrent_batches,
+        } => {
+            import_usda_ingredients_json(pool, &file, skip_errors, batch_size, concurrent_batches)
+                .await?;
         }
-        NutritionCommands::ImportBrandedIngredientsJson { file, skip_errors, limit, batch_size, concurrent_batches } => {
-            import_usda_branded_ingredients_json(pool, &file, skip_errors, limit, batch_size, concurrent_batches).await?;
+        NutritionCommands::ImportBrandedIngredientsJson {
+            file,
+            skip_errors,
+            limit,
+            batch_size,
+            concurrent_batches,
+        } => {
+            import_usda_branded_ingredients_json(
+                pool,
+                &file,
+                skip_errors,
+                limit,
+                batch_size,
+                concurrent_batches,
+            )
+            .await?;
         }
         NutritionCommands::Batch { operation } => {
             handle_batch_operation(pool, operation).await?;
@@ -216,78 +278,125 @@ async fn handle_family_command(
             let prefs_json = preferences
                 .map(|p| serde_json::from_str(&p))
                 .transpose()
-                .map_err(|e| ToolboxError::Validation(format!("Invalid JSON preferences: {}", e)))?;
-            let family_member = NutritionService::create_family_member(pool, &name, prefs_json).await?;
-            println!("Created family member: {} ({})", family_member.name, family_member.id);
+                .map_err(|e| {
+                    ToolboxError::Validation(format!("Invalid JSON preferences: {}", e))
+                })?;
+            let family_member =
+                NutritionService::create_family_member(pool, &name, prefs_json).await?;
+            println!(
+                "Created family member: {} ({})",
+                family_member.name, family_member.id
+            );
         }
         FamilyCommand::Get { id, with_allergies } => {
             let uuid = Uuid::parse_str(&id)?;
             if with_allergies {
-                let family_member = NutritionService::get_family_member_with_allergies(pool, uuid).await?;
-                println!("Family Member: {} ({})", family_member.family_member.name, family_member.family_member.id);
+                let family_member =
+                    NutritionService::get_family_member_with_allergies(pool, uuid).await?;
+                println!(
+                    "Family Member: {} ({})",
+                    family_member.family_member.name, family_member.family_member.id
+                );
                 if let Some(prefs) = family_member.family_member.preferences {
                     println!("Preferences: {}", serde_json::to_string_pretty(&prefs)?);
                 }
                 println!("\nAllergies ({}):", family_member.allergies.len());
                 for allergy in family_member.allergies {
-                    println!("- {} (severity: {})", 
+                    println!(
+                        "- {} (severity: {})",
                         allergy.ingredient.name,
-                        allergy.allergy.severity.as_deref().unwrap_or("unknown"));
+                        allergy.allergy.severity.as_deref().unwrap_or("unknown")
+                    );
                     if let Some(notes) = allergy.allergy.notes {
                         println!("  Notes: {}", notes);
                     }
                 }
             } else {
                 let family_member = NutritionService::get_family_member(pool, uuid).await?;
-                println!("Family Member: {} ({})", family_member.name, family_member.id);
+                println!(
+                    "Family Member: {} ({})",
+                    family_member.name, family_member.id
+                );
                 if let Some(prefs) = family_member.preferences {
                     println!("Preferences: {}", serde_json::to_string_pretty(&prefs)?);
                 }
             }
         }
         FamilyCommand::List { search } => {
-            let family_members = NutritionService::list_family_members(pool, search.as_deref()).await?;
+            let family_members =
+                NutritionService::list_family_members(pool, search.as_deref()).await?;
             println!("Found {} family member(s):", family_members.len());
             for fm in family_members {
                 println!("- {} ({})", fm.name, fm.id);
             }
         }
-        FamilyCommand::Update { id, name, preferences } => {
+        FamilyCommand::Update {
+            id,
+            name,
+            preferences,
+        } => {
             let uuid = Uuid::parse_str(&id)?;
             let prefs_json = preferences
                 .map(|p| serde_json::from_str(&p))
                 .transpose()
-                .map_err(|e| ToolboxError::Validation(format!("Invalid JSON preferences: {}", e)))?;
-            let family_member = NutritionService::update_family_member(pool, uuid, name.as_deref(), prefs_json).await?;
-            println!("Updated family member: {} ({})", family_member.name, family_member.id);
+                .map_err(|e| {
+                    ToolboxError::Validation(format!("Invalid JSON preferences: {}", e))
+                })?;
+            let family_member =
+                NutritionService::update_family_member(pool, uuid, name.as_deref(), prefs_json)
+                    .await?;
+            println!(
+                "Updated family member: {} ({})",
+                family_member.name, family_member.id
+            );
         }
         FamilyCommand::Delete { id } => {
             let uuid = Uuid::parse_str(&id)?;
             NutritionService::delete_family_member(pool, uuid).await?;
             println!("Deleted family member: {}", id);
         }
-        FamilyCommand::AddAllergy { family_member_id, ingredient_id, severity, notes } => {
+        FamilyCommand::AddAllergy {
+            family_member_id,
+            ingredient_id,
+            severity,
+            notes,
+        } => {
             let fm_uuid = Uuid::parse_str(&family_member_id)?;
             let ing_uuid = Uuid::parse_str(&ingredient_id)?;
             let allergy = NutritionService::add_family_member_allergy(
-                pool, fm_uuid, ing_uuid, severity.as_deref(), notes.as_deref()
-            ).await?;
+                pool,
+                fm_uuid,
+                ing_uuid,
+                severity.as_deref(),
+                notes.as_deref(),
+            )
+            .await?;
             println!("Added allergy (ID: {})", allergy.id);
         }
-        FamilyCommand::RemoveAllergy { family_member_id, ingredient_id } => {
+        FamilyCommand::RemoveAllergy {
+            family_member_id,
+            ingredient_id,
+        } => {
             let fm_uuid = Uuid::parse_str(&family_member_id)?;
             let ing_uuid = Uuid::parse_str(&ingredient_id)?;
             NutritionService::remove_family_member_allergy(pool, fm_uuid, ing_uuid).await?;
             println!("Removed allergy");
         }
-        FamilyCommand::CheckAllergens { family_member_id, recipe_id } => {
+        FamilyCommand::CheckAllergens {
+            family_member_id,
+            recipe_id,
+        } => {
             let fm_uuid = Uuid::parse_str(&family_member_id)?;
             let recipe_uuid = Uuid::parse_str(&recipe_id)?;
-            let allergens = NutritionService::check_recipe_allergens(pool, fm_uuid, recipe_uuid).await?;
+            let allergens =
+                NutritionService::check_recipe_allergens(pool, fm_uuid, recipe_uuid).await?;
             if allergens.is_empty() {
                 println!("Recipe is safe - no allergens found.");
             } else {
-                println!("⚠️  WARNING: Recipe contains {} allergen(s):", allergens.len());
+                println!(
+                    "⚠️  WARNING: Recipe contains {} allergen(s):",
+                    allergens.len()
+                );
                 for allergen in allergens {
                     println!("- {}", allergen.name);
                 }
@@ -304,13 +413,22 @@ async fn handle_favorite_command(
     use crate::cli::commands::nutrition::commands::FavoriteCommand;
 
     match command {
-        FavoriteCommand::Add { family_member_id, recipe_id, notes } => {
+        FavoriteCommand::Add {
+            family_member_id,
+            recipe_id,
+            notes,
+        } => {
             let fm_uuid = Uuid::parse_str(&family_member_id)?;
             let recipe_uuid = Uuid::parse_str(&recipe_id)?;
-            let favorite = NutritionService::add_recipe_favorite(pool, fm_uuid, recipe_uuid, notes.as_deref()).await?;
+            let favorite =
+                NutritionService::add_recipe_favorite(pool, fm_uuid, recipe_uuid, notes.as_deref())
+                    .await?;
             println!("Added recipe to favorites (ID: {})", favorite.id);
         }
-        FavoriteCommand::Remove { family_member_id, recipe_id } => {
+        FavoriteCommand::Remove {
+            family_member_id,
+            recipe_id,
+        } => {
             let fm_uuid = Uuid::parse_str(&family_member_id)?;
             let recipe_uuid = Uuid::parse_str(&recipe_id)?;
             NutritionService::remove_recipe_favorite(pool, fm_uuid, recipe_uuid).await?;
@@ -330,7 +448,10 @@ async fn handle_favorite_command(
         FavoriteCommand::FavoritedBy { id } => {
             let uuid = Uuid::parse_str(&id)?;
             let family_members = NutritionService::get_recipe_favorited_by(pool, uuid).await?;
-            println!("Family members who favorited this recipe ({}):", family_members.len());
+            println!(
+                "Family members who favorited this recipe ({}):",
+                family_members.len()
+            );
             for fm in family_members {
                 println!("- {} ({})", fm.name, fm.id);
             }
@@ -338,4 +459,3 @@ async fn handle_favorite_command(
     }
     Ok(())
 }
-

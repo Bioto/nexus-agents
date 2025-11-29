@@ -43,11 +43,7 @@ pub struct TestVoiceArgs {
     pub min_speech_ms: u32,
 
     /// Path to Whisper model file
-    #[arg(
-        short,
-        long,
-        default_value = ".models/ggml-small-fp16.bin"
-    )]
+    #[arg(short, long, default_value = ".models/ggml-small-fp16.bin")]
     pub model: PathBuf,
 
     /// Text to speak back when the phrase is detected

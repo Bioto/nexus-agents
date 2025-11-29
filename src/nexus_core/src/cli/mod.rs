@@ -16,7 +16,10 @@ pub struct Cli {
 pub enum Commands {
     /// Start an interactive chat session with conversation history
     Chat(commands::chat::ChatArgs),
+    /// Test execute_python tool with a one-off prompt
+    TestPython(commands::test_python::TestPythonArgs),
 }
 
 // Re-export command handlers for convenience
 pub use commands::chat::run_chat;
+pub use commands::test_python::run_test_python;

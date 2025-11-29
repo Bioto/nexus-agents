@@ -214,4 +214,3 @@ mod tests {
         assert!(result.contains("items: list[int]"));
     }
 }
-

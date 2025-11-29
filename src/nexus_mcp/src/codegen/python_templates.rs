@@ -113,9 +113,11 @@ fn generate_ensure_initialized(custom_headers_fn: Option<&str>) -> String {
 fn generate_sse_parsing(var_prefix: &str) -> String {
     let text_var = format!("{}_text", var_prefix);
     let response_var = format!("{}_response", var_prefix);
-    
+
     let mut code = String::new();
-    code.push_str(&format!("    # Parse SSE format response (data: {{...}})\n"));
+    code.push_str(&format!(
+        "    # Parse SSE format response (data: {{...}})\n"
+    ));
     code.push_str(&format!("    {} = {}.text\n", text_var, response_var));
     code.push_str(&format!("    if isinstance({}, str):\n", text_var));
     code.push_str("        # Extract JSON from SSE format: data: {...}\n");
@@ -130,9 +132,14 @@ fn generate_sse_parsing(var_prefix: &str) -> String {
     code.push_str("        # Try to parse as JSON directly\n");
     code.push_str("        try:\n");
     code.push_str("            import json\n");
-    code.push_str(&format!("            data_json = {}.json()\n", response_var));
+    code.push_str(&format!(
+        "            data_json = {}.json()\n",
+        response_var
+    ));
     code.push_str("            if 'error' in data_json:\n");
-    code.push_str("                raise Exception(f\"MCP initialization error: {data_json['error']}\")\n");
+    code.push_str(
+        "                raise Exception(f\"MCP initialization error: {data_json['error']}\")\n",
+    );
     code.push_str("        except:\n");
     code.push_str("            pass\n");
     code
@@ -204,7 +211,9 @@ fn generate_response_parsing() -> String {
     code.push_str("                raise Exception(f\"MCP tool error: {result['error']}\")\n");
     code.push_str("            return result.get(\"result\", {})\n");
     code.push_str("        except:\n");
-    code.push_str("            raise Exception(f\"Failed to parse MCP response: {response_text[:200]}\")\n");
+    code.push_str(
+        "            raise Exception(f\"Failed to parse MCP response: {response_text[:200]}\")\n",
+    );
     code
 }
 
@@ -336,4 +345,3 @@ pub fn generate_init_file(tool_exports: &[(String, String)]) -> String {
 
     code
 }
-

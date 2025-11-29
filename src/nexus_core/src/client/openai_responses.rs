@@ -81,7 +81,8 @@ impl ResponsesClient {
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
             .map_err(|_| {
                 Error::Configuration(
-                    "VISION_API_KEY (or LLM_API_KEY/OPENAI_API_KEY) environment variable not set".to_string(),
+                    "VISION_API_KEY (or LLM_API_KEY/OPENAI_API_KEY) environment variable not set"
+                        .to_string(),
                 )
             })?;
 

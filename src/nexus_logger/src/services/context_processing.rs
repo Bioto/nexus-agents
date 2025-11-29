@@ -525,7 +525,7 @@ impl ProcessingService {
                 Ok(Ok(path)) => {
                     let data = tokio::fs::read(&path).await?;
                     let base64 = BASE64.encode(&data);
-                    
+
                     // Get image dimensions and store screenshot
                     if let Some(session_id) = &job.session_id {
                         let frame_timestamp = base_timestamp + offset_secs;
@@ -533,43 +533,48 @@ impl ProcessingService {
                         let db_clone = Arc::clone(&db);
                         let path_str = path.to_string_lossy().to_string();
                         let session_id_clone = session_id.clone();
-                        
+
                         // Get image dimensions
                         let (width, height) = tokio::task::spawn_blocking({
                             let path_clone = path.clone();
                             move || -> Result<(u32, u32)> {
                                 // Check file exists and has content
-                                let metadata = std::fs::metadata(&path_clone)
-                                    .map_err(|e| LoggerError::Other(format!(
-                                        "Failed to get metadata for {}: {}", 
-                                        path_clone.display(), e
-                                    )))?;
-                                
+                                let metadata = std::fs::metadata(&path_clone).map_err(|e| {
+                                    LoggerError::Other(format!(
+                                        "Failed to get metadata for {}: {}",
+                                        path_clone.display(),
+                                        e
+                                    ))
+                                })?;
+
                                 if metadata.len() == 0 {
                                     return Err(LoggerError::Other(format!(
-                                        "Image file is empty: {}", 
+                                        "Image file is empty: {}",
                                         path_clone.display()
                                     )));
                                 }
-                                
+
                                 // Read first few bytes to check format
-                                let mut file = std::fs::File::open(&path_clone)
-                                    .map_err(|e| LoggerError::Io(std::io::Error::new(
+                                let mut file = std::fs::File::open(&path_clone).map_err(|e| {
+                                    LoggerError::Io(std::io::Error::new(
                                         std::io::ErrorKind::Other,
-                                        format!("Failed to open {}: {}", path_clone.display(), e)
-                                    )))?;
-                                
+                                        format!("Failed to open {}: {}", path_clone.display(), e),
+                                    ))
+                                })?;
+
                                 let mut header = [0u8; 8];
                                 use std::io::Read;
                                 file.read_exact(&mut header).map_err(|e| {
                                     LoggerError::Other(format!(
-                                        "Failed to read header from {}: {}", 
-                                        path_clone.display(), e
+                                        "Failed to read header from {}: {}",
+                                        path_clone.display(),
+                                        e
                                     ))
                                 })?;
-                                
+
                                 // PNG signature: 89 50 4E 47 0D 0A 1A 0A
-                                let png_signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+                                let png_signature =
+                                    [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
                                 if header != png_signature {
                                     return Err(LoggerError::Other(format!(
                                         "File {} does not have PNG signature. \
@@ -580,27 +585,35 @@ impl ProcessingService {
                                         metadata.len()
                                     )));
                                 }
-                                
+
                                 // Reset file and decode with explicit format
                                 let reader = ImageReader::new(BufReader::new(
-                                    std::fs::File::open(&path_clone).map_err(LoggerError::Io)?
+                                    std::fs::File::open(&path_clone).map_err(LoggerError::Io)?,
                                 ));
-                                let img = reader.with_guessed_format()
-                                    .map_err(|e| LoggerError::Other(format!(
-                                        "Failed to create ImageReader for {}: {}", 
-                                        path_clone.display(), e
-                                    )))?
+                                let img = reader
+                                    .with_guessed_format()
+                                    .map_err(|e| {
+                                        LoggerError::Other(format!(
+                                            "Failed to create ImageReader for {}: {}",
+                                            path_clone.display(),
+                                            e
+                                        ))
+                                    })?
                                     .decode()
-                                    .map_err(|e| LoggerError::Other(format!(
+                                    .map_err(|e| {
+                                        LoggerError::Other(format!(
                                         "Failed to decode PNG image from {} (size: {} bytes): {}", 
                                         path_clone.display(), metadata.len(), e
-                                    )))?;
+                                    ))
+                                    })?;
                                 Ok((img.width(), img.height()))
                             }
                         })
                         .await
-                        .map_err(|e| LoggerError::Other(format!("Image decode task failed: {}", e)))??;
-                        
+                        .map_err(|e| {
+                            LoggerError::Other(format!("Image decode task failed: {}", e))
+                        })??;
+
                         // Store screenshot in database
                         let timestamp_utc = Utc::now();
                         let click_x = job.x;
@@ -631,7 +644,7 @@ impl ProcessingService {
                             }
                         });
                     }
-                    
+
                     frames.push(CapturedFrame {
                         offset_secs: offset_secs,
                         base64_image: base64,
@@ -729,50 +742,55 @@ impl ProcessingService {
                 Ok(Ok(path)) => {
                     let data = tokio::fs::read(&path).await?;
                     let base64 = BASE64.encode(&data);
-                    
+
                     // Get image dimensions and store screenshot
                     if let Some(session_id) = &job.session_id {
                         let frame_number = frame_idx as u64;
                         let db_clone = Arc::clone(&db);
                         let path_str = path.to_string_lossy().to_string();
                         let session_id_clone = session_id.clone();
-                        
+
                         // Get image dimensions
                         let (width, height) = tokio::task::spawn_blocking({
                             let path_clone = path.clone();
                             move || -> Result<(u32, u32)> {
                                 // Check file exists and has content
-                                let metadata = std::fs::metadata(&path_clone)
-                                    .map_err(|e| LoggerError::Other(format!(
-                                        "Failed to get metadata for {}: {}", 
-                                        path_clone.display(), e
-                                    )))?;
-                                
+                                let metadata = std::fs::metadata(&path_clone).map_err(|e| {
+                                    LoggerError::Other(format!(
+                                        "Failed to get metadata for {}: {}",
+                                        path_clone.display(),
+                                        e
+                                    ))
+                                })?;
+
                                 if metadata.len() == 0 {
                                     return Err(LoggerError::Other(format!(
-                                        "Image file is empty: {}", 
+                                        "Image file is empty: {}",
                                         path_clone.display()
                                     )));
                                 }
-                                
+
                                 // Read first few bytes to check format
-                                let mut file = std::fs::File::open(&path_clone)
-                                    .map_err(|e| LoggerError::Io(std::io::Error::new(
+                                let mut file = std::fs::File::open(&path_clone).map_err(|e| {
+                                    LoggerError::Io(std::io::Error::new(
                                         std::io::ErrorKind::Other,
-                                        format!("Failed to open {}: {}", path_clone.display(), e)
-                                    )))?;
-                                
+                                        format!("Failed to open {}: {}", path_clone.display(), e),
+                                    ))
+                                })?;
+
                                 let mut header = [0u8; 8];
                                 use std::io::Read;
                                 file.read_exact(&mut header).map_err(|e| {
                                     LoggerError::Other(format!(
-                                        "Failed to read header from {}: {}", 
-                                        path_clone.display(), e
+                                        "Failed to read header from {}: {}",
+                                        path_clone.display(),
+                                        e
                                     ))
                                 })?;
-                                
+
                                 // PNG signature: 89 50 4E 47 0D 0A 1A 0A
-                                let png_signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+                                let png_signature =
+                                    [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
                                 if header != png_signature {
                                     return Err(LoggerError::Other(format!(
                                         "File {} does not have PNG signature. \
@@ -783,27 +801,35 @@ impl ProcessingService {
                                         metadata.len()
                                     )));
                                 }
-                                
+
                                 // Reset file and decode with explicit format
                                 let reader = ImageReader::new(BufReader::new(
-                                    std::fs::File::open(&path_clone).map_err(LoggerError::Io)?
+                                    std::fs::File::open(&path_clone).map_err(LoggerError::Io)?,
                                 ));
-                                let img = reader.with_guessed_format()
-                                    .map_err(|e| LoggerError::Other(format!(
-                                        "Failed to create ImageReader for {}: {}", 
-                                        path_clone.display(), e
-                                    )))?
+                                let img = reader
+                                    .with_guessed_format()
+                                    .map_err(|e| {
+                                        LoggerError::Other(format!(
+                                            "Failed to create ImageReader for {}: {}",
+                                            path_clone.display(),
+                                            e
+                                        ))
+                                    })?
                                     .decode()
-                                    .map_err(|e| LoggerError::Other(format!(
+                                    .map_err(|e| {
+                                        LoggerError::Other(format!(
                                         "Failed to decode PNG image from {} (size: {} bytes): {}", 
                                         path_clone.display(), metadata.len(), e
-                                    )))?;
+                                    ))
+                                    })?;
                                 Ok((img.width(), img.height()))
                             }
                         })
                         .await
-                        .map_err(|e| LoggerError::Other(format!("Image decode task failed: {}", e)))??;
-                        
+                        .map_err(|e| {
+                            LoggerError::Other(format!("Image decode task failed: {}", e))
+                        })??;
+
                         // Store screenshot in database
                         let timestamp_utc = Utc::now();
                         let click_x = job.x;
@@ -835,7 +861,7 @@ impl ProcessingService {
                             }
                         });
                     }
-                    
+
                     frames.push(CapturedFrame {
                         offset_secs: timestamp,
                         base64_image: base64,
@@ -907,15 +933,29 @@ impl ProcessingService {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            eprintln!("⚠️  FFmpeg extraction failed for {} at {:.2}s", output_path.display(), timestamp);
-            eprintln!("   Command: ffmpeg -ss {:.3} -i {} -frames:v 1 -vcodec png -pix_fmt rgb24 -y {}", 
-                timestamp, video_path.display(), output_path.display());
+            eprintln!(
+                "⚠️  FFmpeg extraction failed for {} at {:.2}s",
+                output_path.display(),
+                timestamp
+            );
+            eprintln!(
+                "   Command: ffmpeg -ss {:.3} -i {} -frames:v 1 -vcodec png -pix_fmt rgb24 -y {}",
+                timestamp,
+                video_path.display(),
+                output_path.display()
+            );
             eprintln!("   Exit code: {}", output.status.code().unwrap_or(-1));
             if !stderr.is_empty() {
-                eprintln!("   Stderr:\n{}", stderr.lines().take(20).collect::<Vec<_>>().join("\n"));
+                eprintln!(
+                    "   Stderr:\n{}",
+                    stderr.lines().take(20).collect::<Vec<_>>().join("\n")
+                );
             }
             if !stdout.is_empty() {
-                eprintln!("   Stdout:\n{}", stdout.lines().take(20).collect::<Vec<_>>().join("\n"));
+                eprintln!(
+                    "   Stdout:\n{}",
+                    stdout.lines().take(20).collect::<Vec<_>>().join("\n")
+                );
             }
             return Err(LoggerError::Other(format!(
                 "FFmpeg frame extraction failed at {:.2}s from {}:\n  Exit code: {}\n  Stderr: {}\n  Stdout: {}",
@@ -942,7 +982,7 @@ impl ProcessingService {
                 e
             ))
         })?;
-        
+
         if metadata.len() == 0 {
             return Err(LoggerError::Other(format!(
                 "FFmpeg extracted empty file at {}: {}",
@@ -1142,21 +1182,22 @@ impl ProcessingService {
     /// Reconstruct text from keyboard events, handling backspace and special keys
     fn reconstruct_text_from_keys(events: &[crate::services::database::TimelineEvent]) -> String {
         use std::collections::HashMap;
-        
+
         let mut text = String::new();
         let mut modifier_keys: HashMap<String, bool> = HashMap::new();
         let mut last_key_time: Option<DateTime<Utc>> = None;
-        
+
         // Filter to only keyboard press events, sorted by time
-        let mut key_events: Vec<_> = events.iter()
+        let mut key_events: Vec<_> = events
+            .iter()
             .filter(|e| e.event_type == "keyboard" && e.pressed == Some(true))
             .collect();
-        
+
         key_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
-        
+
         for event in key_events {
             let key = event.key.as_ref().map(|k| k.as_str()).unwrap_or("");
-            
+
             // Track modifier keys
             if key == "LControl" || key == "RControl" || key == "Control" {
                 modifier_keys.insert("Ctrl".to_string(), true);
@@ -1170,7 +1211,7 @@ impl ProcessingService {
                 modifier_keys.insert("Alt".to_string(), true);
                 continue;
             }
-            
+
             // Handle special keys
             match key {
                 "Backspace" => {
@@ -1209,7 +1250,7 @@ impl ProcessingService {
                 }
                 _ => {}
             }
-            
+
             // Handle modifier combinations
             if modifier_keys.contains_key("Ctrl") {
                 // Common shortcuts
@@ -1252,7 +1293,7 @@ impl ProcessingService {
                     }
                 }
             }
-            
+
             // Regular character - check for word boundary
             if let Some(last_time) = last_key_time {
                 let gap = event.timestamp.signed_duration_since(last_time);
@@ -1260,7 +1301,7 @@ impl ProcessingService {
                     text.push(' '); // Word boundary
                 }
             }
-            
+
             // Convert key to character (simplified - handles common cases)
             let ch_opt: Option<char> = if modifier_keys.contains_key("Shift") {
                 // Uppercase or shifted characters
@@ -1302,19 +1343,19 @@ impl ProcessingService {
                     None
                 }
             };
-            
+
             // Only add single character keys (filter out multi-char key names)
             if let Some(ch) = ch_opt {
                 text.push(ch);
             }
-            
+
             modifier_keys.clear();
             last_key_time = Some(event.timestamp);
         }
-        
+
         text.trim().to_string()
     }
-    
+
     /// Gather context (clicks and keyboard events) for a frame
     async fn gather_frame_context(
         db: &Database,
@@ -1322,16 +1363,18 @@ impl ProcessingService {
         video_timestamp: f64,
     ) -> Result<(Vec<String>, String)> {
         // Get events in time window
-        let events = db.get_events_in_window(
-            session_id,
-            video_timestamp,
-            CONTEXT_WINDOW_BEFORE,
-            CONTEXT_WINDOW_AFTER,
-        ).await?;
-        
+        let events = db
+            .get_events_in_window(
+                session_id,
+                video_timestamp,
+                CONTEXT_WINDOW_BEFORE,
+                CONTEXT_WINDOW_AFTER,
+            )
+            .await?;
+
         let mut clicks = Vec::new();
         let mut keyboard_events = Vec::new();
-        
+
         for event in &events {
             match event.event_type.as_str() {
                 "mouse" => {
@@ -1356,10 +1399,10 @@ impl ProcessingService {
                 _ => {}
             }
         }
-        
+
         // Reconstruct text from keyboard events
         let reconstructed_text = Self::reconstruct_text_from_keys(&keyboard_events);
-        
+
         Ok((clicks, reconstructed_text))
     }
 
@@ -1372,7 +1415,7 @@ impl ProcessingService {
         db: Option<Arc<Database>>,
     ) -> Result<String> {
         let coordinates = job.coordinates().unwrap_or((0, 0));
-        
+
         // Calculate absolute video timestamp for this frame
         let frame_video_timestamp = if let Some(base) = job.video_timestamp {
             base + frame.offset_secs
@@ -1380,7 +1423,7 @@ impl ProcessingService {
             // For full video sampling, offset_secs is already absolute
             frame.offset_secs
         };
-        
+
         // Gather context (clicks and keyboard events) if database is available
         let mut context_info = String::new();
         if let Some(db_ref) = db.as_ref() {
@@ -1394,7 +1437,10 @@ impl ProcessingService {
                                 context_info.push_str(&clicks.join(", "));
                             }
                             if !reconstructed_text.is_empty() {
-                                context_info.push_str(&format!("\n• Text entered: \"{}\"", reconstructed_text));
+                                context_info.push_str(&format!(
+                                    "\n• Text entered: \"{}\"",
+                                    reconstructed_text
+                                ));
                             }
                         }
                     }
@@ -1405,7 +1451,7 @@ impl ProcessingService {
                 }
             }
         }
-        
+
         let mut prompt = format!(
             "Frame captured +{:.2}s from '{}' at ({}, {}).{}",
             frame.offset_secs, job.label, coordinates.0, coordinates.1, context_info

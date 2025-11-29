@@ -8,8 +8,7 @@ pub mod nutrition;
 pub use cli::{run_nutrition, Cli, Commands};
 
 /// Custom error types and Result alias for the crate.
-pub use error::{ToolboxError, Result};
+pub use error::{Result, ToolboxError};
 
 /// Re-export nutrition MCP server for external use
 pub use nutrition::NutritionMcpServer;
-

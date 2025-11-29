@@ -39,7 +39,7 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
     if args.list_devices {
         let monitor_devices = recorder.list_monitor_devices()?;
         let output_devices = recorder.list_output_devices()?;
-        
+
         println!("🔊 Available audio output devices:\n");
         for (i, device) in output_devices.iter().enumerate() {
             let default_marker = if device.default { " [DEFAULT]" } else { "" };
@@ -50,7 +50,7 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
             // Show potential monitor source name
             println!("     📡 Monitor: \"Monitor of {}\"", device.name);
         }
-        
+
         if !monitor_devices.is_empty() {
             println!("\n📡 Available monitor/loopback devices:\n");
             for (i, device) in monitor_devices.iter().enumerate() {
@@ -64,11 +64,13 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
             println!("\n⚠️  No monitor devices found in input devices.");
             println!("\n💡 Tips:");
             println!("   - Try using the monitor names shown above (e.g., \"Monitor of <output device>\")");
-            println!("   - On PulseAudio, you can also try: \"pulse\" or \"Monitor of PulseAudio\"");
+            println!(
+                "   - On PulseAudio, you can also try: \"pulse\" or \"Monitor of PulseAudio\""
+            );
             println!("   - On PipeWire, try: \"Monitor of PipeWire\"");
             println!("   - You may need to load PulseAudio monitor module: pactl load-module module-loopback");
         }
-        
+
         println!("\n💡 Tip: Use the technical name (after →) with --device");
         return Ok(());
     }
@@ -83,7 +85,9 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
     };
 
     // Determine monitor device - create loopback sink if not specified
-    let (monitor_device, module_ids, previous_source, previous_sink) = if let Some(device) = args.device {
+    let (monitor_device, module_ids, previous_source, previous_sink) = if let Some(device) =
+        args.device
+    {
         (Some(device), Vec::new(), None, None)
     } else {
         // Create virtual loopback sink for monitoring
@@ -93,8 +97,14 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
             match AudioRecorder::create_loopback_sink(None) {
                 Ok((monitor_name, module_ids, prev_sink)) => {
                     println!("✅ Created virtual loopback sink");
-                    println!("   Monitor source: {} (created in PulseAudio)", monitor_name);
-                    println!("   Previous default sink: {} (will be restored after recording)", prev_sink);
+                    println!(
+                        "   Monitor source: {} (created in PulseAudio)",
+                        monitor_name
+                    );
+                    println!(
+                        "   Previous default sink: {} (will be restored after recording)",
+                        prev_sink
+                    );
                     // Set the monitor source as default so CPAL can access it via default input device
                     match AudioRecorder::set_default_source(&monitor_name) {
                         Ok(prev_source) => {
@@ -153,7 +163,7 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
     #[cfg(target_os = "linux")]
     let previous_source_for_cleanup = previous_source.clone();
     let previous_sink_for_cleanup = previous_sink.clone();
-    
+
     // Handle Ctrl+C gracefully and clean up loopback sink
     if config.duration.is_none() {
         let module_ids_clone = module_ids_for_cleanup.clone();
@@ -215,11 +225,12 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
 
     match result {
         Ok(_) => {
-            println!("\n✅ Desktop audio recording saved to: {}", output_path.display());
+            println!(
+                "\n✅ Desktop audio recording saved to: {}",
+                output_path.display()
+            );
             Ok(())
         }
         Err(e) => Err(e),
     }
 }
-
-

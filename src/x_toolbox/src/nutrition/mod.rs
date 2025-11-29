@@ -9,4 +9,3 @@ pub use database::Database;
 pub use mcp_server::NutritionMcpServer;
 pub use models::*;
 pub use service::NutritionService;
-

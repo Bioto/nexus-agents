@@ -19,6 +19,6 @@ pub use services::unified_recording::{
 /// Re-export input event types.
 pub use services::capture::InputEvent;
 
+pub use services::batch_inserter::{BatchEvent, BatchInserterConfig};
 /// Re-export optimized writer configurations.
 pub use services::rotating_writer::EventWriterConfig;
-pub use services::batch_inserter::{BatchEvent, BatchInserterConfig};

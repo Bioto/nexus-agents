@@ -1,5 +1,5 @@
-use crate::error::{Result, ToolboxError};
 use super::commands::DbCommand;
+use crate::error::{Result, ToolboxError};
 use std::process::Command;
 
 /// Handle database management commands
@@ -95,4 +95,3 @@ pub async fn handle_db_command(command: DbCommand) -> Result<()> {
 
     Ok(())
 }
-

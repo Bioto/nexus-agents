@@ -4,10 +4,11 @@ use crate::services::capture::InputEvent;
 use crate::services::click_context::{ClickContextHandle, ClickContextService};
 use crate::services::context_processing::ProcessingJob;
 use crate::services::database::Database;
-use crate::services::rotating_writer::{EventWriterConfig, RotatingEventWriter, RotatingEventWriterHandle};
+use crate::services::rotating_writer::{
+    EventWriterConfig, RotatingEventWriter, RotatingEventWriterHandle,
+};
 use chrono::{DateTime, Local, Utc};
 use nexus_audio::{AudioRecorder, RecordingConfig as NexusAudioRecordingConfig};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 /// Overlay label information
 #[derive(Debug, Clone)]
@@ -384,7 +386,8 @@ impl UnifiedRecordingService {
 
         // Start batch inserter if configured
         let batch_inserter = if let Some(ref batch_config) = self.config.batch_inserter_config {
-            let (handle, task) = BatchEventInserter::spawn(batch_config.clone(), stop_signal.clone())?;
+            let (handle, task) =
+                BatchEventInserter::spawn(batch_config.clone(), stop_signal.clone())?;
             Some((handle, task))
         } else {
             None
@@ -392,7 +395,8 @@ impl UnifiedRecordingService {
 
         // Start rotating event writer if configured
         let rotating_writer = if let Some(ref writer_config) = self.config.event_writer_config {
-            let (handle, task) = RotatingEventWriter::spawn(writer_config.clone(), stop_signal.clone())?;
+            let (handle, task) =
+                RotatingEventWriter::spawn(writer_config.clone(), stop_signal.clone())?;
             Some((handle, task))
         } else {
             None
@@ -443,7 +447,7 @@ impl UnifiedRecordingService {
         // before microphone recording tries to connect to its device
         let mut audio_handles = Vec::new();
         let mut audio_config_indices = Vec::new(); // Track which config index each handle corresponds to
-        
+
         // Start desktop audio monitoring tasks first (they set up the loopback and default source)
         // CRITICAL: We need to set the monitor as default source BEFORE starting the recording
         // so that pipewire/pulse devices route to it
@@ -459,7 +463,7 @@ impl UnifiedRecordingService {
         let previous_default_sink: Option<String> = None;
         #[cfg(not(target_os = "linux"))]
         let loopback_module_ids: Vec<u32> = Vec::new();
-        
+
         for (config_idx, audio_config) in self.config.audio_configs.iter().enumerate() {
             if audio_config.enabled && audio_config.monitor_desktop_audio {
                 // Set up loopback sink and default source BEFORE starting recording
@@ -467,50 +471,53 @@ impl UnifiedRecordingService {
                 {
                     use nexus_audio::AudioRecorder;
                     eprintln!("📺 Setting up desktop audio monitoring...");
-                    
+
                     // Capture current default source
                     if let Ok(current_source) = AudioRecorder::get_default_source() {
                         eprintln!("📝 Current default source: {}", current_source);
                         previous_default_source = Some(current_source);
                     }
-                    
+
                     // Create loopback sink (this also sets combine-sink as default output)
                     match AudioRecorder::create_loopback_sink(None) {
                         Ok((monitor_name, module_ids, prev_sink)) => {
                             eprintln!("✅ Created loopback sink: {}", monitor_name);
                             loopback_module_ids.extend(module_ids);
                             previous_default_sink = Some(prev_sink);
-                            
+
                             // DON'T change the default source - we'll use the monitor source name directly
                             // This allows the microphone to continue using the default source
                             eprintln!("ℹ️  Using monitor source '{}' directly (not changing default source)", monitor_name);
-                            eprintln!("   This allows microphone to use default source simultaneously");
+                            eprintln!(
+                                "   This allows microphone to use default source simultaneously"
+                            );
                         }
                         Err(e) => {
                             eprintln!("❌ Failed to create loopback sink: {}", e);
                             return Err(LoggerError::Other(format!(
-                                "Failed to create loopback sink: {}", e
+                                "Failed to create loopback sink: {}",
+                                e
                             )));
                         }
                     }
-                    
+
                     // Give a moment for the loopback sink to be ready
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
-                
+
                 let audio_config_clone = audio_config.clone();
                 let stop_signal_audio = stop_signal.clone();
-                
+
                 audio_config_indices.push(config_idx);
                 audio_handles.push(tokio::task::spawn_blocking(move || {
                     Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
                 }));
-                
+
                 // Give desktop audio 500ms to start recording before microphone tries to connect
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
-        
+
         // Then start microphone tasks (they use explicit device names)
         // Since we're not changing the default source for desktop audio, the microphone can use 'pulse'/'default'
         // and it will route to the original default source (the microphone)
@@ -518,7 +525,7 @@ impl UnifiedRecordingService {
             if audio_config.enabled && !audio_config.monitor_desktop_audio {
                 let audio_config_clone = audio_config.clone();
                 let stop_signal_audio = stop_signal.clone();
-                
+
                 audio_config_indices.push(config_idx);
                 audio_handles.push(tokio::task::spawn_blocking(move || {
                     Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
@@ -582,7 +589,7 @@ impl UnifiedRecordingService {
                 // Collect overlay labels if provided
                 if let Some(label) = overlay_label {
                     overlay_labels_clone.lock().unwrap().push(label.clone());
-                    
+
                     // Log overlay label to database (always use direct insert for overlay labels)
                     let db_for_label = db_clone.clone();
                     let session_id_for_label = session_id_clone.clone();
@@ -633,7 +640,9 @@ impl UnifiedRecordingService {
                                 let batch_event = BatchEvent {
                                     session_id: session_id_clone.clone(),
                                     event_type: "keyboard".to_string(),
-                                    event_subtype: Some(if *pressed { "press" } else { "release" }.to_string()),
+                                    event_subtype: Some(
+                                        if *pressed { "press" } else { "release" }.to_string(),
+                                    ),
                                     key: Some(key.clone()),
                                     button: None,
                                     x: None,
@@ -655,7 +664,10 @@ impl UnifiedRecordingService {
                                     let key_for_freq = key.clone();
                                     tokio::spawn(async move {
                                         if let Err(e) = db_for_freq
-                                            .update_key_frequency(&session_id_for_freq, &key_for_freq)
+                                            .update_key_frequency(
+                                                &session_id_for_freq,
+                                                &key_for_freq,
+                                            )
                                             .await
                                         {
                                             eprintln!("⚠️  Failed to update key frequency: {}", e);
@@ -696,7 +708,10 @@ impl UnifiedRecordingService {
                                         let btn_for_freq = btn.clone();
                                         tokio::spawn(async move {
                                             if let Err(e) = db_for_freq
-                                                .update_mouse_button_frequency(&session_id_for_freq, &btn_for_freq)
+                                                .update_mouse_button_frequency(
+                                                    &session_id_for_freq,
+                                                    &btn_for_freq,
+                                                )
                                                 .await
                                             {
                                                 eprintln!("⚠️  Failed to update mouse button frequency: {}", e);
@@ -745,7 +760,10 @@ impl UnifiedRecordingService {
 
                                     if pressed_for_event {
                                         if let Err(e) = db_for_event
-                                            .update_key_frequency(&session_id_for_event, &key_for_event)
+                                            .update_key_frequency(
+                                                &session_id_for_event,
+                                                &key_for_event,
+                                            )
                                             .await
                                         {
                                             eprintln!("⚠️  Failed to update key frequency: {}", e);
@@ -785,7 +803,10 @@ impl UnifiedRecordingService {
                                         )
                                         .await
                                     {
-                                        eprintln!("⚠️  Failed to store mouse event in database: {}", e);
+                                        eprintln!(
+                                            "⚠️  Failed to store mouse event in database: {}",
+                                            e
+                                        );
                                     }
 
                                     if event_type_for_event == "click" {
@@ -865,27 +886,26 @@ impl UnifiedRecordingService {
         let _recording_start_instant = Instant::now();
 
         // Open output file if specified (only if not using rotating writer)
-        let mut file_handle: Option<std::fs::File> =
-            if rotating_writer.is_none() {
-                if let Some(ref path) = input_config.output_file {
-                    Some(
-                        OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(path)
-                            .map_err(|e| {
-                                LoggerError::Io(std::io::Error::new(
-                                    std::io::ErrorKind::Other,
-                                    format!("Failed to open output file: {}", e),
-                                ))
-                            })?,
-                    )
-                } else {
-                    None
-                }
+        let mut file_handle: Option<std::fs::File> = if rotating_writer.is_none() {
+            if let Some(ref path) = input_config.output_file {
+                Some(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .map_err(|e| {
+                            LoggerError::Io(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to open output file: {}", e),
+                            ))
+                        })?,
+                )
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         while !stop_signal.load(Ordering::SeqCst) {
             let timestamp_utc = chrono::Utc::now();
@@ -905,7 +925,12 @@ impl UnifiedRecordingService {
                             pressed: true,
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        Self::write_event_output_with_rotation(
+                            &event,
+                            &input_config.format,
+                            &mut file_handle,
+                            &rotating_writer,
+                        )?;
                         let _ = event_tx.try_send((event, event_time));
                     }
                 }
@@ -917,7 +942,12 @@ impl UnifiedRecordingService {
                             pressed: false,
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        Self::write_event_output_with_rotation(
+                            &event,
+                            &input_config.format,
+                            &mut file_handle,
+                            &rotating_writer,
+                        )?;
                         let _ = event_tx.try_send((event, event_time));
                     }
                 }
@@ -952,7 +982,12 @@ impl UnifiedRecordingService {
                             y: Some(mouse.coords.1),
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        Self::write_event_output_with_rotation(
+                            &event,
+                            &input_config.format,
+                            &mut file_handle,
+                            &rotating_writer,
+                        )?;
                         let _ = event_tx.try_send((event, event_time));
                         // Don't process clicks during recording; batch-process after video is complete
                     } else if !pressed && was_pressed {
@@ -963,7 +998,12 @@ impl UnifiedRecordingService {
                             y: Some(mouse.coords.1),
                             timestamp: timestamp.clone(),
                         };
-                        Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                        Self::write_event_output_with_rotation(
+                            &event,
+                            &input_config.format,
+                            &mut file_handle,
+                            &rotating_writer,
+                        )?;
                         let _ = event_tx.try_send((event, event_time));
                     }
                 }
@@ -976,7 +1016,12 @@ impl UnifiedRecordingService {
                         y: Some(mouse.coords.1),
                         timestamp: timestamp.clone(),
                     };
-                    Self::write_event_output_with_rotation(&event, &input_config.format, &mut file_handle, &rotating_writer)?;
+                    Self::write_event_output_with_rotation(
+                        &event,
+                        &input_config.format,
+                        &mut file_handle,
+                        &rotating_writer,
+                    )?;
                     let _ = event_tx.try_send((event, event_time));
                 }
 
@@ -1011,13 +1056,15 @@ impl UnifiedRecordingService {
         // Use segmented recording if configured, otherwise use standard recording
         if config.segment_duration_secs.is_some() {
             eprintln!("📹 Using FFmpeg CLI for segmented video recording");
-            ScreenRecorder::record_with_segmentation(recording_config, stop_signal)
-                .map_err(|e| LoggerError::Other(format!("Segmented screen recording failed: {}", e)))?;
+            ScreenRecorder::record_with_segmentation(recording_config, stop_signal).map_err(
+                |e| LoggerError::Other(format!("Segmented screen recording failed: {}", e)),
+            )?;
         } else {
             // Create recorder
-            let recorder = ScreenRecorder::new_with_config(recording_config.clone()).map_err(|e| {
-                LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
-            })?;
+            let recorder =
+                ScreenRecorder::new_with_config(recording_config.clone()).map_err(|e| {
+                    LoggerError::Other(format!("Failed to initialize screen recorder: {}", e))
+                })?;
 
             // Start recording (this is blocking)
             recorder
@@ -1042,9 +1089,12 @@ impl UnifiedRecordingService {
         } else {
             "🎤 Microphone"
         };
-        
-        eprintln!("🚀 {} recording function started, output: {}", 
-            device_type, config.output_path.display());
+
+        eprintln!(
+            "🚀 {} recording function started, output: {}",
+            device_type,
+            config.output_path.display()
+        );
 
         // Create audio recorder
         let recorder = AudioRecorder::new()?;
@@ -1053,25 +1103,27 @@ impl UnifiedRecordingService {
         // NOTE: Loopback sink is created in start_recording() before this function is called
         // We just need to verify it exists and get the monitor name
         #[cfg(target_os = "linux")]
-        let (_module_ids, _monitor_source_name, _previous_default_source) = if config.monitor_desktop_audio {
-            // Loopback sink should already exist (created in start_recording)
-            // Just verify and get the monitor name - don't create again
-            let monitor_name = "nexus_audio_monitor.monitor".to_string();
-            eprintln!("📺 Using existing loopback sink: {}", monitor_name);
-            // Module IDs will be cleaned up in wait() method, not here
-            (Vec::<u32>::new(), Some(monitor_name), None::<String>)
-        } else {
-            (Vec::new(), None, None)
-        };
+        let (_module_ids, _monitor_source_name, _previous_default_source) =
+            if config.monitor_desktop_audio {
+                // Loopback sink should already exist (created in start_recording)
+                // Just verify and get the monitor name - don't create again
+                let monitor_name = "nexus_audio_monitor.monitor".to_string();
+                eprintln!("📺 Using existing loopback sink: {}", monitor_name);
+                // Module IDs will be cleaned up in wait() method, not here
+                (Vec::<u32>::new(), Some(monitor_name), None::<String>)
+            } else {
+                (Vec::new(), None, None)
+            };
         #[cfg(not(target_os = "linux"))]
-        let (module_ids, _monitor_source_name, _previous_default_source) = if config.monitor_desktop_audio {
-            log::warn!("Desktop audio monitoring is only supported on Linux");
-            return Err(LoggerError::Other(
-                "Desktop audio monitoring is only supported on Linux".to_string(),
-            ));
-        } else {
-            (Vec::new(), None, None)
-        };
+        let (module_ids, _monitor_source_name, _previous_default_source) =
+            if config.monitor_desktop_audio {
+                log::warn!("Desktop audio monitoring is only supported on Linux");
+                return Err(LoggerError::Other(
+                    "Desktop audio monitoring is only supported on Linux".to_string(),
+                ));
+            } else {
+                (Vec::new(), None, None)
+            };
 
         // For microphone: use the device_name that was pre-selected (if any)
         // The device_name should already be set in the config before this function is called
@@ -1111,49 +1163,66 @@ impl UnifiedRecordingService {
         };
 
         // Log device selection for debugging
-        let device_name_display = recording_config.device_name.as_ref()
+        let device_name_display = recording_config
+            .device_name
+            .as_ref()
             .map(|d| d.as_str())
             .unwrap_or("system default");
-        
-        eprintln!("{} starting: device='{}' (requested {} Hz, {} channels)", 
-            device_type, device_name_display, 
-            recording_config.sample_rate, recording_config.channels);
+
+        eprintln!(
+            "{} starting: device='{}' (requested {} Hz, {} channels)",
+            device_type,
+            device_name_display,
+            recording_config.sample_rate,
+            recording_config.channels
+        );
 
         // Convert output path to absolute FIRST to ensure consistent file location
         let output_path = if config.output_path.is_absolute() {
             config.output_path.clone()
         } else {
             std::env::current_dir()
-                .map_err(|e| LoggerError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to get current directory: {}", e),
-                )))?
+                .map_err(|e| {
+                    LoggerError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Failed to get current directory: {}", e),
+                    ))
+                })?
                 .join(&config.output_path)
         };
 
-        eprintln!("📁 {} output path resolved to: {}", device_type, output_path.display());
+        eprintln!(
+            "📁 {} output path resolved to: {}",
+            device_type,
+            output_path.display()
+        );
 
         // Use streaming API to have control over stop signal
         // This will return the actual sample rate and channels from the device
         eprintln!("🎙️  {} attempting to create audio stream...", device_type);
-        let (mut stream, rx, actual_sample_rate, actual_channels) = match recorder.stream_audio_chunks(recording_config.clone()) {
-            Ok(result) => {
-                eprintln!("✅ {} stream created successfully", device_type);
-                result
-            }
-            Err(e) => {
-                eprintln!("❌ {} failed to create stream: {}", device_type, e);
-                return Err(LoggerError::Other(format!(
-                    "Failed to create audio stream for {}: {}",
-                    device_type, e
-                )));
-            }
-        };
+        let (mut stream, rx, actual_sample_rate, actual_channels) =
+            match recorder.stream_audio_chunks(recording_config.clone()) {
+                Ok(result) => {
+                    eprintln!("✅ {} stream created successfully", device_type);
+                    result
+                }
+                Err(e) => {
+                    eprintln!("❌ {} failed to create stream: {}", device_type, e);
+                    return Err(LoggerError::Other(format!(
+                        "Failed to create audio stream for {}: {}",
+                        device_type, e
+                    )));
+                }
+            };
 
-        eprintln!("{} opened: device='{}' (actual {} Hz, {} channels) -> {}", 
-            device_type, device_name_display,
-            actual_sample_rate, actual_channels,
-            output_path.display());
+        eprintln!(
+            "{} opened: device='{}' (actual {} Hz, {} channels) -> {}",
+            device_type,
+            device_name_display,
+            actual_sample_rate,
+            actual_channels,
+            output_path.display()
+        );
 
         // Create WAV file BEFORE starting the stream to ensure it exists
         // This way, even if the stream fails, we have a record that recording was attempted
@@ -1164,11 +1233,16 @@ impl UnifiedRecordingService {
             sample_format: hound::SampleFormat::Int,
         };
 
-        let writer = File::create(&output_path)
-            .map_err(|e| LoggerError::Io(std::io::Error::new(
+        let writer = File::create(&output_path).map_err(|e| {
+            LoggerError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("Failed to create audio file at {}: {}", output_path.display(), e),
-            )))?;
+                format!(
+                    "Failed to create audio file at {}: {}",
+                    output_path.display(),
+                    e
+                ),
+            ))
+        })?;
         let mut wav_writer = WavWriter::new(BufWriter::new(writer), spec)
             .map_err(|e| LoggerError::Other(format!("Failed to create WAV writer: {}", e)))?;
 
@@ -1181,16 +1255,16 @@ impl UnifiedRecordingService {
         }
 
         // Start the stream
-        stream.play().map_err(|e| {
-            LoggerError::Other(format!("Failed to start audio stream: {}", e))
-        })?;
+        stream
+            .play()
+            .map_err(|e| LoggerError::Other(format!("Failed to start audio stream: {}", e)))?;
 
         // Record audio chunks until stop signal
         // For stereo, samples come interleaved: [L, R, L, R, ...]
         // For mono, samples come as: [M, M, M, ...]
         let mut samples_written = 0u64;
         let mut write_error_occurred = false;
-        
+
         while !stop_signal.load(Ordering::SeqCst) {
             // Try to receive audio chunk with timeout to allow periodic stop signal checks
             match rx.recv_timeout(Duration::from_millis(100)) {
@@ -1208,7 +1282,11 @@ impl UnifiedRecordingService {
                                     samples_written += 1;
                                 }
                                 Err(e) => {
-                                    eprintln!("❌ Error writing audio sample to {}: {}", output_path.display(), e);
+                                    eprintln!(
+                                        "❌ Error writing audio sample to {}: {}",
+                                        output_path.display(),
+                                        e
+                                    );
                                     write_error_occurred = true;
                                     break;
                                 }
@@ -1224,14 +1302,18 @@ impl UnifiedRecordingService {
                                     samples_written += 1;
                                 }
                                 Err(e) => {
-                                    eprintln!("❌ Error writing audio sample to {}: {}", output_path.display(), e);
+                                    eprintln!(
+                                        "❌ Error writing audio sample to {}: {}",
+                                        output_path.display(),
+                                        e
+                                    );
                                     write_error_occurred = true;
                                     break;
                                 }
                             }
                         }
                     }
-                    
+
                     if write_error_occurred {
                         break;
                     }
@@ -1242,25 +1324,35 @@ impl UnifiedRecordingService {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // Channel disconnected, stop recording
-                    eprintln!("⚠️  Audio stream channel disconnected for {}", output_path.display());
+                    eprintln!(
+                        "⚠️  Audio stream channel disconnected for {}",
+                        output_path.display()
+                    );
                     break;
                 }
             }
         }
-        
-        eprintln!("📊 {} recording: wrote {} samples before finalization", device_type, samples_written);
+
+        eprintln!(
+            "📊 {} recording: wrote {} samples before finalization",
+            device_type, samples_written
+        );
 
         // Stop the stream
-        stream.pause().map_err(|e| {
-            LoggerError::Other(format!("Failed to pause audio stream: {}", e))
-        })?;
+        stream
+            .pause()
+            .map_err(|e| LoggerError::Other(format!("Failed to pause audio stream: {}", e)))?;
 
         // Finalize WAV file - this is critical, even if no audio was recorded
         drop(stream);
-        
+
         eprintln!("💾 Finalizing WAV file at {}...", output_path.display());
         wav_writer.finalize().map_err(|e| {
-            LoggerError::Other(format!("Failed to finalize WAV file at {}: {}", output_path.display(), e))
+            LoggerError::Other(format!(
+                "Failed to finalize WAV file at {}: {}",
+                output_path.display(),
+                e
+            ))
         })?;
         eprintln!("✅ WAV file finalized successfully");
 
@@ -1271,20 +1363,27 @@ impl UnifiedRecordingService {
         if !output_path.exists() {
             return Err(LoggerError::Other(format!(
                 "WAV file does not exist after finalization at {} (samples written: {})",
-                output_path.display(), samples_written
+                output_path.display(),
+                samples_written
             )));
         }
 
         // Log file size for debugging
         match std::fs::metadata(&output_path) {
             Ok(metadata) => {
-                eprintln!("✅ {} recording file created: {} ({} bytes, {} samples)", 
-                    device_type, output_path.display(), metadata.len(), samples_written);
+                eprintln!(
+                    "✅ {} recording file created: {} ({} bytes, {} samples)",
+                    device_type,
+                    output_path.display(),
+                    metadata.len(),
+                    samples_written
+                );
             }
             Err(e) => {
                 return Err(LoggerError::Other(format!(
                     "Failed to get file metadata for {} after creation: {}",
-                    output_path.display(), e
+                    output_path.display(),
+                    e
                 )));
             }
         }
@@ -1292,7 +1391,10 @@ impl UnifiedRecordingService {
         // NOTE: Desktop audio loopback sink cleanup is handled in RecordingSession::wait()
         // to ensure proper ordering (restore default source before removing modules)
 
-        eprintln!("✅ {} recording function completed successfully, returning Ok(())", device_type);
+        eprintln!(
+            "✅ {} recording function completed successfully, returning Ok(())",
+            device_type
+        );
         Ok(())
     }
 
@@ -1307,18 +1409,20 @@ impl UnifiedRecordingService {
         use std::io::Read;
 
         // Read WAV file
-        let mut file = std::fs::File::open(wav_path)
-            .map_err(|e| LoggerError::Io(std::io::Error::new(
+        let mut file = std::fs::File::open(wav_path).map_err(|e| {
+            LoggerError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("Failed to open WAV file: {}", e),
-            )))?;
+            ))
+        })?;
 
         let mut wav_data = Vec::new();
-        file.read_to_end(&mut wav_data)
-            .map_err(|e| LoggerError::Io(std::io::Error::new(
+        file.read_to_end(&mut wav_data).map_err(|e| {
+            LoggerError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("Failed to read WAV file: {}", e),
-            )))?;
+            ))
+        })?;
 
         // Decode WAV to f32 samples
         let mut reader = hound::WavReader::new(std::io::Cursor::new(wav_data))
@@ -1464,26 +1568,23 @@ impl UnifiedRecordingService {
     fn check_ffmpeg_available() -> Result<()> {
         use std::process::Command;
 
-        let output = Command::new("ffmpeg")
-            .arg("-version")
-            .output();
+        let output = Command::new("ffmpeg").arg("-version").output();
 
         match output {
             Ok(result) if result.status.success() => Ok(()),
             Ok(_) => Err(LoggerError::Other(
-                "FFmpeg is installed but returned an error. Please check your FFmpeg installation.".to_string(),
+                "FFmpeg is installed but returned an error. Please check your FFmpeg installation."
+                    .to_string(),
             )),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(LoggerError::Other(format!(
-                    "FFmpeg is not installed or not found in PATH. \
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(LoggerError::Other(format!(
+                "FFmpeg is not installed or not found in PATH. \
                     Please install FFmpeg to enable video overlays:\n\
                     - Linux (Ubuntu/Debian): sudo apt-get install ffmpeg\n\
                     - macOS: brew install ffmpeg\n\
                     - Or download from: https://ffmpeg.org/download.html\n\
                     Error: {}",
-                    e
-                )))
-            }
+                e
+            ))),
             Err(e) => Err(LoggerError::Other(format!(
                 "Failed to check FFmpeg availability: {}",
                 e
@@ -1708,7 +1809,7 @@ impl RecordingSession {
     pub async fn wait(self) -> Result<()> {
         // Store audio recording start events if enabled
         let db = Database::new().await?;
-        
+
         // Store video recording path
         let video_path = if self.config.screen_config.output_path.is_absolute() {
             self.config.screen_config.output_path.clone()
@@ -1718,7 +1819,7 @@ impl RecordingSession {
                 .map(|cwd| cwd.join(&self.config.screen_config.output_path))
                 .unwrap_or_else(|| self.config.screen_config.output_path.clone())
         };
-        
+
         let timestamp = Local::now().to_rfc3339();
         let video_metadata = json!({
             "output_path": video_path.to_string_lossy(),
@@ -1744,7 +1845,7 @@ impl RecordingSession {
         {
             eprintln!("⚠️  Failed to store video recording start event: {}", e);
         }
-        
+
         for audio_config in &self.config.audio_configs {
             if audio_config.enabled {
                 let timestamp = Local::now().to_rfc3339();
@@ -1757,7 +1858,7 @@ impl RecordingSession {
                         .map(|cwd| cwd.join(&audio_config.output_path))
                         .unwrap_or_else(|| audio_config.output_path.clone())
                 };
-                
+
                 let metadata = json!({
                     "output_path": audio_path.to_string_lossy(),
                     "sample_rate": audio_config.sample_rate,
@@ -1804,11 +1905,23 @@ impl RecordingSession {
         for (handle_idx, audio_handle) in self.audio_handles.into_iter().enumerate() {
             let audio_result = audio_handle.await;
             // Get the config index for this handle
-            let config_idx = self.audio_config_indices.get(handle_idx)
+            let config_idx = self
+                .audio_config_indices
+                .get(handle_idx)
                 .copied()
                 .unwrap_or(handle_idx); // Fallback to handle_idx if mapping is missing
-            eprintln!("🔍 Audio recording handle {} (config {}) result: {:?}", handle_idx, config_idx,
-                audio_result.as_ref().map(|r| r.as_ref().map(|_| "Ok(())").map_err(|e| format!("Err({})", e))).map_err(|e| format!("JoinError({:?})", e)));
+            eprintln!(
+                "🔍 Audio recording handle {} (config {}) result: {:?}",
+                handle_idx,
+                config_idx,
+                audio_result
+                    .as_ref()
+                    .map(|r| r
+                        .as_ref()
+                        .map(|_| "Ok(())")
+                        .map_err(|e| format!("Err({})", e)))
+                    .map_err(|e| format!("JoinError({:?})", e))
+            );
             match audio_result {
                 Ok(Ok(())) => {
                     // Get the corresponding audio config using the mapped index
@@ -1823,7 +1936,7 @@ impl RecordingSession {
                                 .map(|cwd| cwd.join(&audio_config.output_path))
                                 .unwrap_or_else(|| audio_config.output_path.clone())
                         };
-                        
+
                         let metadata = json!({
                             "output_path": audio_path.to_string_lossy(),
                             "sample_rate": audio_config.sample_rate,
@@ -1854,7 +1967,7 @@ impl RecordingSession {
                             } else {
                                 "Microphone audio"
                             };
-                            
+
                             // Verify file actually exists before reporting success
                             let wav_path = if audio_config.output_path.is_absolute() {
                                 audio_config.output_path.clone()
@@ -1864,12 +1977,19 @@ impl RecordingSession {
                                     .map(|cwd| cwd.join(&audio_config.output_path))
                                     .unwrap_or_else(|| audio_config.output_path.clone())
                             };
-                            
+
                             if wav_path.exists() {
-                                println!("✅ {} recording completed: {}", audio_type, wav_path.display());
+                                println!(
+                                    "✅ {} recording completed: {}",
+                                    audio_type,
+                                    wav_path.display()
+                                );
                             } else {
-                                eprintln!("⚠️  {} recording reported success but file not found at: {}", 
-                                    audio_type, wav_path.display());
+                                eprintln!(
+                                    "⚠️  {} recording reported success but file not found at: {}",
+                                    audio_type,
+                                    wav_path.display()
+                                );
                             }
                         }
 
@@ -1881,26 +2001,35 @@ impl RecordingSession {
                                 } else {
                                     "microphone audio"
                                 };
-                                
+
                                 // Convert to absolute path and verify file exists
                                 let wav_path = if audio_config.output_path.is_absolute() {
                                     audio_config.output_path.clone()
                                 } else {
                                     // Convert relative path to absolute using current working directory
                                     std::env::current_dir()
-                                        .map_err(|e| LoggerError::Io(std::io::Error::new(
-                                            std::io::ErrorKind::Other,
-                                            format!("Failed to get current directory: {}", e),
-                                        )))?
+                                        .map_err(|e| {
+                                            LoggerError::Io(std::io::Error::new(
+                                                std::io::ErrorKind::Other,
+                                                format!("Failed to get current directory: {}", e),
+                                            ))
+                                        })?
                                         .join(&audio_config.output_path)
                                 };
-                                
+
                                 // Verify file exists before attempting transcription
                                 if !wav_path.exists() {
-                                    eprintln!("⚠️  {} transcription skipped: WAV file not found at {}", 
-                                        audio_type, wav_path.display());
+                                    eprintln!(
+                                        "⚠️  {} transcription skipped: WAV file not found at {}",
+                                        audio_type,
+                                        wav_path.display()
+                                    );
                                 } else {
-                                    println!("🎤 Transcribing {} with model: {}...", audio_type, model_path.display());
+                                    println!(
+                                        "🎤 Transcribing {} with model: {}...",
+                                        audio_type,
+                                        model_path.display()
+                                    );
                                     match UnifiedRecordingService::transcribe_wav_file(
                                         &wav_path,
                                         model_path,
@@ -1914,7 +2043,10 @@ impl RecordingSession {
                                             println!("✅ {} transcription completed", audio_type);
                                         }
                                         Err(e) => {
-                                            eprintln!("⚠️  {} transcription failed: {}", audio_type, e);
+                                            eprintln!(
+                                                "⚠️  {} transcription failed: {}",
+                                                audio_type, e
+                                            );
                                         }
                                     }
                                 }
@@ -1944,7 +2076,7 @@ impl RecordingSession {
         #[cfg(target_os = "linux")]
         {
             use nexus_audio::AudioRecorder;
-            
+
             // Restore default sink FIRST (before removing modules)
             if let Some(ref prev_sink) = self.previous_default_sink {
                 eprintln!("🔄 Restoring previous default sink...");
@@ -1954,7 +2086,7 @@ impl RecordingSession {
                     eprintln!("✅ Restored previous default sink: {}", prev_sink);
                 }
             }
-            
+
             // Restore default source (only if we actually changed it - which we don't anymore with Option 2)
             // Keeping this for safety, but it should be a no-op since we don't change the default source
             if let Some(ref prev_source) = self.previous_default_source {
@@ -1968,18 +2100,24 @@ impl RecordingSession {
                             eprintln!("✅ Restored previous default source: {}", prev_source);
                         }
                     } else {
-                        eprintln!("ℹ️  Default source unchanged (still '{}'), no restoration needed", prev_source);
+                        eprintln!(
+                            "ℹ️  Default source unchanged (still '{}'), no restoration needed",
+                            prev_source
+                        );
                     }
                 }
             }
-            
+
             // Clean up loopback modules (after restoring defaults)
             if !self.loopback_module_ids.is_empty() {
                 eprintln!("🧹 Cleaning up PulseAudio loopback sink...");
                 for module_id in &self.loopback_module_ids {
                     if *module_id > 0 {
                         if let Err(e) = AudioRecorder::remove_pulseaudio_module(*module_id) {
-                            eprintln!("⚠️  Failed to remove PulseAudio module {}: {}", module_id, e);
+                            eprintln!(
+                                "⚠️  Failed to remove PulseAudio module {}: {}",
+                                module_id, e
+                            );
                         } else {
                             eprintln!("✅ Removed PulseAudio module {}", module_id);
                         }
@@ -2007,7 +2145,7 @@ impl RecordingSession {
                 println!("✅ Overlays applied successfully");
             }
         }
-        
+
         // Store video recording stop event with final path
         let video_path = if self.config.screen_config.output_path.is_absolute() {
             self.config.screen_config.output_path.clone()
@@ -2017,7 +2155,7 @@ impl RecordingSession {
                 .map(|cwd| cwd.join(&self.config.screen_config.output_path))
                 .unwrap_or_else(|| self.config.screen_config.output_path.clone())
         };
-        
+
         let timestamp = Local::now().to_rfc3339();
         let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
         let video_stop_metadata = json!({
@@ -2101,7 +2239,9 @@ impl RecordingSession {
         }
 
         // Get session start time from database, fallback to recording_start
-        let session_start = db.get_session_start_time(&self.session_id).await?
+        let session_start = db
+            .get_session_start_time(&self.session_id)
+            .await?
             .unwrap_or(self.recording_start);
 
         print_timeline(&self.session_id, &events, session_start)
@@ -2123,7 +2263,12 @@ pub fn print_timeline(
     println!("║                          📋 Recording Timeline                                 ║");
     println!("╠══════════════════════════════════════════════════════════════════════════════╣");
     println!("║ Session ID: {:<64} ║", session_id);
-    println!("║ Started:    {:<64} ║", session_start.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S%.3f"));
+    println!(
+        "║ Started:    {:<64} ║",
+        session_start
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S%.3f")
+    );
     println!("╠══════════════════════════════════════════════════════════════════════════════╣");
 
     // Store events with their timecodes for proper timeline display
@@ -2138,11 +2283,12 @@ pub fn print_timeline(
 
     // Find the earliest event timestamp to use as baseline
     // This ensures all events have positive timecodes relative to the first event
-    let earliest_timestamp = events.iter()
+    let earliest_timestamp = events
+        .iter()
         .map(|e| e.timestamp)
         .min()
         .unwrap_or(session_start);
-    
+
     // Use the earlier of session_start or earliest_timestamp as baseline
     // This handles cases where events might be recorded slightly before session_start
     let baseline = if earliest_timestamp < session_start {
@@ -2159,35 +2305,40 @@ pub fn print_timeline(
             // Always return a timecode (clamp negative to 0.0 for safety)
             Some(seconds.max(0.0))
         });
-        
+
         // Ensure we always have a timecode (should never be None after this point)
         let event_timecode = event_timecode.unwrap_or(0.0);
-        
+
         match event.event_type.as_str() {
             "analysis" => {
                 // Extract frame descriptions from metadata
                 if let Some(metadata) = event.metadata.as_object() {
                     // Check if this is full video sampling (frames have absolute timestamps)
                     // The mode is stored in metadata.metadata (from job.metadata)
-                    let is_full_video = metadata.get("metadata")
+                    let is_full_video = metadata
+                        .get("metadata")
                         .and_then(|m| m.get("mode"))
                         .and_then(|v| v.as_str())
                         .map(|v| v == "full_video")
                         .unwrap_or(false);
-                    
+
                     // Get base video timestamp from job metadata if available
-                    let base_video_timestamp = metadata.get("job")
+                    let base_video_timestamp = metadata
+                        .get("job")
                         .and_then(|job| job.get("video_timestamp"))
                         .and_then(|v| v.as_f64());
-                    
+
                     if let Some(frames) = metadata.get("frames") {
                         if let Some(frames_array) = frames.as_array() {
                             for frame in frames_array {
-                                if let Some(desc) = frame.get("description").and_then(|v| v.as_str()) {
-                                    let frame_offset = frame.get("offset_secs")
+                                if let Some(desc) =
+                                    frame.get("description").and_then(|v| v.as_str())
+                                {
+                                    let frame_offset = frame
+                                        .get("offset_secs")
                                         .and_then(|v| v.as_f64())
                                         .unwrap_or(0.0);
-                                    
+
                                     // Calculate absolute video timestamp for this frame
                                     // For full video, offset_secs is the absolute video timestamp (0.0, 0.2, 0.4, etc.)
                                     // For click context, offset is relative to click time (+0.0s, +0.2s, etc.)
@@ -2198,7 +2349,7 @@ pub fn print_timeline(
                                         // For click context, offset is relative to click time
                                         base + frame_offset
                                     } else {
-                                        // Heuristic: if offset is small (< 100s) and first frame is near 0, 
+                                        // Heuristic: if offset is small (< 100s) and first frame is near 0,
                                         // it's likely an absolute timestamp from full video sampling
                                         // Otherwise, if offset is very small (< 5s), assume it's relative to some base
                                         // But we don't have the base, so use offset directly as a best guess
@@ -2210,13 +2361,13 @@ pub fn print_timeline(
                                             frame_offset
                                         }
                                     };
-                                    
+
                                     let offset_str = if is_full_video {
                                         format!("{:.2}s", frame_offset)
                                     } else {
                                         format!("+{:.2}s", frame_offset)
                                     };
-                                    
+
                                     timed_events.push(TimedEvent {
                                         timecode: frame_timecode,
                                         event_type: "frame".to_string(),
@@ -2228,12 +2379,13 @@ pub fn print_timeline(
                     }
                     if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
                         // For summary, use the timecode of the last frame or event timecode
-                        let summary_timecode = timed_events.iter()
+                        let summary_timecode = timed_events
+                            .iter()
                             .filter(|e| e.event_type == "frame")
                             .last()
                             .map(|e| e.timecode)
                             .unwrap_or(event_timecode);
-                        
+
                         timed_events.push(TimedEvent {
                             timecode: summary_timecode,
                             event_type: "summary".to_string(),
@@ -2274,11 +2426,13 @@ pub fn print_timeline(
                     if let Some(metadata) = event.metadata.as_object() {
                         if let Some(text) = metadata.get("text").and_then(|v| v.as_str()) {
                             // Extract source information (monitor_output or microphone)
-                            let source = metadata.get("source")
+                            let source = metadata
+                                .get("source")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or_else(|| {
                                     // Fallback: check monitor_desktop_audio flag
-                                    if metadata.get("monitor_desktop_audio")
+                                    if metadata
+                                        .get("monitor_desktop_audio")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(false)
                                     {
@@ -2294,10 +2448,12 @@ pub fn print_timeline(
                             });
                         } else if let Some(key) = event.key.as_ref() {
                             // Fallback: use key field if metadata doesn't have text
-                            let source = metadata.get("source")
+                            let source = metadata
+                                .get("source")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or_else(|| {
-                                    if metadata.get("monitor_desktop_audio")
+                                    if metadata
+                                        .get("monitor_desktop_audio")
                                         .and_then(|v| v.as_bool())
                                         .unwrap_or(false)
                                     {
@@ -2328,7 +2484,9 @@ pub fn print_timeline(
 
     // Sort by timecode
     timed_events.sort_by(|a, b| {
-        a.timecode.partial_cmp(&b.timecode).unwrap_or(std::cmp::Ordering::Equal)
+        a.timecode
+            .partial_cmp(&b.timecode)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Group events by timecode for display (with small tolerance for grouping)
@@ -2345,7 +2503,7 @@ pub fn print_timeline(
         } else {
             true
         };
-        
+
         if current_timecode.is_some() && timecode_changed {
             print_timeline_entry(
                 current_timecode,
@@ -2380,7 +2538,11 @@ pub fn print_timeline(
     }
 
     // Print final group
-    if !frame_descriptions.is_empty() || !keys_entered.is_empty() || !clicks.is_empty() || !transcriptions.is_empty() {
+    if !frame_descriptions.is_empty()
+        || !keys_entered.is_empty()
+        || !clicks.is_empty()
+        || !transcriptions.is_empty()
+    {
         print_timeline_entry(
             current_timecode,
             &frame_descriptions,
@@ -2408,7 +2570,10 @@ fn print_timeline_entry(
         "        ".to_string()
     };
 
-    println!("║ Time: {}                                                                    ║", time_str);
+    println!(
+        "║ Time: {}                                                                    ║",
+        time_str
+    );
 
     if !frame_descriptions.is_empty() {
         println!("║ 🧠 Frame Analysis:                                                          ║");
@@ -2456,14 +2621,14 @@ fn print_timeline_entry(
             } else {
                 ("microphone", trans_text.as_str())
             };
-            
+
             // Format source display
             let source_display = match source {
                 "monitor_output" => "📺 Monitor Output",
                 "microphone" => "🎙️  Microphone",
                 _ => "🎤 Unknown",
             };
-            
+
             // Show timecode for each transcription if different from group timecode
             let timecode_prefix = if let Some(group_tc) = timecode {
                 if (group_tc - trans_timecode).abs() > 0.1 {
@@ -2474,14 +2639,14 @@ fn print_timeline_entry(
             } else {
                 format!("@ {:.2}s: ", trans_timecode)
             };
-            
+
             // Calculate available space for text (box is 78 chars wide, minus borders and prefix)
             // Box format: "║ " (2) + prefix + text + " ║" (2) = 78
             // Available space = 78 - 2 - prefix_len - 2 = 74 - prefix_len
             let prefix = format!("{} Transcription: ", source_display);
             let prefix_len = prefix.chars().count(); // Use char count for proper emoji handling
             let available_width = 74 - prefix_len; // 74 = 78 - 2 (left border) - 2 (right border)
-            
+
             // Wrap long transcriptions to fit available width
             let full_text = format!("{}{}", timecode_prefix, text);
             let wrapped = wrap_text(&full_text, available_width);

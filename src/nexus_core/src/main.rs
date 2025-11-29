@@ -77,6 +77,7 @@ async fn main() {
 
     let result = match cli.command {
         Commands::Chat(args) => run_chat(args).await,
+        Commands::TestPython(args) => nexus_core::run_test_python(args).await,
     };
 
     if let Err(e) = result {

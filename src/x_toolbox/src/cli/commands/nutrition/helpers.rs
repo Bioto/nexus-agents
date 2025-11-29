@@ -39,8 +39,14 @@ pub fn parse_time(re: &regex::Regex, time_str: &str) -> Option<i32> {
     }
 
     re.captures(time_str).and_then(|caps| {
-        let hours: i32 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-        let minutes: i32 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+        let hours: i32 = caps
+            .get(1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
+        let minutes: i32 = caps
+            .get(2)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0);
         Some(hours * 60 + minutes)
     })
 }
@@ -92,11 +98,9 @@ pub async fn parse_ingredients(
             let name = caps.get(3).unwrap().as_str().trim().to_string();
 
             // Parse quantity
-            let quantity: BigDecimal = quantity_str
-                .parse()
-                .map_err(|e| {
-                    ToolboxError::Validation(format!("Invalid quantity '{}': {}", quantity_str, e))
-                })?;
+            let quantity: BigDecimal = quantity_str.parse().map_err(|e| {
+                ToolboxError::Validation(format!("Invalid quantity '{}': {}", quantity_str, e))
+            })?;
 
             // Find or create ingredient
             let ingredient = NutritionService::find_or_create_ingredient(pool, &name).await?;
@@ -122,4 +126,3 @@ pub async fn parse_ingredients(
 
     Ok(result)
 }
-

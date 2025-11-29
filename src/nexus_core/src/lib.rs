@@ -5,7 +5,7 @@ pub mod models;
 pub mod services;
 pub mod tools;
 
-pub use cli::{run_chat, Cli, Commands};
+pub use cli::{run_chat, run_test_python, Cli, Commands};
 pub use client::{LLMClient, ResponsesClient, UploadedPdf};
 pub use models::*;
 pub use services::*;

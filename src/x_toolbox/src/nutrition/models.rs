@@ -420,4 +420,3 @@ pub struct AddRecipeFavoriteRequest {
     pub recipe_id: Uuid,
     pub notes: Option<String>,
 }
-

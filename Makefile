@@ -1,5 +1,5 @@
 chat:
-	cargo run -- chat --stream
+	cargo run --bin nexus -- core chat --stream
 
 # TTS/Moshi commands
 tts-start:

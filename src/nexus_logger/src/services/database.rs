@@ -296,7 +296,10 @@ impl Database {
     /// Insert multiple events in a single batch operation.
     ///
     /// This is much more efficient than individual inserts for high-volume scenarios.
-    pub async fn batch_insert_events(&self, events: &[crate::services::batch_inserter::BatchEvent]) -> Result<()> {
+    pub async fn batch_insert_events(
+        &self,
+        events: &[crate::services::batch_inserter::BatchEvent],
+    ) -> Result<()> {
         if events.is_empty() {
             return Ok(());
         }
@@ -566,7 +569,10 @@ impl Database {
         } else {
             // Session not found - this can happen if the session was never properly created
             // Log a warning but don't fail, as this is a cleanup operation
-            eprintln!("Warning: Session {} not found when ending session", session_id);
+            eprintln!(
+                "Warning: Session {} not found when ending session",
+                session_id
+            );
         }
 
         Ok(())
@@ -575,12 +581,16 @@ impl Database {
     /// Get session metrics
     pub async fn get_session_metrics(&self, session_id: &str) -> Result<Metrics> {
         use nexus_core::services::ClickHouseConfig;
-        
+
         // Use HTTP interface to avoid DateTime64 type issues with native protocol
         let config = ClickHouseConfig::from_env();
-        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let http_port = if config.port == 9000 {
+            8123
+        } else {
+            config.port
+        };
         let url = format!("http://{}:{}", config.host, http_port);
-        
+
         let query = format!(
             "SELECT start_time, end_time, keyboard_events, keyboard_presses, keyboard_releases,
                 mouse_events, mouse_clicks, mouse_releases, mouse_moves
@@ -603,16 +613,20 @@ impl Database {
             .map_err(|e| LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(LoggerError::Other(format!(
                 "ClickHouse HTTP query failed: {}",
                 error_text
             )));
         }
 
-        let text = response.text().await.map_err(|e| {
-            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to read HTTP response: {}", e)))?;
 
         // Parse the first row
         let mut found = false;
@@ -630,39 +644,44 @@ impl Database {
             if line.trim().is_empty() {
                 continue;
             }
-            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
-            })?;
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| LoggerError::Other(format!("Failed to parse JSON row: {}", e)))?;
 
-            start_time_str = row.get("start_time")
+            start_time_str = row
+                .get("start_time")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| LoggerError::Other("Failed to get start_time".to_string()))?
                 .to_string();
-            end_time_opt = row.get("end_time")
+            end_time_opt = row
+                .get("end_time")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            keyboard_events = row.get("keyboard_events")
+            keyboard_events = row
+                .get("keyboard_events")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            keyboard_presses = row.get("keyboard_presses")
+            keyboard_presses = row
+                .get("keyboard_presses")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            keyboard_releases = row.get("keyboard_releases")
+            keyboard_releases = row
+                .get("keyboard_releases")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            mouse_events = row.get("mouse_events")
+            mouse_events = row
+                .get("mouse_events")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            mouse_clicks = row.get("mouse_clicks")
+            mouse_clicks = row
+                .get("mouse_clicks")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            mouse_releases = row.get("mouse_releases")
+            mouse_releases = row
+                .get("mouse_releases")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            mouse_moves = row.get("mouse_moves")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            
+            mouse_moves = row.get("mouse_moves").and_then(|v| v.as_u64()).unwrap_or(0);
+
             found = true;
             break; // Only process first row
         }
@@ -817,12 +836,16 @@ impl Database {
     /// Uses HTTP interface to avoid LowCardinality type issues with native protocol
     pub async fn get_session_events(&self, session_id: &str) -> Result<Vec<TimelineEvent>> {
         use nexus_core::services::ClickHouseConfig;
-        
+
         // Get config to build HTTP URL
         let config = ClickHouseConfig::from_env();
-        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let http_port = if config.port == 9000 {
+            8123
+        } else {
+            config.port
+        };
         let url = format!("http://{}:{}", config.host, http_port);
-        
+
         // Build query - HTTP interface handles LowCardinality automatically
         let query = format!(
             "SELECT 
@@ -855,32 +878,38 @@ impl Database {
             .map_err(|e| LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(LoggerError::Other(format!(
                 "ClickHouse HTTP query failed: {}",
                 error_text
             )));
         }
 
-        let text = response.text().await.map_err(|e| {
-            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to read HTTP response: {}", e)))?;
 
         let mut events = Vec::new();
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
-            })?;
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| LoggerError::Other(format!("Failed to parse JSON row: {}", e)))?;
 
             let event_type = row
                 .get("event_type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| LoggerError::Other("Missing event_type".to_string()))?
                 .to_string();
-            let event_subtype = row.get("event_subtype").and_then(|v| v.as_str()).map(String::from);
+            let event_subtype = row
+                .get("event_subtype")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let key = row.get("key").and_then(|v| v.as_str()).map(String::from);
             let button = row.get("button").and_then(|v| v.as_str()).map(String::from);
             let x = row.get("x").and_then(|v| v.as_i64()).map(|v| v as i32);
@@ -891,10 +920,7 @@ impl Database {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| LoggerError::Other("Missing timestamp".to_string()))?;
             let timecode = row.get("timecode").and_then(|v| v.as_f64());
-            let metadata_str = row
-                .get("metadata")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
+            let metadata_str = row.get("metadata").and_then(|v| v.as_str()).unwrap_or("{}");
 
             let timestamp = match DateTime::parse_from_rfc3339(timestamp_str) {
                 Ok(dt) => dt.with_timezone(&Utc),
@@ -907,8 +933,8 @@ impl Database {
                 }
             };
 
-            let metadata: Value = serde_json::from_str(metadata_str)
-                .unwrap_or_else(|_| Value::Null);
+            let metadata: Value =
+                serde_json::from_str(metadata_str).unwrap_or_else(|_| Value::Null);
 
             events.push(TimelineEvent {
                 event_type,
@@ -930,12 +956,16 @@ impl Database {
     /// Get session start time from database
     pub async fn get_session_start_time(&self, session_id: &str) -> Result<Option<DateTime<Utc>>> {
         use nexus_core::services::ClickHouseConfig;
-        
+
         // Get config to build HTTP URL
         let config = ClickHouseConfig::from_env();
-        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let http_port = if config.port == 9000 {
+            8123
+        } else {
+            config.port
+        };
         let url = format!("http://{}:{}", config.host, http_port);
-        
+
         let query = format!(
             "SELECT start_time FROM sessions WHERE id = '{}' ORDER BY created_at DESC LIMIT 1 FORMAT JSONEachRow",
             session_id.replace('\'', "''")
@@ -955,28 +985,27 @@ impl Database {
             return Ok(None);
         }
 
-        let text = response.text().await.map_err(|e| {
-            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to read HTTP response: {}", e)))?;
 
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
-            })?;
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| LoggerError::Other(format!("Failed to parse JSON row: {}", e)))?;
 
             if let Some(start_time_str) = row.get("start_time").and_then(|v| v.as_str()) {
                 let start_time = match DateTime::parse_from_rfc3339(start_time_str) {
                     Ok(dt) => dt.with_timezone(&Utc),
-                    Err(_) => {
-                        chrono::NaiveDateTime::parse_from_str(start_time_str, "%Y-%m-%d %H:%M:%S%.f")
-                            .map_err(|e| {
-                                LoggerError::Other(format!("Failed to parse start_time: {}", e))
-                            })?
-                            .and_utc()
-                    }
+                    Err(_) => chrono::NaiveDateTime::parse_from_str(
+                        start_time_str,
+                        "%Y-%m-%d %H:%M:%S%.f",
+                    )
+                    .map_err(|e| LoggerError::Other(format!("Failed to parse start_time: {}", e)))?
+                    .and_utc(),
                 };
                 return Ok(Some(start_time));
             }
@@ -995,15 +1024,19 @@ impl Database {
         window_after: f64,
     ) -> Result<Vec<TimelineEvent>> {
         use nexus_core::services::ClickHouseConfig;
-        
+
         let config = ClickHouseConfig::from_env();
-        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let http_port = if config.port == 9000 {
+            8123
+        } else {
+            config.port
+        };
         let url = format!("http://{}:{}", config.host, http_port);
-        
+
         // Query events where timecode is within the window, or calculate from timestamp
         let min_timecode = video_timestamp - window_before;
         let max_timecode = video_timestamp + window_after;
-        
+
         let query = format!(
             "SELECT 
                 toString(event_type) as event_type,
@@ -1042,32 +1075,38 @@ impl Database {
             .map_err(|e| LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(LoggerError::Other(format!(
                 "ClickHouse HTTP query failed: {}",
                 error_text
             )));
         }
 
-        let text = response.text().await.map_err(|e| {
-            LoggerError::Other(format!("Failed to read HTTP response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| LoggerError::Other(format!("Failed to read HTTP response: {}", e)))?;
 
         let mut events = Vec::new();
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
             }
-            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-                LoggerError::Other(format!("Failed to parse JSON row: {}", e))
-            })?;
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| LoggerError::Other(format!("Failed to parse JSON row: {}", e)))?;
 
             let event_type = row
                 .get("event_type")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| LoggerError::Other("Missing event_type".to_string()))?
                 .to_string();
-            let event_subtype = row.get("event_subtype").and_then(|v| v.as_str()).map(String::from);
+            let event_subtype = row
+                .get("event_subtype")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let key = row.get("key").and_then(|v| v.as_str()).map(String::from);
             let button = row.get("button").and_then(|v| v.as_str()).map(String::from);
             let x = row.get("x").and_then(|v| v.as_i64()).map(|v| v as i32);
@@ -1078,10 +1117,7 @@ impl Database {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| LoggerError::Other("Missing timestamp".to_string()))?;
             let timecode = row.get("timecode").and_then(|v| v.as_f64());
-            let metadata_str = row
-                .get("metadata")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}");
+            let metadata_str = row.get("metadata").and_then(|v| v.as_str()).unwrap_or("{}");
 
             let timestamp = match DateTime::parse_from_rfc3339(timestamp_str) {
                 Ok(dt) => dt.with_timezone(&Utc),
@@ -1094,8 +1130,8 @@ impl Database {
                 }
             };
 
-            let metadata: Value = serde_json::from_str(metadata_str)
-                .unwrap_or_else(|_| Value::Null);
+            let metadata: Value =
+                serde_json::from_str(metadata_str).unwrap_or_else(|_| Value::Null);
 
             events.push(TimelineEvent {
                 event_type,

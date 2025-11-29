@@ -90,8 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         screen_config: ScreenRecordingConfig {
             output_path: output_dir.join("recording.mp4"),
             framerate: 30,
-            duration_secs: None, // Record until stopped
-            monitor_index: None, // Primary monitor
+            duration_secs: None,  // Record until stopped
+            monitor_index: None,  // Primary monitor
             include_audio: false, // Disable audio for simpler test
             segment_duration_secs: Some(segment_duration_secs), // VIDEO SEGMENTATION ENABLED!
         },
@@ -164,13 +164,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Recording complete!");
     println!();
     println!("📊 Generated files:");
-    
+
     // List files in output directory
     let mut files: Vec<_> = std::fs::read_dir(&output_dir)?
         .filter_map(|e| e.ok())
         .collect();
     files.sort_by_key(|e| e.file_name());
-    
+
     for entry in files {
         let metadata = entry.metadata()?;
         let size = metadata.len();
@@ -187,4 +187,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

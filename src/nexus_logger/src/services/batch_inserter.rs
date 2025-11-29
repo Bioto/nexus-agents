@@ -182,7 +182,10 @@ impl BatchEventInserter {
         let db = match Database::new().await {
             Ok(db) => db,
             Err(e) => {
-                eprintln!("⚠️  Failed to initialize database for batch inserter: {}", e);
+                eprintln!(
+                    "⚠️  Failed to initialize database for batch inserter: {}",
+                    e
+                );
                 return Err(e);
             }
         };
@@ -198,7 +201,10 @@ impl BatchEventInserter {
             }
 
             // Try to receive with timeout for periodic flush
-            let timeout = self.config.flush_interval.saturating_sub(last_flush.elapsed());
+            let timeout = self
+                .config
+                .flush_interval
+                .saturating_sub(last_flush.elapsed());
             let msg = tokio::time::timeout(timeout, rx.recv()).await;
 
             match msg {
@@ -310,4 +316,3 @@ mod tests {
         assert_eq!(event.event_type, "keyboard");
     }
 }
-

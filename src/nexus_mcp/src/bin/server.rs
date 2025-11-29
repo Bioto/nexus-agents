@@ -122,12 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Build router with optional Bearer auth middleware
             let router = if let Some(ref token) = args.auth_token {
                 eprintln!("Authentication enabled (Bearer token required)");
-                axum::Router::new()
-                    .nest_service(&args.path, service)
-                    .layer(middleware::from_fn_with_state(
-                        token.clone(),
-                        bearer_auth_middleware,
-                    ))
+                axum::Router::new().nest_service(&args.path, service).layer(
+                    middleware::from_fn_with_state(token.clone(), bearer_auth_middleware),
+                )
             } else {
                 eprintln!("Authentication disabled (no --auth-token or MCP_AUTH_TOKEN set)");
                 axum::Router::new().nest_service(&args.path, service)

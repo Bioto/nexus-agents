@@ -491,4 +491,3 @@ pub enum FavoriteCommand {
         id: String,
     },
 }
-

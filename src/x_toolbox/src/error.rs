@@ -56,5 +56,3 @@ impl From<serde_json::Error> for ToolboxError {
         ToolboxError::Validation(format!("JSON serialization error: {}", err))
     }
 }
-
-

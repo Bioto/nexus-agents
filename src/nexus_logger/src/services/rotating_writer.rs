@@ -158,7 +158,10 @@ impl RotatingEventWriter {
     pub fn spawn(
         config: EventWriterConfig,
         stop_signal: Arc<AtomicBool>,
-    ) -> Result<(RotatingEventWriterHandle, tokio::task::JoinHandle<Result<()>>)> {
+    ) -> Result<(
+        RotatingEventWriterHandle,
+        tokio::task::JoinHandle<Result<()>>,
+    )> {
         let (tx, rx) = mpsc::channel(10_000); // Bounded channel for backpressure
         let events_written = Arc::new(AtomicU64::new(0));
         let bytes_written = Arc::new(AtomicU64::new(0));
@@ -349,7 +352,10 @@ impl RotatingEventWriter {
             }
 
             // Try to receive with timeout for periodic flush
-            let timeout = self.config.flush_interval.saturating_sub(last_flush.elapsed());
+            let timeout = self
+                .config
+                .flush_interval
+                .saturating_sub(last_flush.elapsed());
             let msg = tokio::time::timeout(timeout, rx.recv()).await;
 
             match msg {
@@ -616,4 +622,3 @@ mod tests {
         assert!(files.len() >= 1);
     }
 }
-

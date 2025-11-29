@@ -160,17 +160,18 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         },
         audio_configs: {
             let mut configs = Vec::new();
-            
+
             // Determine model path: use provided path or default to .models/ggml-small-fp16.bin
-            let model_path = args.whisper_model.clone().unwrap_or_else(|| {
-                PathBuf::from(".models/ggml-small-fp16.bin")
-            });
-            
+            let model_path = args
+                .whisper_model
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".models/ggml-small-fp16.bin"));
+
             // Transcription is enabled if:
             // 1. --no-transcription flag is NOT set, AND
             // 2. Model file exists
             let transcribe_enabled = !args.no_transcription && model_path.exists();
-            
+
             // Check if model exists on startup and print message if not
             if !args.no_transcription && !model_path.exists() {
                 eprintln!("⚠️  Whisper model not found at: {}", model_path.display());
@@ -193,22 +194,32 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                             eprintln!("🔍 Available input devices:");
                             for (idx, device) in devices.iter().enumerate() {
                                 let default_marker = if device.default { " (default)" } else { "" };
-                                eprintln!("  {}. {}{} → {}", idx + 1, device.display_name, default_marker, device.name);
+                                eprintln!(
+                                    "  {}. {}{} → {}",
+                                    idx + 1,
+                                    device.display_name,
+                                    default_marker,
+                                    device.name
+                                );
                             }
-                            
+
                             // First, try to find common microphone names (case-insensitive)
                             let common_mic_names = ["quadcast", "microphone", "mic", "usb", "jack"];
                             for mic_name in &common_mic_names {
                                 if let Some(mic_device) = devices.iter().find(|d| {
                                     let name_lower = d.name.to_lowercase();
                                     let display_lower = d.display_name.to_lowercase();
-                                    name_lower.contains(mic_name) || display_lower.contains(mic_name)
+                                    name_lower.contains(mic_name)
+                                        || display_lower.contains(mic_name)
                                 }) {
-                                    eprintln!("🎤 Pre-selected microphone device: {} ({})", mic_device.display_name, mic_device.name);
+                                    eprintln!(
+                                        "🎤 Pre-selected microphone device: {} ({})",
+                                        mic_device.display_name, mic_device.name
+                                    );
                                     return Some(mic_device.name.clone());
                                 }
                             }
-                            
+
                             // Otherwise, find first device that's not a monitor/loopback/nexus/pulse/default
                             if let Some(mic_device) = devices.iter().find(|d| {
                                 let name_lower = d.name.to_lowercase();
@@ -223,7 +234,10 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                                     && d.name != "default" // default will route to monitor
                                     && d.name != "pipewire" // might also route to default
                             }) {
-                                eprintln!("🎤 Pre-selected microphone device: {} ({})", mic_device.display_name, mic_device.name);
+                                eprintln!(
+                                    "🎤 Pre-selected microphone device: {} ({})",
+                                    mic_device.display_name, mic_device.name
+                                );
                                 Some(mic_device.name.clone())
                             } else {
                                 // If no suitable device found, use None to fall back to default device
@@ -249,30 +263,39 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                     device_name,
                     monitor_desktop_audio: false,
                     transcribe: transcribe_enabled,
-                    transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
+                    transcription_model_path: if transcribe_enabled {
+                        Some(model_path.clone())
+                    } else {
+                        None
+                    },
                 });
             }
-            
+
             // Create monitor desktop audio config if enabled (add AFTER microphone to avoid interference)
             // Enabled by default unless --no-monitor-desktop-audio is specified
             if !args.no_monitor_desktop_audio {
-                let monitor_output_path = args.mic_audio_output
+                let monitor_output_path = args
+                    .mic_audio_output
                     .parent()
                     .map(|p| p.join("desktop_audio.wav"))
                     .unwrap_or_else(|| PathBuf::from("output/desktop_audio.wav"));
-                
+
                 configs.push(AudioRecordingConfig {
                     enabled: true,
                     output_path: monitor_output_path.clone(),
                     sample_rate: args.mic_sample_rate,
-                    channels: 2, // Stereo for desktop
+                    channels: 2,       // Stereo for desktop
                     device_name: None, // Will use default (monitor source)
                     monitor_desktop_audio: true,
                     transcribe: transcribe_enabled,
-                    transcription_model_path: if transcribe_enabled { Some(model_path.clone()) } else { None },
+                    transcription_model_path: if transcribe_enabled {
+                        Some(model_path.clone())
+                    } else {
+                        None
+                    },
                 });
             }
-            
+
             configs
         },
         database_path: args.database.clone(),
@@ -312,28 +335,43 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         if args.mouse_moves { "✓" } else { "✗" }
     );
     // Determine model path for display (same logic as in config)
-    let model_path = args.whisper_model.clone().unwrap_or_else(|| {
-        PathBuf::from(".models/ggml-small-fp16.bin")
-    });
-    
-    println!("   System audio: {}", if !args.no_audio { "✓" } else { "✗" });
-    println!("   Desktop audio monitoring: {}", if !args.no_monitor_desktop_audio { "✓" } else { "✗" });
-    
+    let model_path = args
+        .whisper_model
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".models/ggml-small-fp16.bin"));
+
+    println!(
+        "   System audio: {}",
+        if !args.no_audio { "✓" } else { "✗" }
+    );
+    println!(
+        "   Desktop audio monitoring: {}",
+        if !args.no_monitor_desktop_audio {
+            "✓"
+        } else {
+            "✗"
+        }
+    );
+
     // Display microphone config with actual device selection
     if !args.no_mic_audio {
         println!("   Microphone: ✓");
         println!("     Output: {}", args.mic_audio_output.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);
-        
+
         // Find the mic config to show actual device that was selected
-        if let Some(mic_config) = config.audio_configs.iter().find(|c| !c.monitor_desktop_audio) {
+        if let Some(mic_config) = config
+            .audio_configs
+            .iter()
+            .find(|c| !c.monitor_desktop_audio)
+        {
             if let Some(ref device) = mic_config.device_name {
                 println!("     Device: {}", device);
             } else {
                 println!("     Device: system default (not specified)");
             }
         }
-        
+
         if args.no_transcription {
             println!("     Transcription: ✗ (disabled)");
         } else if model_path.exists() {
@@ -344,26 +382,31 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     } else {
         println!("   Microphone: ✗");
     }
-    
+
     // Display desktop audio monitoring config with actual device selection
     if !args.no_monitor_desktop_audio {
-        let monitor_output_path = args.mic_audio_output
+        let monitor_output_path = args
+            .mic_audio_output
             .parent()
             .map(|p| p.join("desktop_audio.wav"))
             .unwrap_or_else(|| PathBuf::from("output/desktop_audio.wav"));
         println!("   Desktop audio monitoring: ✓");
         println!("     Output: {}", monitor_output_path.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);
-        
+
         // Find the desktop audio config to show actual device that will be used
-        if let Some(desktop_config) = config.audio_configs.iter().find(|c| c.monitor_desktop_audio) {
+        if let Some(desktop_config) = config
+            .audio_configs
+            .iter()
+            .find(|c| c.monitor_desktop_audio)
+        {
             if let Some(ref device) = desktop_config.device_name {
                 println!("     Device: {} (will be created)", device);
             } else {
                 println!("     Device: PulseAudio loopback sink (will be auto-created)");
             }
         }
-        
+
         if args.no_transcription {
             println!("     Transcription: ✗ (disabled)");
         } else if model_path.exists() {
@@ -601,7 +644,9 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         println!("   No events found for session {}", session_id);
     } else {
         // Get session start time from database, fallback to recording_start
-        let session_start = db.get_session_start_time(&session_id).await?
+        let session_start = db
+            .get_session_start_time(&session_id)
+            .await?
             .unwrap_or(recording_start);
         crate::services::unified_recording::print_timeline(&session_id, &events, session_start)?;
     }

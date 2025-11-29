@@ -1,10 +1,10 @@
+use crate::client::ResponsesClient;
+use crate::factories::AgentFactory;
+use crate::load_env;
+use crate::models::{Message, Result};
+use crate::services::AgentService;
 use clap::Args;
 use log::{info, warn};
-use nexus_core::client::ResponsesClient;
-use nexus_core::factories::AgentFactory;
-use nexus_core::load_env;
-use nexus_core::models::{Message, Result};
-use nexus_core::services::AgentService;
 use std::path::PathBuf;
 
 #[derive(Args)]
@@ -44,7 +44,7 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
 
     // Verify servers directory exists
     if !args.servers_dir.exists() {
-        return Err(nexus_core::models::Error::Configuration(format!(
+        return Err(crate::models::Error::Configuration(format!(
             "Servers directory does not exist: {}. Please generate MCP tools first using 'nexus-mcp generate-code'",
             args.servers_dir.display()
         )));
@@ -56,7 +56,7 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
         .or_else(|| std::env::var("LLM_API_KEY").ok())
         .or_else(|| std::env::var("OPENAI_API_KEY").ok())
         .ok_or_else(|| {
-            nexus_core::models::Error::Configuration(
+            crate::models::Error::Configuration(
                 "API key not provided. Set LLM_API_KEY (or OPENAI_API_KEY) environment variable or use --api-key"
                     .to_string(),
             )
@@ -94,7 +94,7 @@ pub async fn run_test_python(args: TestPythonArgs) -> Result<()> {
 
     // Create request
     let mut request =
-        nexus_core::models::ChatCompletionRequest::new(model, vec![Message::user(&args.prompt)]);
+        crate::models::ChatCompletionRequest::new(model, vec![Message::user(&args.prompt)]);
 
     if let Some(temp) = args.temperature {
         request = request.with_temperature(temp);

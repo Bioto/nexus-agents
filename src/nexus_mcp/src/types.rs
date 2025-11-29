@@ -12,4 +12,3 @@ pub struct ToolDefinition {
     /// JSON Schema defining the tool's input parameters
     pub input_schema: Value,
 }
-

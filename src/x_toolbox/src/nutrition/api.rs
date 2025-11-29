@@ -15,7 +15,11 @@ use super::models::*;
 use super::NutritionService;
 
 /// Start the API server
-pub async fn start_server(pool: PgPool, host: String, port: u16) -> std::result::Result<(), ToolboxError> {
+pub async fn start_server(
+    pool: PgPool,
+    host: String,
+    port: u16,
+) -> std::result::Result<(), ToolboxError> {
     let app = create_router(pool);
 
     let addr = format!("{}:{}", host, port);
@@ -34,19 +38,23 @@ pub async fn start_server(pool: PgPool, host: String, port: u16) -> std::result:
 
 fn create_router(pool: PgPool) -> Router {
     Router::new()
-        .route("/api/nutrition/ingredients", get(list_ingredients).post(create_ingredient))
+        .route(
+            "/api/nutrition/ingredients",
+            get(list_ingredients).post(create_ingredient),
+        )
         .route(
             "/api/nutrition/ingredients/:id",
             get(get_ingredient)
                 .put(update_ingredient)
                 .delete(delete_ingredient),
         )
-        .route("/api/nutrition/recipes", get(list_recipes).post(create_recipe))
+        .route(
+            "/api/nutrition/recipes",
+            get(list_recipes).post(create_recipe),
+        )
         .route(
             "/api/nutrition/recipes/:id",
-            get(get_recipe)
-                .put(update_recipe)
-                .delete(delete_recipe),
+            get(get_recipe).put(update_recipe).delete(delete_recipe),
         )
         .route(
             "/api/nutrition/recipes/:id/nutrition",
@@ -96,9 +104,10 @@ async fn create_ingredient(
     State(pool): State<PgPool>,
     Json(req): Json<CreateIngredientRequest>,
 ) -> std::result::Result<Json<Ingredient>, ApiError> {
-    let ingredient = NutritionService::create_ingredient(&pool, &req.name, req.description.as_deref())
-        .await
-        .map_err(ApiError::from)?;
+    let ingredient =
+        NutritionService::create_ingredient(&pool, &req.name, req.description.as_deref())
+            .await
+            .map_err(ApiError::from)?;
     Ok(Json(ingredient))
 }
 
@@ -257,13 +266,25 @@ async fn add_ingredient_to_recipe(
     State(pool): State<PgPool>,
     Json(req): Json<AddRecipeIngredientRequest>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    let recipe_uuid = Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let ingredient_uuid = Uuid::parse_str(&req.ingredient_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let quantity: BigDecimal = req.quantity.to_string().parse().map_err(|e| ApiError::BadRequest(format!("Invalid quantity: {}", e)))?;
+    let recipe_uuid =
+        Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let ingredient_uuid =
+        Uuid::parse_str(&req.ingredient_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let quantity: BigDecimal = req
+        .quantity
+        .to_string()
+        .parse()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid quantity: {}", e)))?;
 
-    NutritionService::add_recipe_ingredient(&pool, recipe_uuid, ingredient_uuid, quantity, req.unit)
-        .await
-        .map_err(ApiError::from)?;
+    NutritionService::add_recipe_ingredient(
+        &pool,
+        recipe_uuid,
+        ingredient_uuid,
+        quantity,
+        req.unit,
+    )
+    .await
+    .map_err(ApiError::from)?;
     Ok(StatusCode::CREATED)
 }
 
@@ -277,8 +298,10 @@ async fn remove_ingredient_from_recipe(
     State(pool): State<PgPool>,
     Json(req): Json<RemoveRecipeIngredientRequest>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    let recipe_uuid = Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let ingredient_uuid = Uuid::parse_str(&req.ingredient_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let recipe_uuid =
+        Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let ingredient_uuid =
+        Uuid::parse_str(&req.ingredient_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     NutritionService::remove_recipe_ingredient(&pool, recipe_uuid, ingredient_uuid)
         .await
@@ -297,7 +320,8 @@ async fn add_step_to_recipe(
     State(pool): State<PgPool>,
     Json(req): Json<AddRecipeStepRequest>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    let recipe_uuid = Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let recipe_uuid =
+        Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     NutritionService::add_recipe_step(&pool, recipe_uuid, req.step_number, req.instruction)
         .await
@@ -315,7 +339,8 @@ async fn remove_step_from_recipe(
     State(pool): State<PgPool>,
     Json(req): Json<RemoveRecipeStepRequest>,
 ) -> std::result::Result<StatusCode, ApiError> {
-    let recipe_uuid = Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let recipe_uuid =
+        Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     NutritionService::remove_recipe_step(&pool, recipe_uuid, req.step_number)
         .await
@@ -366,4 +391,3 @@ impl axum::response::IntoResponse for ApiError {
         (status, body).into_response()
     }
 }
-

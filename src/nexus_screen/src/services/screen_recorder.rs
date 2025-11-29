@@ -1224,33 +1224,38 @@ impl ScreenRecorder {
         use std::process::{Command, Stdio};
 
         let segment_duration = config.segment_duration_secs.unwrap_or(3600);
-        
+
         // Generate output pattern: recording.mp4 -> recording_%03d.mp4
-        let stem = config.output_path
+        let stem = config
+            .output_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("recording");
-        let ext = config.output_path
+        let ext = config
+            .output_path
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("mp4");
-        let parent = config.output_path.parent().unwrap_or(std::path::Path::new("."));
-        
+        let parent = config
+            .output_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+
         // Create output directory if needed
         std::fs::create_dir_all(parent).map_err(|e| {
             ScreenError::Configuration(format!("Failed to create output directory: {}", e))
         })?;
-        
+
         let output_pattern = parent.join(format!("{}_%03d.{}", stem, ext));
         let segment_list_path = parent.join(format!("{}_segments.txt", stem));
-        
+
         // Build FFmpeg command
         // We use x11grab on Linux for screen capture
         let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
-        
+
         // Get screen resolution using xdpyinfo or default
         let screen_size = Self::get_screen_size_for_ffmpeg(config.monitor_index);
-        
+
         let mut cmd = Command::new("ffmpeg");
         cmd.args(["-y"]) // Overwrite output files
             .args(["-f", "x11grab"])
@@ -1376,7 +1381,10 @@ impl ScreenRecorder {
                 .unwrap_or_default()
         };
 
-        eprintln!("✅ Recording complete. Created {} segment(s)", segments.len());
+        eprintln!(
+            "✅ Recording complete. Created {} segment(s)",
+            segments.len()
+        );
         for seg in &segments {
             eprintln!("   📁 {}", seg.display());
         }
@@ -1400,7 +1408,7 @@ impl ScreenRecorder {
                 }
             }
         }
-        
+
         // Fall back to xrandr
         if let Ok(output) = Command::new("xrandr").args(["--current"]).output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1418,7 +1426,7 @@ impl ScreenRecorder {
                 }
             }
         }
-        
+
         // Default fallback
         eprintln!("⚠️  Could not detect screen size, using 1920x1080");
         "1920x1080".to_string()
@@ -1436,9 +1444,9 @@ impl ScreenRecorder {
     #[cfg(not(unix))]
     fn send_sigint_to_child(child: &mut std::process::Child) -> Result<()> {
         // On non-Unix, just kill the process
-        child.kill().map_err(|e| {
-            ScreenError::VideoEncoding(format!("Failed to stop FFmpeg: {}", e))
-        })?;
+        child
+            .kill()
+            .map_err(|e| ScreenError::VideoEncoding(format!("Failed to stop FFmpeg: {}", e)))?;
         Ok(())
     }
 }

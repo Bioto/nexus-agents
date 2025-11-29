@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use nexus_audio::Commands as AudioCommands;
 use nexus_core::Commands as CoreCommands;
 use nexus_gui::Commands as GuiCommands;
+use nexus_mcp::Commands as McpCommands;
 use nexus_screen::Commands as ScreenCommands;
 
 /// Nexus - AI Agent Framework
@@ -38,10 +39,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: CoreCommands,
     },
+    /// MCP protocol commands from nexus-mcp
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
     /// Start an MCP agent with access to MCP server tools
     McpAgent(commands::mcp_agent::McpAgentArgs),
-    /// Test execute_python tool with a one-off prompt
-    TestPython(commands::test_python::TestPythonArgs),
     /// Search generated MCP tool files and metadata
     SearchMcpTools(commands::search_mcp_tools::SearchMcpToolsArgs),
     /// Search for an MCP tool and immediately execute it

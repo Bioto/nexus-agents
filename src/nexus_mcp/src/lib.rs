@@ -17,7 +17,9 @@ pub mod types;
 pub mod utils;
 
 // Re-export commonly used items for convenience
-pub use cli::{run_generate_code, run_generate_external, run_shell, run_start_servers, Cli, Commands};
+pub use cli::{
+    run_generate_code, run_generate_external, run_shell, run_start_servers, Cli, Commands,
+};
 pub use codegen::CodeGenerator;
 pub use config::{MultiServerConfig, ServerConfig};
 pub use server::NexusMcpServer;

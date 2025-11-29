@@ -1,33 +1,28 @@
-use crate::error::{Result, ToolboxError};
-use crate::nutrition::NutritionService;
 use super::commands::BatchOperation;
 use super::helpers::{parse_ids, parse_terms};
+use crate::error::{Result, ToolboxError};
+use crate::nutrition::NutritionService;
 use futures::future::join_all;
 use uuid::Uuid;
 
 /// Handle batch operations
-pub async fn handle_batch_operation(
-    pool: &sqlx::PgPool,
-    operation: BatchOperation,
-) -> Result<()> {
+pub async fn handle_batch_operation(pool: &sqlx::PgPool, operation: BatchOperation) -> Result<()> {
     match operation {
         BatchOperation::GetIngredients { ids } => {
             let parsed_ids: Result<Vec<Uuid>> = parse_ids(&ids)
                 .into_iter()
-                .map(|id| Uuid::parse_str(&id).map_err(|e| {
-                    ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
-                }))
+                .map(|id| {
+                    Uuid::parse_str(&id).map_err(|e| {
+                        ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
+                    })
+                })
                 .collect();
             let parsed_ids = parsed_ids?;
 
-            let results: Vec<_> = join_all(
-                parsed_ids.iter().map(|&id| {
-                    let pool = pool;
-                    async move {
-                        NutritionService::get_ingredient(pool, id).await
-                    }
-                })
-            )
+            let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                let pool = pool;
+                async move { NutritionService::get_ingredient(pool, id).await }
+            }))
             .await;
 
             println!("Batch get ingredients ({} results):", results.len());
@@ -50,24 +45,25 @@ pub async fn handle_batch_operation(
         BatchOperation::GetRecipes { ids, full } => {
             let parsed_ids: Result<Vec<Uuid>> = parse_ids(&ids)
                 .into_iter()
-                .map(|id| Uuid::parse_str(&id).map_err(|e| {
-                    ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
-                }))
+                .map(|id| {
+                    Uuid::parse_str(&id).map_err(|e| {
+                        ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
+                    })
+                })
                 .collect();
             let parsed_ids = parsed_ids?;
 
             if full {
-                let results: Vec<_> = join_all(
-                    parsed_ids.iter().map(|&id| {
-                        let pool = pool;
-                        async move {
-                            NutritionService::get_recipe_with_details(pool, id).await
-                        }
-                    })
-                )
+                let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                    let pool = pool;
+                    async move { NutritionService::get_recipe_with_details(pool, id).await }
+                }))
                 .await;
 
-                println!("Batch get recipes with full details ({} results):", results.len());
+                println!(
+                    "Batch get recipes with full details ({} results):",
+                    results.len()
+                );
                 for (idx, result) in results.into_iter().enumerate() {
                     match result {
                         Ok(recipe) => {
@@ -81,7 +77,8 @@ pub async fn handle_batch_operation(
                             println!("  Cook time: {:?} minutes", recipe.recipe.cook_time_minutes);
                             println!("  Ingredients:");
                             for ing in &recipe.ingredients {
-                                println!("    - {}: {} {} ({})",
+                                println!(
+                                    "    - {}: {} {} ({})",
                                     ing.ingredient.name,
                                     ing.recipe_ingredient.quantity,
                                     ing.recipe_ingredient.unit,
@@ -99,14 +96,10 @@ pub async fn handle_batch_operation(
                     }
                 }
             } else {
-                let results: Vec<_> = join_all(
-                    parsed_ids.iter().map(|&id| {
-                        let pool = pool;
-                        async move {
-                            NutritionService::get_recipe(pool, id).await
-                        }
-                    })
-                )
+                let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                    let pool = pool;
+                    async move { NutritionService::get_recipe(pool, id).await }
+                }))
                 .await;
 
                 println!("Batch get recipes ({} results):", results.len());
@@ -130,20 +123,18 @@ pub async fn handle_batch_operation(
         BatchOperation::CalculateNutrition { ids } => {
             let parsed_ids: Result<Vec<Uuid>> = parse_ids(&ids)
                 .into_iter()
-                .map(|id| Uuid::parse_str(&id).map_err(|e| {
-                    ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
-                }))
+                .map(|id| {
+                    Uuid::parse_str(&id).map_err(|e| {
+                        ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
+                    })
+                })
                 .collect();
             let parsed_ids = parsed_ids?;
 
-            let results: Vec<_> = join_all(
-                parsed_ids.iter().map(|&id| {
-                    let pool = pool;
-                    async move {
-                        NutritionService::calculate_recipe_nutrition(pool, id, None).await
-                    }
-                })
-            )
+            let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                let pool = pool;
+                async move { NutritionService::calculate_recipe_nutrition(pool, id, None).await }
+            }))
             .await;
 
             println!("Batch calculate nutrition ({} results):", results.len());
@@ -184,15 +175,11 @@ pub async fn handle_batch_operation(
         BatchOperation::SearchIngredients { terms } => {
             let parsed_terms = parse_terms(&terms);
 
-            let results: Vec<_> = join_all(
-                parsed_terms.iter().map(|term| {
-                    let pool = pool;
-                    let term = term.clone();
-                    async move {
-                        NutritionService::list_ingredients(pool, Some(&term)).await
-                    }
-                })
-            )
+            let results: Vec<_> = join_all(parsed_terms.iter().map(|term| {
+                let pool = pool;
+                let term = term.clone();
+                async move { NutritionService::list_ingredients(pool, Some(&term)).await }
+            }))
             .await;
 
             // Collect unique ingredients (by ID)
@@ -202,7 +189,11 @@ pub async fn handle_batch_operation(
             for (idx, result) in results.into_iter().enumerate() {
                 match result {
                     Ok(ingredients) => {
-                        println!("Search '{}' found {} ingredients", parsed_terms[idx], ingredients.len());
+                        println!(
+                            "Search '{}' found {} ingredients",
+                            parsed_terms[idx],
+                            ingredients.len()
+                        );
                         for ingredient in ingredients {
                             if seen_ids.insert(ingredient.id) {
                                 all_ingredients.push(ingredient);
@@ -215,28 +206,31 @@ pub async fn handle_batch_operation(
                 }
             }
 
-            println!("\nTotal unique ingredients found: {}", all_ingredients.len());
+            println!(
+                "\nTotal unique ingredients found: {}",
+                all_ingredients.len()
+            );
             for ingredient in all_ingredients {
                 println!("  - {} ({})", ingredient.name, ingredient.id);
             }
         }
-        BatchOperation::SearchRecipes { terms, ingredient_id } => {
+        BatchOperation::SearchRecipes {
+            terms,
+            ingredient_id,
+        } => {
             let parsed_terms = parse_terms(&terms);
-            let ingredient_uuid = ingredient_id
-                .map(|id| Uuid::parse_str(&id))
-                .transpose()?;
+            let ingredient_uuid = ingredient_id.map(|id| Uuid::parse_str(&id)).transpose()?;
 
-            let results: Vec<_> = join_all(
-                parsed_terms.iter().map(|term| {
+            let results: Vec<_> =
+                join_all(parsed_terms.iter().map(|term| {
                     let pool = pool;
                     let term = term.clone();
                     let ingredient_uuid = ingredient_uuid;
                     async move {
                         NutritionService::list_recipes(pool, Some(&term), ingredient_uuid).await
                     }
-                })
-            )
-            .await;
+                }))
+                .await;
 
             // Collect unique recipes (by ID)
             let mut seen_ids = std::collections::HashSet::new();
@@ -245,7 +239,11 @@ pub async fn handle_batch_operation(
             for (idx, result) in results.into_iter().enumerate() {
                 match result {
                     Ok(recipes) => {
-                        println!("Search '{}' found {} recipes", parsed_terms[idx], recipes.len());
+                        println!(
+                            "Search '{}' found {} recipes",
+                            parsed_terms[idx],
+                            recipes.len()
+                        );
                         for recipe in recipes {
                             if seen_ids.insert(recipe.id) {
                                 all_recipes.push(recipe);
@@ -267,4 +265,3 @@ pub async fn handle_batch_operation(
 
     Ok(())
 }
-

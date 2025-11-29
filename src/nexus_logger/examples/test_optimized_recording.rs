@@ -41,7 +41,11 @@ impl EventCallback for TestCallback {
         _recording_start: chrono::DateTime<chrono::Utc>,
     ) -> (bool, Option<OverlayLabel>) {
         if let InputEvent::Mouse {
-            event_type, button, x, y, ..
+            event_type,
+            button,
+            x,
+            y,
+            ..
         } = event
         {
             if event_type == "click" {
@@ -85,9 +89,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         screen_config: ScreenRecordingConfig {
             output_path: output_dir.join("recording.mp4"),
             framerate: 30,
-            duration_secs: None, // Record until stopped
-            monitor_index: None, // Primary monitor
-            include_audio: false, // Disable audio for simpler test
+            duration_secs: None,         // Record until stopped
+            monitor_index: None,         // Primary monitor
+            include_audio: false,        // Disable audio for simpler test
             segment_duration_secs: None, // No video segmentation (test event rotation only)
         },
         input_config: InputCaptureConfig {
@@ -104,16 +108,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         context_fps: None,
 
         // === OPTIMIZATIONS ENABLED ===
-        
+
         // Rotating event writer - rotates every 10 seconds for testing
         event_writer_config: Some(EventWriterConfig {
             base_path: output_dir.join("events"),
             extension: "json".to_string(),
             rotation_interval: Duration::from_secs(10), // Rotate every 10 seconds!
-            buffer_size: 4 * 1024, // 4KB buffer (smaller for faster flushes)
+            buffer_size: 4 * 1024,                      // 4KB buffer (smaller for faster flushes)
             flush_interval: Duration::from_millis(500), // Flush every 500ms
-            compress_rotated: true, // Compress old files with gzip
-            retention_days: None, // Keep all files
+            compress_rotated: true,                     // Compress old files with gzip
+            retention_days: None,                       // Keep all files
         }),
 
         // Batch database inserter - flushes every 1 second or 50 events
@@ -178,4 +182,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-

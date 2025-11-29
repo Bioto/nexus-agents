@@ -52,10 +52,7 @@ impl NutritionService {
     }
 
     /// Find or create an ingredient by name (case-insensitive)
-    pub async fn find_or_create_ingredient(
-        pool: &PgPool,
-        name: &str,
-    ) -> Result<Ingredient> {
+    pub async fn find_or_create_ingredient(pool: &PgPool, name: &str) -> Result<Ingredient> {
         // Try to find existing ingredient by exact name match (case-insensitive)
         let ingredient = sqlx::query_as!(
             Ingredient,
@@ -79,10 +76,7 @@ impl NutritionService {
     }
 
     /// List all ingredients with optional search
-    pub async fn list_ingredients(
-        pool: &PgPool,
-        search: Option<&str>,
-    ) -> Result<Vec<Ingredient>> {
+    pub async fn list_ingredients(pool: &PgPool, search: Option<&str>) -> Result<Vec<Ingredient>> {
         let ingredients = if let Some(search_term) = search {
             sqlx::query_as!(
                 Ingredient,
@@ -346,10 +340,7 @@ impl NutritionService {
     }
 
     /// Get recipe with full details (ingredients and steps)
-    pub async fn get_recipe_with_details(
-        pool: &PgPool,
-        id: Uuid,
-    ) -> Result<RecipeWithDetails> {
+    pub async fn get_recipe_with_details(pool: &PgPool, id: Uuid) -> Result<RecipeWithDetails> {
         let recipe = Self::get_recipe(pool, id).await?;
 
         // Get ingredients with ingredient details
@@ -614,7 +605,11 @@ impl NutritionService {
     }
 
     /// Remove a step from a recipe
-    pub async fn remove_recipe_step(pool: &PgPool, recipe_id: Uuid, step_number: i32) -> Result<()> {
+    pub async fn remove_recipe_step(
+        pool: &PgPool,
+        recipe_id: Uuid,
+        step_number: i32,
+    ) -> Result<()> {
         let result = sqlx::query!(
             r#"
             DELETE FROM recipe_steps
@@ -643,44 +638,51 @@ impl NutritionService {
     fn convert_to_grams(quantity: &BigDecimal, unit: &str, ingredient_name: &str) -> BigDecimal {
         let unit_lower = unit.to_lowercase();
         let name_lower = ingredient_name.to_lowercase();
-        
+
         match unit_lower.as_str() {
             "g" | "gram" | "grams" => quantity.clone(),
             "kg" | "kilogram" | "kilograms" => quantity * BigDecimal::from(1000_i32),
             "oz" | "ounce" | "ounces" => quantity * "28.3495".parse::<BigDecimal>().unwrap(),
-            "lb" | "lbs" | "pound" | "pounds" => quantity * "453.592".parse::<BigDecimal>().unwrap(),
+            "lb" | "lbs" | "pound" | "pounds" => {
+                quantity * "453.592".parse::<BigDecimal>().unwrap()
+            }
             "cup" | "cups" => {
                 // Ingredient-specific conversions for cups
                 if name_lower.contains("rice") {
                     quantity * BigDecimal::from(200_i32) // ~200g per cup of uncooked rice
                 } else if name_lower.contains("oil") || name_lower.contains("olive") {
                     quantity * "218".parse::<BigDecimal>().unwrap() // ~218g per cup of olive oil
-                } else if name_lower.contains("water") || name_lower.contains("broth") || name_lower.contains("stock") {
+                } else if name_lower.contains("water")
+                    || name_lower.contains("broth")
+                    || name_lower.contains("stock")
+                {
                     quantity * "236.588".parse::<BigDecimal>().unwrap() // ~237g per cup of liquid
                 } else {
                     // Default: assume similar density to water
                     quantity * "236.588".parse::<BigDecimal>().unwrap()
                 }
-            },
+            }
             "tbsp" | "tablespoon" | "tablespoons" => {
                 if name_lower.contains("oil") || name_lower.contains("olive") {
                     quantity * "13.6".parse::<BigDecimal>().unwrap() // ~13.6g per tbsp of oil
                 } else {
                     quantity * "15".parse::<BigDecimal>().unwrap() // ~15g per tbsp (general)
                 }
-            },
+            }
             "tsp" | "teaspoon" | "teaspoons" => {
                 if name_lower.contains("oil") || name_lower.contains("olive") {
                     quantity * "4.5".parse::<BigDecimal>().unwrap() // ~4.5g per tsp of oil
                 } else {
                     quantity * "5".parse::<BigDecimal>().unwrap() // ~5g per tsp (general)
                 }
-            },
+            }
             "piece" | "pieces" | "whole" | "item" | "items" => {
                 // Ingredient-specific conversions for pieces
                 if name_lower.contains("lemon") {
                     quantity * BigDecimal::from(100_i32) // ~100g per lemon
-                } else if name_lower.contains("garlic") && (name_lower.contains("clove") || name_lower.contains("cloves")) {
+                } else if name_lower.contains("garlic")
+                    && (name_lower.contains("clove") || name_lower.contains("cloves"))
+                {
                     quantity * BigDecimal::from(3_i32) // ~3g per garlic clove
                 } else if name_lower.contains("potato") || name_lower.contains("potatoes") {
                     quantity * BigDecimal::from(150_i32) // ~150g per medium potato
@@ -688,10 +690,10 @@ impl NutritionService {
                     // Default: assume 100g per piece
                     quantity * BigDecimal::from(100_i32)
                 }
-            },
+            }
             "clove" | "cloves" => {
                 quantity * BigDecimal::from(3_i32) // ~3g per garlic clove
-            },
+            }
             _ => {
                 // Unknown unit - assume it's already in grams or log a warning
                 // In production, you might want to log this
@@ -701,7 +703,7 @@ impl NutritionService {
     }
 
     /// Calculate nutritional information for a recipe
-    /// 
+    ///
     /// If `servings` is provided, it will be used for per-serving calculations.
     /// Otherwise, the recipe's default servings will be used.
     pub async fn calculate_recipe_nutrition(
@@ -732,16 +734,19 @@ impl NutritionService {
         let mut total_sugar = BigDecimal::from(0_i32);
 
         for ri in recipe_ingredients {
-            if let Some(nutritional_info) = Self::get_nutritional_info(pool, ri.ingredient_id).await? {
+            if let Some(nutritional_info) =
+                Self::get_nutritional_info(pool, ri.ingredient_id).await?
+            {
                 // Get ingredient name for unit conversion
                 let ingredient = Self::get_ingredient(pool, ri.ingredient_id).await?;
-                
+
                 // Convert quantity to grams
-                let quantity_grams = Self::convert_to_grams(&ri.quantity, &ri.unit, &ingredient.name);
-                
+                let quantity_grams =
+                    Self::convert_to_grams(&ri.quantity, &ri.unit, &ingredient.name);
+
                 // Calculate multiplier: quantity in grams / 100g (since nutritional info is per 100g)
                 let multiplier = &quantity_grams / &BigDecimal::from(100_i32);
-                
+
                 total_calories += &nutritional_info.calories_per_100g * &multiplier;
                 total_protein += &nutritional_info.protein_g * &multiplier;
                 total_carbs += &nutritional_info.carbs_g * &multiplier;
@@ -757,10 +762,18 @@ impl NutritionService {
 
         // Per-serving nutrition is always based on the recipe's default servings
         // The servings parameter is only used for calculating totals for a specific number of servings
-        let per_serving_calories = recipe.servings.map(|s| total_calories.clone() / BigDecimal::from(s));
-        let per_serving_protein = recipe.servings.map(|s| total_protein.clone() / BigDecimal::from(s));
-        let per_serving_carbs = recipe.servings.map(|s| total_carbs.clone() / BigDecimal::from(s));
-        let per_serving_fat = recipe.servings.map(|s| total_fat.clone() / BigDecimal::from(s));
+        let per_serving_calories = recipe
+            .servings
+            .map(|s| total_calories.clone() / BigDecimal::from(s));
+        let per_serving_protein = recipe
+            .servings
+            .map(|s| total_protein.clone() / BigDecimal::from(s));
+        let per_serving_carbs = recipe
+            .servings
+            .map(|s| total_carbs.clone() / BigDecimal::from(s));
+        let per_serving_fat = recipe
+            .servings
+            .map(|s| total_fat.clone() / BigDecimal::from(s));
 
         Ok(RecipeNutrition {
             recipe_id,
@@ -844,8 +857,7 @@ impl NutritionService {
 
         // Truncate to reasonable size for LLM (keep first 50000 chars)
         let text_for_llm = if text_content.len() > 50000 {
-            text_content.chars().take(50000).collect::<String>()
-                + "\n[... content truncated ...]"
+            text_content.chars().take(50000).collect::<String>() + "\n[... content truncated ...]"
         } else {
             text_content
         };
@@ -854,16 +866,17 @@ impl NutritionService {
         // Use general LLM env vars, fall back to OPENAI_* for backward compatibility
         let llm_api_key = env::var("LLM_API_KEY")
             .or_else(|_| env::var("OPENAI_API_KEY"))
-            .map_err(|_| ToolboxError::Configuration(
-                "LLM_API_KEY or OPENAI_API_KEY environment variable not set".to_string()
-            ))?;
+            .map_err(|_| {
+                ToolboxError::Configuration(
+                    "LLM_API_KEY or OPENAI_API_KEY environment variable not set".to_string(),
+                )
+            })?;
 
         let llm_base_url = env::var("LLM_BASE_URL")
             .or_else(|_| env::var("OPENAI_BASE_URL"))
             .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
 
-        let model = env::var("DEFAULT_MODEL")
-            .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        let model = env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
 
         // Create prompt for recipe extraction
         let prompt = format!(
@@ -919,8 +932,7 @@ Return only valid JSON, no markdown formatting."#,
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToolboxError::Other(format!(
                 "LLM API error: HTTP {} - {}",
-                status,
-                error_text
+                status, error_text
             )));
         }
 
@@ -1039,10 +1051,7 @@ Return only valid JSON, no markdown formatting."#,
         let mut entries_with_recipes = Vec::new();
         for entry in entries {
             let recipe = Self::get_recipe(pool, entry.recipe_id).await?;
-            entries_with_recipes.push(MealPlanEntryWithRecipe {
-                entry,
-                recipe,
-            });
+            entries_with_recipes.push(MealPlanEntryWithRecipe { entry, recipe });
         }
 
         Ok(MealPlanWithEntries {
@@ -1209,7 +1218,7 @@ Return only valid JSON, no markdown formatting."#,
         end_date_filter: Option<NaiveDate>,
     ) -> Result<Vec<MealPlan>> {
         let search_term = search.map(|s| format!("%{}%", s));
-        
+
         let meal_plans = if let Some(search_str) = search_term {
             if let Some(template) = is_template {
                 if let (Some(start), Some(end)) = (start_date_filter, end_date_filter) {
@@ -1596,17 +1605,11 @@ Return only valid JSON, no markdown formatting."#,
             .collect();
 
         // Sort by date or day_of_week
-        daily_nutrition.sort_by(|a, b| {
-            match (a.date, b.date) {
-                (Some(ad), Some(bd)) => ad.cmp(&bd),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => {
-                    a.day_of_week
-                        .unwrap_or(7)
-                        .cmp(&b.day_of_week.unwrap_or(7))
-                }
-            }
+        daily_nutrition.sort_by(|a, b| match (a.date, b.date) {
+            (Some(ad), Some(bd)) => ad.cmp(&bd),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.day_of_week.unwrap_or(7).cmp(&b.day_of_week.unwrap_or(7)),
         });
 
         // Calculate weekly totals if applicable
@@ -2063,4 +2066,3 @@ Return only valid JSON, no markdown formatting."#,
         Ok(allergens)
     }
 }
-

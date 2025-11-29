@@ -42,7 +42,10 @@ impl ServerManager {
     }
 
     /// Start an HTTP server instance.
-    pub async fn start_http_server(&self, config: ServerConfig) -> Result<ServerHandle, NexusError> {
+    pub async fn start_http_server(
+        &self,
+        config: ServerConfig,
+    ) -> Result<ServerHandle, NexusError> {
         let bind_addr: SocketAddr = config.parse_bind_addr()?;
         let path = config.path.clone();
         let name = config.name.clone();
@@ -139,7 +142,10 @@ impl ServerManager {
     }
 
     /// Start a stdio server (not supported in multi-server mode).
-    pub async fn start_stdio_server(&self, config: ServerConfig) -> Result<ServerHandle, NexusError> {
+    pub async fn start_stdio_server(
+        &self,
+        config: ServerConfig,
+    ) -> Result<ServerHandle, NexusError> {
         Err(NexusError::Config(format!(
             "stdio transport is not supported in multi-server mode. \
             Server '{}' cannot use stdio transport as it requires exclusive access to stdin/stdout. \
@@ -149,10 +155,7 @@ impl ServerManager {
     }
 
     /// Wait for all server handles to complete and return results.
-    pub async fn wait_for_servers(
-        &self,
-        handles: Vec<ServerHandle>,
-    ) -> Result<(), NexusError> {
+    pub async fn wait_for_servers(&self, handles: Vec<ServerHandle>) -> Result<(), NexusError> {
         let mut results = Vec::new();
 
         for handle in handles {
@@ -187,4 +190,3 @@ impl Default for ServerManager {
         Self::new()
     }
 }
-

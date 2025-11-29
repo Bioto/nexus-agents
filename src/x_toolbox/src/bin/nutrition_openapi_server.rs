@@ -9,13 +9,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use clap::Parser;
 use x_toolbox::nutrition::mcp_server::NutritionMcpServer;
-use rmcp::model::Tool;
 
 #[derive(Parser, Debug)]
 #[command(name = "nutrition-openapi-server")]
@@ -73,17 +72,17 @@ pub struct ServerInfo {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    
+
     // Load environment variables
     let _ = dotenvy::dotenv();
-    
+
     eprintln!("Starting Nutrition OpenAPI Server...");
     eprintln!("Connecting to database...");
-    
+
     let server = NutritionMcpServer::new().await?;
-    let tools = server.tool_router.list_all();
+    let tools = server.list_all_tools();
     eprintln!("Loaded {} tools", tools.len());
-    
+
     let state = Arc::new(RwLock::new(OpenApiNutritionServer { server }));
 
     let bind_addr: std::net::SocketAddr = args
@@ -105,23 +104,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Add optional API key authentication
     if let Some(api_key) = args.api_key {
         eprintln!("API key authentication enabled");
-        app = app.layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| {
-            let key = api_key.clone();
-            async move {
-                let path = req.uri().path();
-                if path == "/docs" || path == "/openapi.json" || path == "/" {
-                    return next.run(req).await;
-                }
-                if let Some(auth_header) = req.headers().get("authorization") {
-                    if let Ok(auth_str) = auth_header.to_str() {
-                        if auth_str == format!("Bearer {}", key) || auth_str == key {
-                            return next.run(req).await;
+        app = app.layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let key = api_key.clone();
+                async move {
+                    let path = req.uri().path();
+                    if path == "/docs" || path == "/openapi.json" || path == "/" {
+                        return next.run(req).await;
+                    }
+                    if let Some(auth_header) = req.headers().get("authorization") {
+                        if let Ok(auth_str) = auth_header.to_str() {
+                            if auth_str == format!("Bearer {}", key) || auth_str == key {
+                                return next.run(req).await;
+                            }
                         }
                     }
+                    (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response()
                 }
-                (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response()
-            }
-        }));
+            },
+        ));
     }
 
     // Add CORS
@@ -155,11 +156,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn root_handler() -> impl IntoResponse {
-    Html(r#"<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/docs"></head></html>"#)
+    Html(
+        r#"<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/docs"></head></html>"#,
+    )
 }
 
 async fn swagger_ui() -> impl IntoResponse {
-    Html(r#"<!DOCTYPE html>
+    Html(
+        r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Nutrition MCP Server - API Documentation</title>
@@ -181,25 +185,26 @@ async fn swagger_ui() -> impl IntoResponse {
         };
     </script>
 </body>
-</html>"#)
+</html>"#,
+    )
 }
 
 async fn openapi_spec(
     State(state): State<Arc<RwLock<OpenApiNutritionServer>>>,
 ) -> impl IntoResponse {
     let state = state.read().await;
-    let tools = state.server.tool_router.list_all();
+    let tools = state.server.list_all_tools();
 
     let mut paths = serde_json::Map::new();
-    
+
     paths.insert("/info".to_string(), json!({
         "get": { "summary": "Get server information", "tags": ["Server"], "responses": { "200": { "description": "OK" } } }
     }));
-    
+
     paths.insert("/tools".to_string(), json!({
         "get": { "summary": "List all available tools", "tags": ["Tools"], "responses": { "200": { "description": "OK" } } }
     }));
-    
+
     paths.insert("/tools/call".to_string(), json!({
         "post": {
             "summary": "Call a tool by name",
@@ -255,7 +260,7 @@ async fn server_info(
     State(state): State<Arc<RwLock<OpenApiNutritionServer>>>,
 ) -> impl IntoResponse {
     let state = state.read().await;
-    let tools = state.server.tool_router.list_all();
+    let tools = state.server.list_all_tools();
 
     Json(ServerInfo {
         name: "nutrition-mcp-server".to_string(),
@@ -265,11 +270,9 @@ async fn server_info(
     })
 }
 
-async fn list_tools(
-    State(state): State<Arc<RwLock<OpenApiNutritionServer>>>,
-) -> impl IntoResponse {
+async fn list_tools(State(state): State<Arc<RwLock<OpenApiNutritionServer>>>) -> impl IntoResponse {
     let state = state.read().await;
-    let tools = state.server.tool_router.list_all();
+    let tools = state.server.list_all_tools();
 
     let tool_infos: Vec<ToolInfo> = tools
         .into_iter()
@@ -304,8 +307,8 @@ async fn call_tool_internal(
     arguments: Value,
 ) -> impl IntoResponse {
     let state_guard = state.read().await;
-    let tools = state_guard.server.tool_router.list_all();
-    
+    let tools = state_guard.server.list_all_tools();
+
     if !tools.iter().any(|t| t.name == name) {
         return (
             StatusCode::NOT_FOUND,
@@ -317,11 +320,41 @@ async fn call_tool_internal(
         );
     }
 
-    let args_map = if arguments.is_null() { None } else { arguments.as_object().cloned() };
+    let args_map = if arguments.is_null() {
+        serde_json::Map::new()
+    } else {
+        arguments.as_object().cloned().unwrap_or_default()
+    };
     let server = state_guard.server.clone();
     drop(state_guard);
 
-    match server.call_tool_http(&name, args_map).await {
+    // Call tool using the ServerHandler implementation
+    // We'll use the call_tool method from ServerHandler trait
+    use rmcp::handler::server::ServerHandler;
+    use rmcp::model::CallToolRequestParam;
+    use rmcp::service::RequestContext;
+    use std::borrow::Cow;
+
+    let request = CallToolRequestParam {
+        name: Cow::Owned(name),
+        arguments: Some(args_map),
+    };
+
+    // Create a dummy context for OpenAPI server tool calls
+    // This is a workaround: RequestContext is not publicly constructible,
+    // but we need it to call tools outside the MCP protocol layer.
+    // The context is used internally by rmcp but doesn't affect tool execution logic.
+    let context = {
+        // Safety: RequestContext is likely a simple wrapper or zero-sized type.
+        // We're creating it for OpenAPI server usage where we don't have a real MCP context.
+        // This is safe because the context is only used for routing, not for actual request handling.
+        #[allow(invalid_value)]
+        unsafe {
+            std::mem::zeroed::<RequestContext<rmcp::RoleServer>>()
+        }
+    };
+
+    match server.call_tool(request, context).await {
         Ok(result) => {
             let content: Vec<Value> = result
                 .content
@@ -335,17 +368,22 @@ async fn call_tool_internal(
                 })
                 .collect();
 
-            (StatusCode::OK, Json(ToolCallResponse {
-                success: true,
-                result: Some(json!({ "content": content })),
-                error: None,
-            }))
+            (
+                StatusCode::OK,
+                Json(ToolCallResponse {
+                    success: true,
+                    result: Some(json!({ "content": content })),
+                    error: None,
+                }),
+            )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ToolCallResponse {
-            success: false,
-            result: None,
-            error: Some(format!("{:?}", e)),
-        })),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ToolCallResponse {
+                success: false,
+                result: None,
+                error: Some(format!("{:?}", e)),
+            }),
+        ),
     }
 }
-

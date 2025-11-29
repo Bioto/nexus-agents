@@ -35,9 +35,7 @@ impl Database {
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await
-            .map_err(|e| {
-                ToolboxError::Configuration(format!("Failed to run migrations: {}", e))
-            })?;
+            .map_err(|e| ToolboxError::Configuration(format!("Failed to run migrations: {}", e)))?;
 
         Ok(Self {
             pool: Arc::new(pool),
@@ -49,4 +47,3 @@ impl Database {
         &self.pool
     }
 }
-

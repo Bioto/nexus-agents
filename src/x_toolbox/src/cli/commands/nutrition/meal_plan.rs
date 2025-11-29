@@ -1,16 +1,13 @@
+use super::commands::{MealPlanBatchOperation, MealPlanCommand};
+use super::helpers::parse_ids;
 use crate::error::{Result, ToolboxError};
 use crate::nutrition::NutritionService;
-use super::commands::{MealPlanCommand, MealPlanBatchOperation};
-use super::helpers::parse_ids;
 use chrono::NaiveDate;
 use futures::future::join_all;
 use uuid::Uuid;
 
 /// Handle meal plan commands
-pub async fn handle_meal_plan_command(
-    pool: &sqlx::PgPool,
-    command: MealPlanCommand,
-) -> Result<()> {
+pub async fn handle_meal_plan_command(pool: &sqlx::PgPool, command: MealPlanCommand) -> Result<()> {
     match command {
         MealPlanCommand::Add {
             name,
@@ -23,7 +20,9 @@ pub async fn handle_meal_plan_command(
                 .as_ref()
                 .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
                 .transpose()
-                .map_err(|e| ToolboxError::Validation(format!("Invalid start_date format: {}", e)))?;
+                .map_err(|e| {
+                    ToolboxError::Validation(format!("Invalid start_date format: {}", e))
+                })?;
             let end = end_date
                 .as_ref()
                 .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
@@ -44,7 +43,8 @@ pub async fn handle_meal_plan_command(
         MealPlanCommand::Get { id, full } => {
             let meal_plan_uuid = Uuid::parse_str(&id)?;
             if full {
-                let meal_plan = NutritionService::get_meal_plan_with_entries(pool, meal_plan_uuid).await?;
+                let meal_plan =
+                    NutritionService::get_meal_plan_with_entries(pool, meal_plan_uuid).await?;
                 println!("Meal Plan: {}", meal_plan.meal_plan.name);
                 if let Some(desc) = &meal_plan.meal_plan.description {
                     println!("Description: {}", desc);
@@ -59,11 +59,9 @@ pub async fn handle_meal_plan_command(
                 println!("\nEntries ({}):", meal_plan.entries.len());
                 for entry in meal_plan.entries {
                     if let Some(date) = entry.entry.date {
-                        println!("  Date: {}, Meal: {}, Recipe: {} ({})",
-                            date,
-                            entry.entry.meal_type,
-                            entry.recipe.name,
-                            entry.entry.recipe_id
+                        println!(
+                            "  Date: {}, Meal: {}, Recipe: {} ({})",
+                            date, entry.entry.meal_type, entry.recipe.name, entry.entry.recipe_id
                         );
                     } else if let Some(dow) = entry.entry.day_of_week {
                         let day_name = match dow {
@@ -76,7 +74,8 @@ pub async fn handle_meal_plan_command(
                             6 => "Sunday",
                             _ => "Unknown",
                         };
-                        println!("  Day: {}, Meal: {}, Recipe: {} ({})",
+                        println!(
+                            "  Day: {}, Meal: {}, Recipe: {} ({})",
                             day_name,
                             entry.entry.meal_type,
                             entry.recipe.name,
@@ -107,7 +106,9 @@ pub async fn handle_meal_plan_command(
                 .as_ref()
                 .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
                 .transpose()
-                .map_err(|e| ToolboxError::Validation(format!("Invalid start_date format: {}", e)))?;
+                .map_err(|e| {
+                    ToolboxError::Validation(format!("Invalid start_date format: {}", e))
+                })?;
             let end = end_date
                 .as_ref()
                 .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
@@ -171,14 +172,18 @@ pub async fn handle_meal_plan_command(
                 .as_ref()
                 .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
                 .transpose()
-                .map_err(|e| ToolboxError::Validation(format!("Invalid start_date format: {}", e)))?;
+                .map_err(|e| {
+                    ToolboxError::Validation(format!("Invalid start_date format: {}", e))
+                })?;
             let end = end_date
                 .as_ref()
                 .map(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d"))
                 .transpose()
                 .map_err(|e| ToolboxError::Validation(format!("Invalid end_date format: {}", e)))?;
 
-            let meal_plans = NutritionService::list_meal_plans(pool, search.as_deref(), template, start, end).await?;
+            let meal_plans =
+                NutritionService::list_meal_plans(pool, search.as_deref(), template, start, end)
+                    .await?;
             println!("Found {} meal plans:", meal_plans.len());
             for meal_plan in meal_plans {
                 println!("  - {} ({})", meal_plan.name, meal_plan.id);
@@ -198,7 +203,8 @@ pub async fn handle_meal_plan_command(
         }
         MealPlanCommand::CalculateNutrition { id } => {
             let meal_plan_uuid = Uuid::parse_str(&id)?;
-            let nutrition = NutritionService::calculate_meal_plan_nutrition(pool, meal_plan_uuid).await?;
+            let nutrition =
+                NutritionService::calculate_meal_plan_nutrition(pool, meal_plan_uuid).await?;
             println!("Nutritional information for meal plan {}:", id);
             println!("\nDaily Nutrition:");
             for daily in nutrition.daily_nutrition {
@@ -229,12 +235,9 @@ pub async fn handle_meal_plan_command(
                 }
                 println!("  Meals:");
                 for meal in daily.meals {
-                    println!("    {}: {} calories, {}g protein, {}g carbs, {}g fat",
-                        meal.meal_type,
-                        meal.calories,
-                        meal.protein_g,
-                        meal.carbs_g,
-                        meal.fat_g
+                    println!(
+                        "    {}: {} calories, {}g protein, {}g carbs, {}g fat",
+                        meal.meal_type, meal.calories, meal.protein_g, meal.carbs_g, meal.fat_g
                     );
                 }
             }
@@ -274,24 +277,25 @@ async fn handle_meal_plan_batch_operation(
         MealPlanBatchOperation::GetMealPlans { ids, full } => {
             let parsed_ids: Result<Vec<Uuid>> = parse_ids(&ids)
                 .into_iter()
-                .map(|id| Uuid::parse_str(&id).map_err(|e| {
-                    ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
-                }))
+                .map(|id| {
+                    Uuid::parse_str(&id).map_err(|e| {
+                        ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
+                    })
+                })
                 .collect();
             let parsed_ids = parsed_ids?;
 
             if full {
-                let results: Vec<_> = join_all(
-                    parsed_ids.iter().map(|&id| {
-                        let pool = pool;
-                        async move {
-                            NutritionService::get_meal_plan_with_entries(pool, id).await
-                        }
-                    })
-                )
+                let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                    let pool = pool;
+                    async move { NutritionService::get_meal_plan_with_entries(pool, id).await }
+                }))
                 .await;
 
-                println!("Batch get meal plans with entries ({} results):", results.len());
+                println!(
+                    "Batch get meal plans with entries ({} results):",
+                    results.len()
+                );
                 for (idx, result) in results.into_iter().enumerate() {
                     match result {
                         Ok(meal_plan) => {
@@ -305,14 +309,10 @@ async fn handle_meal_plan_batch_operation(
                     }
                 }
             } else {
-                let results: Vec<_> = join_all(
-                    parsed_ids.iter().map(|&id| {
-                        let pool = pool;
-                        async move {
-                            NutritionService::get_meal_plan(pool, id).await
-                        }
-                    })
-                )
+                let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                    let pool = pool;
+                    async move { NutritionService::get_meal_plan(pool, id).await }
+                }))
                 .await;
 
                 println!("Batch get meal plans ({} results):", results.len());
@@ -333,20 +333,18 @@ async fn handle_meal_plan_batch_operation(
         MealPlanBatchOperation::CalculateNutrition { ids } => {
             let parsed_ids: Result<Vec<Uuid>> = parse_ids(&ids)
                 .into_iter()
-                .map(|id| Uuid::parse_str(&id).map_err(|e| {
-                    ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
-                }))
+                .map(|id| {
+                    Uuid::parse_str(&id).map_err(|e| {
+                        ToolboxError::Validation(format!("Invalid UUID '{}': {}", id, e))
+                    })
+                })
                 .collect();
             let parsed_ids = parsed_ids?;
 
-            let results: Vec<_> = join_all(
-                parsed_ids.iter().map(|&id| {
-                    let pool = pool;
-                    async move {
-                        NutritionService::calculate_meal_plan_nutrition(pool, id).await
-                    }
-                })
-            )
+            let results: Vec<_> = join_all(parsed_ids.iter().map(|&id| {
+                let pool = pool;
+                async move { NutritionService::calculate_meal_plan_nutrition(pool, id).await }
+            }))
             .await;
 
             println!("Batch calculate nutrition ({} results):", results.len());
@@ -357,7 +355,10 @@ async fn handle_meal_plan_batch_operation(
                         println!("  Days: {}", nutrition.daily_nutrition.len());
                         if let Some(weekly) = nutrition.weekly_totals {
                             println!("  Weekly total calories: {}", weekly.total_calories);
-                            println!("  Average daily calories: {}", weekly.average_daily_calories);
+                            println!(
+                                "  Average daily calories: {}",
+                                weekly.average_daily_calories
+                            );
                         }
                     }
                     Err(e) => {
@@ -370,4 +371,3 @@ async fn handle_meal_plan_batch_operation(
 
     Ok(())
 }
-

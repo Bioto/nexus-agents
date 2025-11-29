@@ -420,4 +420,3 @@ mod tests {
         assert_eq!(tool_def.input_schema, json!({})); // Should default to empty object
     }
 }
-

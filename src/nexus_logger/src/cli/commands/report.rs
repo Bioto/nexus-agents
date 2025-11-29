@@ -48,13 +48,17 @@ pub async fn run_report(args: ReportArgs) -> Result<()> {
 /// Get the most recent session ID from the database
 async fn get_last_session_id(_db: &Database) -> Result<Option<String>> {
     use nexus_core::services::ClickHouseConfig;
-    
+
     let config = ClickHouseConfig::from_env();
-    let http_port = if config.port == 9000 { 8123 } else { config.port };
+    let http_port = if config.port == 9000 {
+        8123
+    } else {
+        config.port
+    };
     let url = format!("http://{}:{}", config.host, http_port);
-    
+
     let query = "SELECT id FROM sessions ORDER BY start_time DESC LIMIT 1 FORMAT JSONEachRow";
-    
+
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
@@ -63,16 +67,18 @@ async fn get_last_session_id(_db: &Database) -> Result<Option<String>> {
         .body(query)
         .send()
         .await
-        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
-    
+        .map_err(|e| {
+            crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e))
+        })?;
+
     if !response.status().is_success() {
         return Ok(None);
     }
-    
+
     let text = response.text().await.map_err(|e| {
         crate::error::LoggerError::Other(format!("Failed to read HTTP response: {}", e))
     })?;
-    
+
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
@@ -83,7 +89,7 @@ async fn get_last_session_id(_db: &Database) -> Result<Option<String>> {
             }
         }
     }
-    
+
     Ok(None)
 }
 
@@ -91,7 +97,11 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
     use nexus_core::services::ClickHouseConfig;
 
     let config = ClickHouseConfig::from_env();
-    let http_port = if config.port == 9000 { 8123 } else { config.port };
+    let http_port = if config.port == 9000 {
+        8123
+    } else {
+        config.port
+    };
     let url = format!("http://{}:{}", config.host, http_port);
 
     println!("\n╔══════════════════════════════════════════════════════════════════════════════╗");
@@ -122,10 +132,15 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
         .body(query)
         .send()
         .await
-        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+        .map_err(|e| {
+            crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e))
+        })?;
 
     if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(crate::error::LoggerError::Other(format!(
             "ClickHouse HTTP query failed: {}",
             error_text
@@ -154,7 +169,9 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
 
     if sessions.is_empty() {
         println!("║ No sessions found in database.                                            ║");
-        println!("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+        println!(
+            "╚══════════════════════════════════════════════════════════════════════════════╝\n"
+        );
         return Ok(());
     }
 
@@ -168,13 +185,34 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
     let mut total_mouse_moves = 0u64;
 
     for session in &sessions {
-        total_keyboard_events += session.get("keyboard_events").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_keyboard_presses += session.get("keyboard_presses").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_keyboard_releases += session.get("keyboard_releases").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_mouse_events += session.get("mouse_events").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_mouse_clicks += session.get("mouse_clicks").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_mouse_releases += session.get("mouse_releases").and_then(|v| v.as_u64()).unwrap_or(0);
-        total_mouse_moves += session.get("mouse_moves").and_then(|v| v.as_u64()).unwrap_or(0);
+        total_keyboard_events += session
+            .get("keyboard_events")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_keyboard_presses += session
+            .get("keyboard_presses")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_keyboard_releases += session
+            .get("keyboard_releases")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_mouse_events += session
+            .get("mouse_events")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_mouse_clicks += session
+            .get("mouse_clicks")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_mouse_releases += session
+            .get("mouse_releases")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        total_mouse_moves += session
+            .get("mouse_moves")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
     }
 
     println!("║ 📈 Overall Statistics:                                                       ║");
@@ -212,7 +250,9 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
         .body(event_query)
         .send()
         .await
-        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+        .map_err(|e| {
+            crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e))
+        })?;
 
     if response.status().is_success() {
         let text = response.text().await.map_err(|e| {
@@ -228,13 +268,18 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
                 crate::error::LoggerError::Other(format!("Failed to parse JSON row: {}", e))
             })?;
 
-            let event_type = row.get("event_type").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let event_type = row
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let count: u64 = row.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
             // Box width: 78, borders: 4, label: 2 spaces, so available: 72
             // Event type: max 30, count: right-aligned in remaining space
             println!("║   {:<30} {:>40} ║", event_type, count);
         }
-        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!(
+            "╠══════════════════════════════════════════════════════════════════════════════╣"
+        );
     }
 
     // Get top keys
@@ -254,7 +299,9 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
         .body(key_query)
         .send()
         .await
-        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+        .map_err(|e| {
+            crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e))
+        })?;
 
     if response.status().is_success() {
         let text = response.text().await.map_err(|e| {
@@ -279,7 +326,9 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
         if !has_keys {
             println!("║   (no key frequency data)                                               ║");
         }
-        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!(
+            "╠══════════════════════════════════════════════════════════════════════════════╣"
+        );
     }
 
     // Get top mouse buttons
@@ -298,7 +347,9 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
         .body(button_query)
         .send()
         .await
-        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+        .map_err(|e| {
+            crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e))
+        })?;
 
     if response.status().is_success() {
         let text = response.text().await.map_err(|e| {
@@ -316,14 +367,21 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
                 crate::error::LoggerError::Other(format!("Failed to parse JSON row: {}", e))
             })?;
 
-            let button = row.get("button").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let button = row
+                .get("button")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let count: u64 = row.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
             println!("║   {:<30} {:>40} ║", button, count);
         }
         if !has_buttons {
-            println!("║   (no mouse button frequency data)                                        ║");
+            println!(
+                "║   (no mouse button frequency data)                                        ║"
+            );
         }
-        println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+        println!(
+            "╠══════════════════════════════════════════════════════════════════════════════╣"
+        );
     }
 
     // Get screenshots count
@@ -335,7 +393,9 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
         .body(screenshot_query)
         .send()
         .await
-        .map_err(|e| crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e)))?;
+        .map_err(|e| {
+            crate::error::LoggerError::Other(format!("Failed to send HTTP request: {}", e))
+        })?;
 
     if response.status().is_success() {
         let text = response.text().await.map_err(|e| {
@@ -361,10 +421,16 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
     if detailed {
         println!("📋 Session Details:\n");
         for (idx, session) in sessions.iter().take(20).enumerate() {
-            let session_id = session.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let start_time_str = session.get("start_time").and_then(|v| v.as_str()).unwrap_or("");
+            let session_id = session
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let start_time_str = session
+                .get("start_time")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let end_time_str = session.get("end_time").and_then(|v| v.as_str());
-            
+
             let start_time = parse_datetime(start_time_str).unwrap_or_else(Utc::now);
             let duration = if let Some(end_str) = end_time_str {
                 if let Some(end_time) = parse_datetime(end_str) {
@@ -377,18 +443,44 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
             };
 
             println!("{}. Session: {}", idx + 1, session_id);
-            println!("   Started: {}", start_time.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S"));
-            println!("   Duration: {}", duration);
-            println!("   Keyboard: {} events ({} presses, {} releases)", 
-                session.get("keyboard_events").and_then(|v| v.as_u64()).unwrap_or(0),
-                session.get("keyboard_presses").and_then(|v| v.as_u64()).unwrap_or(0),
-                session.get("keyboard_releases").and_then(|v| v.as_u64()).unwrap_or(0),
+            println!(
+                "   Started: {}",
+                start_time.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
             );
-            println!("   Mouse: {} events ({} clicks, {} releases, {} moves)",
-                session.get("mouse_events").and_then(|v| v.as_u64()).unwrap_or(0),
-                session.get("mouse_clicks").and_then(|v| v.as_u64()).unwrap_or(0),
-                session.get("mouse_releases").and_then(|v| v.as_u64()).unwrap_or(0),
-                session.get("mouse_moves").and_then(|v| v.as_u64()).unwrap_or(0),
+            println!("   Duration: {}", duration);
+            println!(
+                "   Keyboard: {} events ({} presses, {} releases)",
+                session
+                    .get("keyboard_events")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                session
+                    .get("keyboard_presses")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                session
+                    .get("keyboard_releases")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+            );
+            println!(
+                "   Mouse: {} events ({} clicks, {} releases, {} moves)",
+                session
+                    .get("mouse_events")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                session
+                    .get("mouse_clicks")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                session
+                    .get("mouse_releases")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                session
+                    .get("mouse_moves")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
             );
             println!();
         }
@@ -400,7 +492,12 @@ async fn generate_summary_report(_db: &Database, detailed: bool) -> Result<()> {
     Ok(())
 }
 
-async fn generate_session_report(db: &Database, session_id: &str, detailed: bool, all_events: bool) -> Result<()> {
+async fn generate_session_report(
+    db: &Database,
+    session_id: &str,
+    detailed: bool,
+    all_events: bool,
+) -> Result<()> {
     println!("\n╔══════════════════════════════════════════════════════════════════════════════╗");
     println!("║              📊 Session Report: {:<40} ║", session_id);
     println!("╠══════════════════════════════════════════════════════════════════════════════╣");
@@ -408,17 +505,26 @@ async fn generate_session_report(db: &Database, session_id: &str, detailed: bool
     // Get session metrics
     match db.get_session_metrics(session_id).await {
         Ok(metrics) => {
-            println!("║ Start Time: {:>64} ║", 
-                metrics.start_time.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S"));
+            println!(
+                "║ Start Time: {:>64} ║",
+                metrics
+                    .start_time
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+            );
             if let Some(end_time) = metrics.end_time {
-                println!("║ End Time: {:>66} ║", 
-                    end_time.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "║ End Time: {:>66} ║",
+                    end_time.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
+                );
                 let duration = end_time.signed_duration_since(metrics.start_time);
                 println!("║ Duration: {:>64} ║", format_duration(duration));
             } else {
                 println!("║ End Time: {:>66} ║", "ongoing");
             }
-            println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+            println!(
+                "╠══════════════════════════════════════════════════════════════════════════════╣"
+            );
             println!("║ Keyboard Events: {:>60} ║", metrics.keyboard_events);
             println!("║   Presses: {:>66} ║", metrics.keyboard_presses);
             println!("║   Releases: {:>64} ║", metrics.keyboard_releases);
@@ -460,12 +566,19 @@ async fn generate_session_report(db: &Database, session_id: &str, detailed: bool
         match db.get_session_events(session_id).await {
             Ok(events) => {
                 println!("📋 Event Timeline ({} events):\n", events.len());
-                let limit = if all_events { events.len() } else { 100.min(events.len()) };
+                let limit = if all_events {
+                    events.len()
+                } else {
+                    100.min(events.len())
+                };
                 for event in events.iter().take(limit) {
                     print_event(event);
                 }
                 if !all_events && events.len() > 100 {
-                    println!("\n... and {} more events (use --all to show all events)", events.len() - 100);
+                    println!(
+                        "\n... and {} more events (use --all to show all events)",
+                        events.len() - 100
+                    );
                 }
             }
             Err(e) => {
@@ -481,12 +594,20 @@ fn print_event(event: &crate::services::database::TimelineEvent) {
     let time_str = if let Some(tc) = event.timecode {
         format!("{:.2}s", tc)
     } else {
-        event.timestamp.with_timezone(&Local).format("%H:%M:%S%.3f").to_string()
+        event
+            .timestamp
+            .with_timezone(&Local)
+            .format("%H:%M:%S%.3f")
+            .to_string()
     };
     match event.event_type.as_str() {
         "keyboard" => {
             if let Some(key) = &event.key {
-                let action = if event.pressed.unwrap_or(false) { "PRESS" } else { "RELEASE" };
+                let action = if event.pressed.unwrap_or(false) {
+                    "PRESS"
+                } else {
+                    "RELEASE"
+                };
                 println!("  [{}] ⌨️  {}: {}", time_str, action, key);
             }
         }
@@ -518,10 +639,12 @@ fn print_event(event: &crate::services::database::TimelineEvent) {
         }
         "transcription" => {
             // Get transcription text
-            let text = event.metadata.get("text")
+            let text = event
+                .metadata
+                .get("text")
                 .and_then(|v| v.as_str())
                 .or_else(|| event.key.as_deref());
-            
+
             if let Some(text) = text {
                 // Determine source from metadata
                 let source = if let Some(metadata) = event.metadata.as_object() {
@@ -529,7 +652,7 @@ fn print_event(event: &crate::services::database::TimelineEvent) {
                         match source_str {
                             "monitor_output" => "📺 Desktop Audio",
                             "microphone" => "🎤 Microphone",
-                            _ => "🎤 Transcription"
+                            _ => "🎤 Transcription",
                         }
                     } else if let Some(monitor_desktop) = metadata.get("monitor_desktop_audio") {
                         if monitor_desktop.as_bool().unwrap_or(false) {
@@ -543,7 +666,7 @@ fn print_event(event: &crate::services::database::TimelineEvent) {
                 } else {
                     "🎤 Transcription"
                 };
-                
+
                 // Skip [BLANK_AUDIO] transcriptions to reduce noise
                 if text != "[BLANK_AUDIO]" {
                     println!("  [{}] {}: {}", time_str, source, text);
@@ -576,7 +699,7 @@ fn print_event(event: &crate::services::database::TimelineEvent) {
                 } else {
                     "🎙️  Audio"
                 };
-                
+
                 // Show output path if available
                 let path_info = if let Some(metadata) = event.metadata.as_object() {
                     if let Some(path) = metadata.get("output_path").and_then(|v| v.as_str()) {
@@ -587,14 +710,26 @@ fn print_event(event: &crate::services::database::TimelineEvent) {
                 } else {
                     String::new()
                 };
-                
-                println!("  [{}] {} {}: {}{}", time_str, audio_source, subtype, 
-                    if subtype == "recording_start" { "started" } else { "stopped" },
-                    path_info);
+
+                println!(
+                    "  [{}] {} {}: {}{}",
+                    time_str,
+                    audio_source,
+                    subtype,
+                    if subtype == "recording_start" {
+                        "started"
+                    } else {
+                        "stopped"
+                    },
+                    path_info
+                );
             }
         }
         _ => {
-            println!("  [{}] {}: {:?}", time_str, event.event_type, event.event_subtype);
+            println!(
+                "  [{}] {}: {:?}",
+                time_str, event.event_type, event.event_subtype
+            );
         }
     }
 }
@@ -624,4 +759,3 @@ fn format_duration(duration: chrono::Duration) -> String {
         format!("{}s", seconds)
     }
 }
-

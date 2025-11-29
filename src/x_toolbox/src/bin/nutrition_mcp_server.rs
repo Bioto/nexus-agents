@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // This is a limitation of the current rmcp StreamableHttpService design
             let db = x_toolbox::nutrition::Database::new().await?;
             let server = NutritionMcpServer::with_database(db).await?;
-            
+
             let service: StreamableHttpService<NutritionMcpServer, LocalSessionManager> =
                 StreamableHttpService::new(
                     move || Ok(server.clone()),
@@ -109,4 +109,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[DEBUG] Server ended");
     Ok(())
 }
-
