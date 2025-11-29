@@ -2,6 +2,7 @@
 /// Provides CLI interfaces and tool services.
 pub mod cli;
 pub mod error;
+pub mod fitness;
 pub mod nutrition;
 
 /// CLI entry points and argument parsers.
@@ -12,3 +13,6 @@ pub use error::{Result, ToolboxError};
 
 /// Re-export nutrition MCP server for external use
 pub use nutrition::NutritionMcpServer;
+
+/// Re-export fitness MCP server for external use
+pub use fitness::FitnessMcpServer;

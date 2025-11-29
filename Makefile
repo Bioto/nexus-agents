@@ -29,10 +29,14 @@ nutrition-db-stop:
 	cd src/x_toolbox && docker compose down
 
 nutrition-db-reset:
-	cd src/x_toolbox && docker compose down -v && docker compose up -d && sleep 5 && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql
+	cd src/x_toolbox && docker compose down -v && docker compose up -d && sleep 5 && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/004_fitness_schema.sql
 
 nutrition-db-migrate:
-	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql
+	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/004_fitness_schema.sql
+
+# Run only the fitness migration (assumes nutrition migrations are already applied)
+fitness-db-migrate:
+	cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/004_fitness_schema.sql
 
 nutrition-db-status:
 	cd src/x_toolbox && docker compose ps
@@ -56,15 +60,33 @@ nutrition-prepare-sqlx:
 	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/001_initial_schema.sql 2>/dev/null || true
 	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/002_meal_plans.sql 2>/dev/null || true
 	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/003_family_members_and_favorites.sql 2>/dev/null || true
+	@cd src/x_toolbox && docker exec -i x_toolbox_postgres psql -U postgres -d nutrition < migrations/004_fitness_schema.sql 2>/dev/null || true
 	@echo "Preparing sqlx query cache..."
 	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && cd src/x_toolbox && cargo sqlx prepare
 
 # Nutrition MCP Server commands
 nutrition-mcp-start:
-	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 0.0.0.0:80
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport http --bind 0.0.0.0:8002
 
 nutrition-mcp-stdio:
 	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin nutrition-mcp-server -- --transport stdio
+
+# Fitness MCP Server commands
+fitness-mcp-start:
+	export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/nutrition" && export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin fitness-mcp-server -- --transport http --bind 0.0.0.0:8003
+
+fitness-mcp-stdio:
+	export POSTGRES_HOST=localhost && export POSTGRES_PORT=5432 && export POSTGRES_DATABASE=nutrition && export POSTGRES_USER=postgres && export POSTGRES_PASSWORD=postgres && cargo run --bin fitness-mcp-server -- --transport stdio
+
+# Start both nutrition and fitness MCP servers (requires running in separate terminals)
+health-servers-info:
+	@echo "To start both servers, run in separate terminals:"
+	@echo "  Terminal 1: make nutrition-mcp-start"
+	@echo "  Terminal 2: make fitness-mcp-start"
+	@echo ""
+	@echo "Or for stdio mode (for MCP clients like Cursor):"
+	@echo "  make nutrition-mcp-stdio"
+	@echo "  make fitness-mcp-stdio"
 
 # Docker-based Nutrition MCP Server commands
 # Uses BuildKit for cache mounts (requires BuildKit enabled in Docker daemon)
@@ -83,12 +105,14 @@ nutrition-mcp-docker-logs:
 nutrition-mcp-docker-migrate:
 	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql && \
 	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql && \
-	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
+	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql && \
+	docker exec -i nutrition_postgres psql -U postgres -d nutrition < src/x_toolbox/migrations/004_fitness_schema.sql
 
 nutrition-mcp-docker-migrate-public:
 	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/001_initial_schema.sql && \
 	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/002_meal_plans.sql && \
-	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql
+	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/003_family_members_and_favorites.sql && \
+	docker exec -i nutrition_postgres_public psql -U postgres -d nutrition < src/x_toolbox/migrations/004_fitness_schema.sql
 
 nutrition-mcp-docker-migrate-all:
 	$(MAKE) nutrition-mcp-docker-migrate
