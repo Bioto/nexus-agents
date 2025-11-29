@@ -171,7 +171,7 @@ pub struct ScreenRecordingConfig {
 impl Default for ScreenRecordingConfig {
     fn default() -> Self {
         Self {
-            output_path: PathBuf::from("recording.mp4"),
+            output_path: PathBuf::from("output/recording.mp4"),
             framerate: 30,
             duration_secs: None,
             monitor_index: None,
@@ -224,7 +224,7 @@ impl Default for AudioRecordingConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            output_path: PathBuf::from("recording.wav"),
+            output_path: PathBuf::from("output/recording.wav"),
             sample_rate: 48000,
             channels: 1,
             device_name: None,
@@ -1520,11 +1520,59 @@ impl RecordingSession {
     pub async fn wait(self) -> Result<()> {
         // Store audio recording start events if enabled
         let db = Database::new().await?;
+        
+        // Store video recording path
+        let video_path = if self.config.screen_config.output_path.is_absolute() {
+            self.config.screen_config.output_path.clone()
+        } else {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join(&self.config.screen_config.output_path))
+                .unwrap_or_else(|| self.config.screen_config.output_path.clone())
+        };
+        
+        let timestamp = Local::now().to_rfc3339();
+        let video_metadata = json!({
+            "output_path": video_path.to_string_lossy(),
+            "framerate": self.config.screen_config.framerate,
+            "include_audio": self.config.screen_config.include_audio,
+        });
+        if let Err(e) = db
+            .insert_event(
+                &self.session_id,
+                "recording",
+                Some("video_start"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &timestamp,
+                None, // timecode
+                Some(video_metadata),
+                None, // screenshot_id
+            )
+            .await
+        {
+            eprintln!("⚠️  Failed to store video recording start event: {}", e);
+        }
+        
         for audio_config in &self.config.audio_configs {
             if audio_config.enabled {
                 let timestamp = Local::now().to_rfc3339();
+                // Convert to absolute path for reliable querying
+                let audio_path = if audio_config.output_path.is_absolute() {
+                    audio_config.output_path.clone()
+                } else {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|cwd| cwd.join(&audio_config.output_path))
+                        .unwrap_or_else(|| audio_config.output_path.clone())
+                };
+                
                 let metadata = json!({
-                    "output_path": audio_config.output_path.to_string_lossy(),
+                    "output_path": audio_path.to_string_lossy(),
                     "sample_rate": audio_config.sample_rate,
                     "channels": audio_config.channels,
                     "device_name": audio_config.device_name,
@@ -1579,8 +1627,18 @@ impl RecordingSession {
                     // Get the corresponding audio config using the mapped index
                     if let Some(audio_config) = self.config.audio_configs.get(config_idx) {
                         let timestamp = Local::now().to_rfc3339();
+                        // Convert to absolute path for reliable querying
+                        let audio_path = if audio_config.output_path.is_absolute() {
+                            audio_config.output_path.clone()
+                        } else {
+                            std::env::current_dir()
+                                .ok()
+                                .map(|cwd| cwd.join(&audio_config.output_path))
+                                .unwrap_or_else(|| audio_config.output_path.clone())
+                        };
+                        
                         let metadata = json!({
-                            "output_path": audio_config.output_path.to_string_lossy(),
+                            "output_path": audio_path.to_string_lossy(),
                             "sample_rate": audio_config.sample_rate,
                             "channels": audio_config.channels,
                             "monitor_desktop_audio": audio_config.monitor_desktop_audio,
@@ -1761,6 +1819,45 @@ impl RecordingSession {
             } else {
                 println!("✅ Overlays applied successfully");
             }
+        }
+        
+        // Store video recording stop event with final path
+        let video_path = if self.config.screen_config.output_path.is_absolute() {
+            self.config.screen_config.output_path.clone()
+        } else {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join(&self.config.screen_config.output_path))
+                .unwrap_or_else(|| self.config.screen_config.output_path.clone())
+        };
+        
+        let timestamp = Local::now().to_rfc3339();
+        let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
+        let video_stop_metadata = json!({
+            "output_path": video_path.to_string_lossy(),
+            "framerate": self.config.screen_config.framerate,
+            "include_audio": self.config.screen_config.include_audio,
+            "duration_seconds": video_duration,
+        });
+        if let Err(e) = db
+            .insert_event(
+                &self.session_id,
+                "recording",
+                Some("video_stop"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &timestamp,
+                None, // timecode
+                Some(video_stop_metadata),
+                None, // screenshot_id
+            )
+            .await
+        {
+            eprintln!("⚠️  Failed to store video recording stop event: {}", e);
         }
 
         if let (Some(ctx), Some(fps)) = (self.click_context, self.config.context_fps) {

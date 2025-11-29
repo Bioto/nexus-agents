@@ -23,7 +23,7 @@ use gtk::glib;
 #[derive(Args)]
 pub struct UnifiedArgs {
     /// Output video file path
-    #[arg(short = 'o', long, default_value = "recording.mp4")]
+    #[arg(short = 'o', long, default_value = "output/recording.mp4")]
     pub output: PathBuf,
 
     /// Frame rate for video recording
@@ -47,7 +47,7 @@ pub struct UnifiedArgs {
     pub no_mic_audio: bool,
 
     /// Microphone audio output file path
-    #[arg(long, default_value = "recording.wav")]
+    #[arg(long, default_value = "output/recording.wav")]
     pub mic_audio_output: PathBuf,
 
     /// Microphone audio sample rate (Hz)
@@ -258,7 +258,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 let monitor_output_path = args.mic_audio_output
                     .parent()
                     .map(|p| p.join("desktop_audio.wav"))
-                    .unwrap_or_else(|| PathBuf::from("desktop_audio.wav"));
+                    .unwrap_or_else(|| PathBuf::from("output/desktop_audio.wav"));
                 
                 configs.push(AudioRecordingConfig {
                     enabled: true,
@@ -346,7 +346,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         let monitor_output_path = args.mic_audio_output
             .parent()
             .map(|p| p.join("desktop_audio.wav"))
-            .unwrap_or_else(|| PathBuf::from("desktop_audio.wav"));
+            .unwrap_or_else(|| PathBuf::from("output/desktop_audio.wav"));
         println!("   Desktop audio monitoring: ✓");
         println!("     Output: {}", monitor_output_path.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);

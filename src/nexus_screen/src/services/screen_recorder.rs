@@ -56,7 +56,7 @@ impl Default for RecordingConfig {
         Self {
             framerate: 30,
             duration_secs: None,
-            output_path: PathBuf::from("recording.mp4"),
+            output_path: PathBuf::from("output/recording.mp4"),
             monitor_index: None,
             window_id: None,
             window_title: None,
@@ -1301,7 +1301,7 @@ mod tests {
     fn test_recording_config_defaults() {
         let config = RecordingConfig::default();
         assert_eq!(config.framerate, 30);
-        assert_eq!(config.output_path, PathBuf::from("recording.mp4"));
+        assert_eq!(config.output_path, PathBuf::from("output/recording.mp4"));
         assert!(config.include_audio);
         assert!(!config.fast);
         assert_eq!(config.duration_secs, None);
