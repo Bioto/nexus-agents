@@ -6,6 +6,28 @@
 use crate::error::Result;
 use crate::services::storage::TimelineEvent;
 use chrono::{DateTime, Local, Utc};
+use serde_json::Value;
+
+/// Parse webcam analysis JSON from analysis_text field
+/// The analysis_text contains JSON wrapped in markdown code blocks like ```json\n{...}\n```
+fn parse_webcam_analysis(metadata: &serde_json::Map<String, Value>) -> Option<Value> {
+    metadata
+        .get("analysis_text")
+        .and_then(|v| v.as_str())
+        .and_then(|text| {
+            // Strip markdown code block markers (```json and ```)
+            let cleaned = text
+                .strip_prefix("```json")
+                .or_else(|| text.strip_prefix("```"))
+                .unwrap_or(text)
+                .strip_suffix("```")
+                .unwrap_or(text)
+                .trim();
+            
+            // Parse the JSON
+            serde_json::from_str::<Value>(cleaned).ok()
+        })
+}
 
 /// Print timeline for a session
 pub fn print_timeline(
@@ -73,11 +95,32 @@ pub fn print_timeline(
                 // Check if this is webcam sentiment analysis
                 if event.event_subtype.as_deref() == Some("webcam_sentiment") {
                     if let Some(metadata) = event.metadata.as_object() {
-                        // Build a summary of the webcam analysis
-                        let sentiment = metadata.get("sentiment").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let attention = metadata.get("attention").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let energy = metadata.get("energy").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let notes = metadata.get("notes").and_then(|v| v.as_str());
+                        // The analysis data is stored in analysis_text as a JSON string wrapped in markdown code blocks
+                        let analysis_json = parse_webcam_analysis(metadata);
+                        
+                        // Extract fields from parsed JSON, with fallback to direct metadata access
+                        let sentiment = analysis_json
+                            .as_ref()
+                            .and_then(|json| json.get("sentiment").and_then(|v| v.as_str()))
+                            .or_else(|| metadata.get("sentiment").and_then(|v| v.as_str()))
+                            .unwrap_or("unknown");
+                        
+                        let attention = analysis_json
+                            .as_ref()
+                            .and_then(|json| json.get("attention").and_then(|v| v.as_str()))
+                            .or_else(|| metadata.get("attention").and_then(|v| v.as_str()))
+                            .unwrap_or("unknown");
+                        
+                        let energy = analysis_json
+                            .as_ref()
+                            .and_then(|json| json.get("energy").and_then(|v| v.as_str()))
+                            .or_else(|| metadata.get("energy").and_then(|v| v.as_str()))
+                            .unwrap_or("unknown");
+                        
+                        let notes = analysis_json
+                            .as_ref()
+                            .and_then(|json| json.get("notes").and_then(|v| v.as_str()))
+                            .or_else(|| metadata.get("notes").and_then(|v| v.as_str()));
                         
                         let mut desc = format!("Sentiment: {}, Attention: {}, Energy: {}", sentiment, attention, energy);
                         if let Some(n) = notes {

@@ -371,7 +371,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         batch_inserter_config: None, // Use legacy direct inserts (batch inserter not enabled by default)
         // Webcam sentiment analysis configuration
         webcam_analysis_config: if use_webcam && args.webcam_analysis {
-            Some(crate::services::context::WebcamAnalysisConfig::with_device(
+            Some(crate::services::unified_recording::WebcamAnalysisConfig::with_device(
                 args.webcam_analysis_interval,
                 args.webcam_device.clone(),
             ))

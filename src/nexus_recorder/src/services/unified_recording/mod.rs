@@ -19,7 +19,7 @@ mod timeline;
 // Re-export all public types from config
 pub use config::{
     AudioRecordingConfig, DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel,
-    ScreenRecordingConfig, UnifiedRecordingConfig, DEFAULT_SEGMENT_DURATION_SECS,
+    ScreenRecordingConfig, UnifiedRecordingConfig, WebcamAnalysisConfig, DEFAULT_SEGMENT_DURATION_SECS,
 };
 
 // Re-export service types

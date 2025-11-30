@@ -3,8 +3,26 @@
 //! This module contains all configuration structs and traits for the unified
 //! recording service, including screen, audio, and input capture settings.
 
-use crate::services::context::webcam_analysis::WebcamAnalysisConfig;
 use crate::services::storage::BatchInserterConfig;
+
+/// Simple configuration for webcam sentiment analysis.
+/// Now uses the unified ProcessingService architecture.
+#[derive(Clone, Debug)]
+pub struct WebcamAnalysisConfig {
+    /// Interval between frame analyses in seconds.
+    pub interval_secs: u64,
+    /// Whether analysis is enabled.
+    pub enabled: bool,
+}
+
+impl WebcamAnalysisConfig {
+    pub fn with_device(interval_secs: u64, _device_path: String) -> Self {
+        Self {
+            interval_secs,
+            enabled: true,
+        }
+    }
+}
 use crate::services::input::InputEvent;
 use crate::services::storage::EventWriterConfig;
 use crate::services::webcam::WebcamRecordingConfig;

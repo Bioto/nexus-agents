@@ -1,5 +1,5 @@
 use crate::error::{RecorderError, Result};
-use log::warn;
+use log::{info, warn};
 use crate::services::storage::Database;
 use crate::services::screen::ScreenRecorder;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -13,6 +13,7 @@ use std::fs;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -21,7 +22,25 @@ use uuid::Uuid;
 
 const FRAME_SYSTEM_PROMPT: &str = "You are an expert UI and user behavior analyst. Analyze the provided screenshot and, if given, use any prior frame descriptions to infer the user's likely action. In one or two clear sentences, describe what the user is doing, referencing salient UI elements, visible text, and any change or intent you can deduce from the visual context.";
 const SUMMARY_SYSTEM_PROMPT: &str = "\
-You are an expert in interpreting user behavior from UI activity logs. Given a sequence of frame descriptions around a click event, provide a detailed summary of what likely happened, focusing on both the immediate action and surrounding context. Consider user intent, what the user might already know about the navigation target or item, and any visible clues about task progression or discovery. Explain not just what was clicked, but also what the user may have been seeking (e.g., navigating to a new item, reviewing existing information, taking action on a new element, etc.), and how the interface state or prior actions contribute to your reasoning. Write a clear, multi-sentence summary describing both the user’s action and their probable understanding or goal in this context.";
+You are an expert in interpreting user behavior from UI activity logs. Given a sequence of frame descriptions around a click event, provide a detailed summary of what likely happened, focusing on both the immediate action and surrounding context. Consider user intent, what the user might already know about the navigation target or item, and any visible clues about task progression or discovery. Explain not just what was clicked, but also what the user may have been seeking (e.g., navigating to a new item, reviewing existing information, taking action on a new element, etc.), and how the interface state or prior actions contribute to your reasoning. Write a clear, multi-sentence summary describing both the user's action and their probable understanding or goal in this context.";
+const WEBCAM_ANALYSIS_SYSTEM_PROMPT: &str = r#"You are an expert in analyzing human behavior and emotions from video frames. 
+Analyze the webcam frame of a computer user and provide observations about their current state.
+Be objective and concise. Focus on observable cues like facial expression, posture, and gaze direction.
+Do not make assumptions beyond what is visually apparent."#;
+const WEBCAM_ANALYSIS_USER_PROMPT: &str = r#"Analyze this webcam frame of a computer user. Describe:
+1. Emotional state: happy, neutral, frustrated, confused, focused, tired, or other
+2. Attention: focused on screen, distracted, looking away, engaged, multitasking
+3. Energy level: high, medium, low
+4. Notable observations about posture, gestures, or behavior
+
+Be concise. Respond with a JSON object containing these fields:
+{
+  "sentiment": "string - primary emotional state",
+  "attention": "string - attention/focus state", 
+  "energy": "string - energy level",
+  "confidence": "number 0-1 - how confident you are in this assessment",
+  "notes": "string - brief additional observations"
+}"#;
 const FRAME_BATCH_SIZE: usize = 3;
 const CONTEXT_WINDOW_BEFORE: f64 = 2.0; // seconds before frame
 const CONTEXT_WINDOW_AFTER: f64 = 2.0; // seconds after frame
@@ -225,6 +244,54 @@ impl ProcessingConfig {
 pub struct ProcessingService;
 
 impl ProcessingService {
+    /// Start periodic webcam analysis using the processing service.
+    /// This spawns a background task that periodically sends webcam analysis jobs.
+    pub fn start_webcam_analysis(
+        handle: ProcessingHandle,
+        interval_secs: u64,
+        session_id: String,
+        video_path: PathBuf,
+        stop_flag: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<()> {
+        let interval = Duration::from_secs(interval_secs);
+        let start_time = std::time::Instant::now();
+
+        tokio::spawn(async move {
+            // Wait for video to have enough data (at least 5 seconds of recording)
+            info!("🎭 Waiting 5s for video to accumulate data...");
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            let mut frame_index = 0u64;
+
+            loop {
+                if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    info!("🎭 Webcam analysis stopping...");
+                    break;
+                }
+
+                let elapsed = start_time.elapsed().as_secs_f64();
+                // Extract a frame from a few seconds ago (to ensure data exists)
+                let frame_timestamp = (elapsed - 3.0).max(1.0);
+
+                let job = ProcessingJob::new("webcam_analysis", format!("frame_{}", frame_index), Utc::now())
+                    .with_session_id(Some(session_id.clone()))
+                    .with_video_context(Some(frame_timestamp), Some(video_path.clone()))
+                    .with_metadata(json!({
+                        "frame_index": frame_index,
+                    }));
+
+                handle.trigger(job);
+
+                frame_index += 1;
+                tokio::time::sleep(interval).await;
+            }
+
+            info!("🎭 Webcam analysis queuing stopped: {} frames queued for processing", frame_index);
+        });
+
+        Ok(())
+    }
+
     pub fn start(config: ProcessingConfig, db: Database) -> Result<ProcessingHandle> {
         // Use vision-specific API service for image processing
         let api_service = Arc::new(NexusApiService::from_env_vision()?);
@@ -269,6 +336,11 @@ impl ProcessingService {
         db: Arc<Database>,
         job: ProcessingJob,
     ) -> Result<()> {
+        // Handle webcam analysis jobs differently
+        if job.kind == "webcam_analysis" {
+            return Self::process_webcam_analysis_job(api_service, config, db, job).await;
+        }
+
         if job.video_path.is_none() {
             return Err(RecorderError::Other(
                 "Processing job missing video path (skipping)".to_string(),
@@ -1539,6 +1611,216 @@ impl ProcessingService {
     fn frame_filename(job: &ProcessingJob, idx: u32) -> String {
         let session = job.session_id.as_deref().unwrap_or("session");
         format!("{}_{}_frame_{}.png", session, job.id, idx)
+    }
+
+    /// Process a webcam analysis job.
+    /// Extracts a single frame from the video and analyzes it for sentiment/attention.
+    async fn process_webcam_analysis_job(
+        api_service: Arc<NexusApiService>,
+        config: Arc<ProcessingConfig>,
+        db: Arc<Database>,
+        job: ProcessingJob,
+    ) -> Result<()> {
+        let video_path = job.video_path.as_ref().ok_or_else(|| {
+            RecorderError::Other("Webcam analysis job missing video path".to_string())
+        })?;
+
+        let video_timestamp = job.video_timestamp.ok_or_else(|| {
+            RecorderError::Other("Webcam analysis job missing video timestamp".to_string())
+        })?;
+
+        // Use .ts extension for live recording files
+        let live_video_path = if video_path.extension().and_then(|e| e.to_str()) == Some("mp4") {
+            video_path.with_extension("ts")
+        } else {
+            video_path.clone()
+        };
+
+        if !live_video_path.exists() {
+            return Err(RecorderError::Other(format!(
+                "Video file not found: {}",
+                live_video_path.display()
+            )));
+        }
+
+        info!(
+            "🎭 Extracting webcam frame at {:.1}s from {}...",
+            video_timestamp,
+            live_video_path.display()
+        );
+
+        // Extract frame from video
+        let frame_data = tokio::task::spawn_blocking({
+            let video = live_video_path.clone();
+            move || Self::extract_single_frame_from_video(&video, video_timestamp)
+        })
+        .await
+        .map_err(|e| RecorderError::Other(format!("Frame extraction task failed: {}", e)))??;
+
+        info!(
+            "🎭 Frame extracted ({} bytes), analyzing...",
+            frame_data.len()
+        );
+
+        // Analyze the frame
+        let analysis = Self::analyze_webcam_frame(
+            &api_service,
+            &frame_data,
+            &config.per_frame_model,
+            config.per_frame_max_tokens,
+        )
+        .await?;
+
+        info!(
+            "🎭 Analysis result: {}",
+            analysis.chars().take(150).collect::<String>()
+        );
+
+        // Store the analysis
+        let session_id = job.session_id.as_deref().ok_or_else(|| {
+            RecorderError::Other("Webcam analysis job missing session ID".to_string())
+        })?;
+
+        let timestamp = Utc::now().to_rfc3339();
+        let frame_index = job
+            .metadata
+            .get("frame_index")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        // Try to parse the analysis result as JSON
+        let metadata = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&analysis) {
+            json!({
+                "frame_index": frame_index,
+                "video_timestamp": video_timestamp,
+                "analysis": parsed,
+            })
+        } else {
+            json!({
+                "frame_index": frame_index,
+                "video_timestamp": video_timestamp,
+                "analysis_text": analysis,
+            })
+        };
+
+        db.insert_event(
+            session_id,
+            "analysis",
+            Some("webcam_sentiment"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &timestamp,
+            Some(video_timestamp),
+            Some(metadata),
+            None,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Extract a single frame from a video file at a specific timestamp.
+    fn extract_single_frame_from_video(video_path: &PathBuf, timestamp_secs: f64) -> Result<Vec<u8>> {
+        let temp_dir = tempdir().map_err(RecorderError::Io)?;
+        let output_path = temp_dir.path().join("frame.jpg");
+
+        let output = std::process::Command::new("ffmpeg")
+            .arg("-ss")
+            .arg(format!("{:.2}", timestamp_secs.max(0.0)))
+            .arg("-i")
+            .arg(video_path)
+            .arg("-frames:v")
+            .arg("1")
+            .arg("-q:v")
+            .arg("2") // High quality JPEG
+            .arg("-f")
+            .arg("image2")
+            .arg("-y")
+            .arg(&output_path)
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .map_err(|e| RecorderError::Other(format!("Failed to run ffmpeg: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Output file is empty") || stderr.contains("nothing was encoded") {
+                return Err(RecorderError::Other(
+                    "Video file doesn't have enough data yet (try again later)".to_string()
+                ));
+            }
+            let error_lines: Vec<&str> = stderr.lines().collect();
+            let error_msg = if error_lines.len() > 10 {
+                error_lines[error_lines.len()-10..].join("\n")
+            } else {
+                error_lines.join("\n")
+            };
+            return Err(RecorderError::Other(format!(
+                "FFmpeg frame extraction failed (exit code {:?}): {}",
+                output.status.code(),
+                error_msg
+            )));
+        }
+
+        if !output_path.exists() {
+            return Err(RecorderError::Other(
+                "FFmpeg succeeded but output file not created".to_string()
+            ));
+        }
+
+        let data = std::fs::read(&output_path).map_err(|e| {
+            RecorderError::Other(format!("Failed to read extracted frame: {}", e))
+        })?;
+
+        if data.is_empty() {
+            return Err(RecorderError::Other(
+                "Extracted frame is empty (video may not have enough data yet)".to_string()
+            ));
+        }
+
+        Ok(data)
+    }
+
+    /// Analyze a webcam frame using the vision API.
+    async fn analyze_webcam_frame(
+        api_service: &NexusApiService,
+        frame_data: &[u8],
+        model: &str,
+        _max_tokens: u32, // Not used - some API endpoints don't support max_tokens
+    ) -> Result<String> {
+        let base64_image = BASE64.encode(frame_data);
+
+        let content = MessageContent::Array(vec![
+            ContentPart::Text {
+                text: WEBCAM_ANALYSIS_USER_PROMPT.to_string(),
+            },
+            ContentPart::ImageUrl {
+                image_url: ImageUrl {
+                    url: format!("data:image/jpeg;base64,{}", base64_image),
+                },
+            },
+        ]);
+
+        let messages = vec![
+            Message::system(WEBCAM_ANALYSIS_SYSTEM_PROMPT),
+            Message::user_with_content(content),
+        ];
+
+        // Don't set max_tokens - some API endpoints (like /v1/responses) don't support it
+        // The model will generate until completion or its natural limit
+        let request = ChatCompletionRequest::new(model.to_string(), messages);
+
+        let response = api_service.chat(request).await?;
+        let text = response
+            .content
+            .as_ref()
+            .map(|c| c.extract_text())
+            .unwrap_or_default();
+
+        Ok(text.trim().to_string())
     }
 }
 

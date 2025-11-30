@@ -8,8 +8,7 @@ use crate::services::audio::{AudioRecorder, AudioRecordingConfig as AudioRecordi
 use crate::services::storage::{BatchEvent, BatchEventInserter, Database, RotatingEventWriter, RotatingEventWriterHandle};
 use crate::services::input::InputEvent;
 use crate::services::context::{ClickContextHandle, ClickContextService};
-use crate::services::context::context_processing::ProcessingJob;
-use crate::services::context::{WebcamAnalysisHandle, WebcamAnalysisService};
+use crate::services::context::context_processing::{ProcessingHandle, ProcessingJob, ProcessingService};
 use chrono::{DateTime, Local, Utc};
 use log::{error, info, warn};
 use serde_json::json;
@@ -256,6 +255,7 @@ impl UnifiedRecordingService {
         };
 
         // Start webcam sentiment analysis (if enabled and webcam is recording)
+        // Use the same ProcessingService that handles click context
         let webcam_analysis_handle = if self.config.webcam_config.is_some() {
             if let Some(analysis_config) = self.config.webcam_analysis_config.clone() {
                 let video_path = self.config.webcam_config.as_ref()
@@ -270,13 +270,33 @@ impl UnifiedRecordingService {
                         .unwrap_or(video_path)
                 };
                 
+                // Start or reuse ProcessingService for webcam analysis
                 match Database::new().await {
-                    Ok(db) => WebcamAnalysisService::maybe_start(
-                        Some(analysis_config),
-                        db,
-                        session_id.to_string(),
-                        video_path,
-                    ),
+                    Ok(db) => {
+                        // Use ProcessingService - start if not already started
+                        let processing_config = crate::services::context::context_processing::ProcessingConfig::from_env();
+                        match ProcessingService::start(processing_config, db) {
+                            Ok(handle) => {
+                                // Start periodic webcam analysis jobs
+                                if let Err(e) = ProcessingService::start_webcam_analysis(
+                                    handle.clone(),
+                                    analysis_config.interval_secs,
+                                    session_id.to_string(),
+                                    video_path,
+                                    stop_signal.clone(),
+                                ) {
+                                    warn!("⚠️  Failed to start webcam analysis: {}", e);
+                                    None
+                                } else {
+                                    Some(handle)
+                                }
+                            }
+                            Err(e) => {
+                                warn!("⚠️  Failed to start processing service for webcam analysis: {}", e);
+                                None
+                            }
+                        }
+                    }
                     Err(e) => {
                         warn!("⚠️  Failed to create database for webcam analysis: {}", e);
                         None
@@ -1696,7 +1716,7 @@ pub struct RecordingSession {
     input_handle: tokio::task::JoinHandle<Result<()>>,
     screen_handle: Option<tokio::task::JoinHandle<Result<()>>>,
     webcam_handle: Option<tokio::task::JoinHandle<Result<()>>>,
-    webcam_analysis_handle: Option<WebcamAnalysisHandle>,
+    webcam_analysis_handle: Option<ProcessingHandle>,
     audio_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
     audio_config_indices: Vec<usize>, // Maps handle index to config index
     process_handle: tokio::task::JoinHandle<Result<()>>,
@@ -1717,7 +1737,7 @@ impl RecordingSession {
 
     /// Wait for the recording session to complete.
     /// This will wait until the stop signal is set (via stop() or duration expires).
-    pub async fn wait(self) -> Result<()> {
+    pub async fn wait(mut self) -> Result<()> {
         // Store audio recording start events if enabled
         let db = Database::new().await?;
 
@@ -1836,9 +1856,11 @@ impl RecordingSession {
         }
 
         // Stop and wait for webcam analysis if enabled
-        if let Some(analysis_handle) = self.webcam_analysis_handle {
-            info!("🎭 Stopping webcam sentiment analysis...");
-            analysis_handle.wait_for_completion().await;
+        // Note: ProcessingHandle doesn't need explicit stop - it stops when sender is dropped
+        // The stop_signal already handles stopping the periodic job scheduler
+        if let Some(handle) = self.webcam_analysis_handle.take() {
+            info!("🎭 Webcam sentiment analysis will complete when processing queue is empty...");
+            handle.wait_for_completion().await;
             info!("🎭 Webcam sentiment analysis completed");
         }
 
