@@ -4,8 +4,8 @@ use clap::Subcommand;
 pub enum NutritionCommands {
     /// Start the API server
     Server {
-        /// Host to bind to
-        #[arg(long, default_value = "127.0.0.1")]
+        /// Host to bind to (use 0.0.0.0 to accept connections from other devices)
+        #[arg(long, default_value = "0.0.0.0")]
         host: String,
         /// Port to bind to
         #[arg(long, default_value = "8080")]
