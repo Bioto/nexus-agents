@@ -138,6 +138,9 @@ pub enum NutritionCommands {
         /// Include nutritional information
         #[arg(long)]
         include_nutrition: bool,
+        /// Use HTML/Chrome-based PDF rendering (better quality, requires Chrome)
+        #[arg(long)]
+        html: bool,
     },
 }
 

@@ -318,6 +318,7 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
             meal_plan_id,
             output,
             include_nutrition,
+            html,
         } => {
             let meal_plan_uuid = Uuid::parse_str(&meal_plan_id)?;
             let meal_plan = NutritionService::get_meal_plan_with_entries(pool, meal_plan_uuid).await?;
@@ -353,16 +354,28 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
 
-            // Export to PDF (async function now)
-            crate::nutrition::pdf_export::RecipePdfExporter::export_meal_plan(
-                &meal_plan,
-                nutrition.as_ref(),
-                pool,
-                &output_path,
-            )
-            .await?;
-
-            println!("✅ Meal plan exported to PDF: {}", output_path.display());
+            // Export to PDF
+            if html {
+                // Use HTML/Chrome-based renderer for better quality
+                crate::nutrition::pdf_export::HtmlPdfExporter::export_meal_plan(
+                    &meal_plan,
+                    nutrition.as_ref(),
+                    pool,
+                    &output_path,
+                )
+                .await?;
+                println!("✅ Meal plan exported to PDF (HTML): {}", output_path.display());
+            } else {
+                // Use printpdf-based renderer
+                crate::nutrition::pdf_export::RecipePdfExporter::export_meal_plan(
+                    &meal_plan,
+                    nutrition.as_ref(),
+                    pool,
+                    &output_path,
+                )
+                .await?;
+                println!("✅ Meal plan exported to PDF: {}", output_path.display());
+            }
         }
     }
 

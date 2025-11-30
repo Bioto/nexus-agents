@@ -951,3 +951,668 @@ impl RecipePdfExporter {
         pdf.text("Happy cooking!", FONT_BODY, true, center - 22.0);
     }
 }
+
+// ============================================================================
+// HTML-based PDF Exporter using Chromiumoxide
+// ============================================================================
+
+use chromiumoxide::{Browser, BrowserConfig, cdp::browser_protocol::page::PrintToPdfParams};
+use futures::StreamExt;
+
+pub struct HtmlPdfExporter;
+
+impl HtmlPdfExporter {
+    /// Export a meal plan to PDF using HTML/CSS rendering via headless Chrome
+    pub async fn export_meal_plan(
+        meal_plan: &MealPlanWithEntries,
+        nutrition: Option<&MealPlanNutrition>,
+        pool: &sqlx::PgPool,
+        output_path: &Path,
+    ) -> Result<()> {
+        // Fetch full recipe details for all entries
+        let mut recipes_by_id = HashMap::new();
+        for entry in &meal_plan.entries {
+            if !recipes_by_id.contains_key(&entry.recipe.id) {
+                let recipe = NutritionService::get_recipe_with_details(pool, entry.recipe.id)
+                    .await
+                    .map_err(|e| ToolboxError::Other(format!("Failed to fetch recipe: {}", e)))?;
+                recipes_by_id.insert(entry.recipe.id, recipe);
+            }
+        }
+
+        // Get prep data for shopping list
+        let prep_data = NutritionService::get_meal_plan_for_prep_analysis(pool, meal_plan.meal_plan.id)
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to get prep data: {}", e)))?;
+
+        // Generate HTML
+        let html = Self::generate_html(meal_plan, nutrition, &recipes_by_id, &prep_data);
+
+        // Launch headless Chrome and render to PDF
+        // Try to find a working Chrome/Chromium installation
+        let chrome_path = Self::find_chrome_executable();
+        
+        let mut builder = BrowserConfig::builder();
+        
+        if let Some(path) = &chrome_path {
+            builder = builder.chrome_executable(path);
+        }
+        
+        let config = builder
+            .no_sandbox()
+            .build()
+            .map_err(|e| ToolboxError::Other(format!("Failed to configure browser: {}", e)))?;
+        
+        let (browser, mut handler) = Browser::launch(config)
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to launch browser. Install Google Chrome for HTML PDF export: {}", e)))?;
+
+        // Spawn handler task
+        let handle = tokio::spawn(async move {
+            while let Some(_) = handler.next().await {}
+        });
+
+        // Create new page and set content
+        let page = browser
+            .new_page("about:blank")
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to create page: {}", e)))?;
+
+        page.set_content(&html)
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to set content: {}", e)))?;
+
+        // Wait for content to render
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Print to PDF
+        let pdf_bytes = page
+            .pdf(PrintToPdfParams::builder()
+                .print_background(true)
+                .margin_top(0.4)
+                .margin_bottom(0.4)
+                .margin_left(0.4)
+                .margin_right(0.4)
+                .build())
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to generate PDF: {}", e)))?;
+
+        // Write to file
+        std::fs::write(output_path, pdf_bytes).map_err(ToolboxError::Io)?;
+
+        // Cleanup
+        drop(browser);
+        handle.abort();
+
+        Ok(())
+    }
+
+    fn generate_html(
+        meal_plan: &MealPlanWithEntries,
+        nutrition: Option<&MealPlanNutrition>,
+        recipes: &HashMap<uuid::Uuid, RecipeWithDetails>,
+        prep_data: &crate::nutrition::models::MealPlanPrepData,
+    ) -> String {
+        let mut html = String::new();
+        
+        // HTML header with CSS
+        html.push_str(&Self::html_header(&meal_plan.meal_plan.name));
+        
+        // Cover page
+        html.push_str(&Self::cover_page(meal_plan));
+        
+        // Daily recipes
+        let daily_entries = RecipePdfExporter::group_by_day(&meal_plan.entries);
+        for (day_key, entries) in &daily_entries {
+            html.push_str(&Self::day_page(day_key, entries, recipes));
+        }
+        
+        // Shopping list
+        html.push_str(&Self::shopping_list_page(&prep_data.aggregated_ingredients));
+        
+        // Meal prep guide
+        html.push_str(&Self::prep_guide_page(&prep_data.aggregated_ingredients));
+        
+        // Nutrition summary
+        if let Some(nutrition) = nutrition {
+            html.push_str(&Self::nutrition_page(nutrition));
+        }
+        
+        // Closing page
+        html.push_str(&Self::closing_page());
+        
+        // Close HTML
+        html.push_str("</body></html>");
+        
+        html
+    }
+
+    fn html_header(title: &str) -> String {
+        format!(r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Source+Sans+Pro:wght@400;600&display=swap');
+        
+        :root {{
+            --primary: #1a6b5c;
+            --secondary: #d4883a;
+            --text: #2d2d2d;
+            --light: #6b6b6b;
+            --bg: #fdfcfb;
+            --accent-line: #e8e4e0;
+        }}
+        
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: 'Source Sans Pro', -apple-system, sans-serif;
+            font-size: 11pt;
+            line-height: 1.5;
+            color: var(--text);
+            background: var(--bg);
+        }}
+        
+        .page {{
+            page-break-after: always;
+            min-height: 100vh;
+            padding: 50px;
+        }}
+        
+        .page:last-child {{
+            page-break-after: avoid;
+        }}
+        
+        h1 {{
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 32pt;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }}
+        
+        h2 {{
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 20pt;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 3px solid var(--primary);
+            display: inline-block;
+        }}
+        
+        h3 {{
+            font-size: 14pt;
+            font-weight: 600;
+            color: var(--secondary);
+            margin: 16px 0 8px 0;
+        }}
+        
+        h4 {{
+            font-size: 12pt;
+            font-weight: 600;
+            color: var(--primary);
+            margin: 12px 0 6px 0;
+        }}
+        
+        .subtitle {{
+            font-style: italic;
+            color: var(--light);
+            margin-bottom: 24px;
+        }}
+        
+        .meta {{
+            color: var(--light);
+            font-size: 10pt;
+            margin-bottom: 8px;
+        }}
+        
+        .cover-center {{
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: calc(100vh - 100px);
+        }}
+        
+        .overview-grid {{
+            display: grid;
+            gap: 8px;
+            margin-top: 24px;
+        }}
+        
+        .overview-row {{
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            gap: 16px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--accent-line);
+        }}
+        
+        .overview-day {{
+            font-weight: 600;
+            color: var(--primary);
+        }}
+        
+        .recipe-card {{
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--accent-line);
+        }}
+        
+        .recipe-card:last-child {{
+            border-bottom: none;
+        }}
+        
+        .meal-badge {{
+            display: inline-block;
+            font-size: 9pt;
+            font-weight: 600;
+            color: var(--secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }}
+        
+        .recipe-title {{
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 16pt;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 4px;
+        }}
+        
+        .recipe-desc {{
+            font-style: italic;
+            color: var(--light);
+            font-size: 10pt;
+            margin-bottom: 8px;
+        }}
+        
+        .ingredients-list {{
+            columns: 2;
+            column-gap: 24px;
+            margin: 8px 0;
+        }}
+        
+        .ingredient {{
+            break-inside: avoid;
+            padding: 3px 0;
+            font-size: 10pt;
+        }}
+        
+        .instructions {{
+            margin: 8px 0;
+        }}
+        
+        .step {{
+            margin-bottom: 8px;
+            font-size: 10pt;
+        }}
+        
+        .step-num {{
+            font-weight: 600;
+            color: var(--secondary);
+        }}
+        
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }}
+        
+        th {{
+            text-align: left;
+            padding: 8px 12px;
+            background: var(--primary);
+            color: white;
+            font-weight: 600;
+            font-size: 10pt;
+        }}
+        
+        td {{
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--accent-line);
+            font-size: 10pt;
+        }}
+        
+        tr:nth-child(even) {{
+            background: rgba(0,0,0,0.02);
+        }}
+        
+        .checkbox {{
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 1.5px solid var(--light);
+            border-radius: 2px;
+            margin-right: 8px;
+            vertical-align: middle;
+        }}
+        
+        .category-header {{
+            font-weight: 600;
+            color: var(--primary);
+            padding: 12px 0 8px 0;
+            border-bottom: 2px solid var(--primary);
+            margin-top: 16px;
+        }}
+        
+        .closing-page {{
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            min-height: calc(100vh - 100px);
+        }}
+        
+        .closing-title {{
+            font-family: 'Playfair Display', Georgia, serif;
+            font-size: 36pt;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 24px;
+        }}
+        
+        .closing-text {{
+            color: var(--text);
+            font-size: 12pt;
+            max-width: 400px;
+            margin-bottom: 24px;
+        }}
+        
+        .closing-tagline {{
+            font-weight: 600;
+            color: var(--secondary);
+            font-size: 14pt;
+        }}
+    </style>
+</head>
+<body>
+"#, title)
+    }
+
+    fn cover_page(meal_plan: &MealPlanWithEntries) -> String {
+        let mut html = String::from(r#"<div class="page"><div class="cover-center">"#);
+        
+        html.push_str(&format!("<h1>{}</h1>", meal_plan.meal_plan.name));
+        
+        if let Some(desc) = &meal_plan.meal_plan.description {
+            html.push_str(&format!(r#"<p class="subtitle">{}</p>"#, desc));
+        }
+        
+        html.push_str(r#"<div class="meta">"#);
+        if let Some(start) = meal_plan.meal_plan.start_date {
+            html.push_str(&format!("From: {} ", start.format("%B %d, %Y")));
+        }
+        if let Some(end) = meal_plan.meal_plan.end_date {
+            html.push_str(&format!("To: {}<br>", end.format("%B %d, %Y")));
+        }
+        html.push_str(&format!("Total Meals: {}", meal_plan.entries.len()));
+        html.push_str("</div>");
+        
+        // Week overview
+        html.push_str(r#"<h3 style="margin-top: 32px;">Your Week at a Glance</h3>"#);
+        html.push_str(r#"<div class="overview-grid">"#);
+        
+        let daily = RecipePdfExporter::group_by_day(&meal_plan.entries);
+        for (day_key, entries) in daily.iter().take(7) {
+            let day_name = RecipePdfExporter::format_day_key(day_key);
+            let recipes: Vec<_> = entries.iter().map(|e| e.recipe.name.as_str()).collect();
+            
+            html.push_str(&format!(
+                r#"<div class="overview-row"><span class="overview-day">{}</span><span>{}</span></div>"#,
+                day_name,
+                recipes.join(", ")
+            ));
+        }
+        
+        html.push_str("</div></div></div>");
+        html
+    }
+
+    fn day_page(
+        day_key: &(Option<NaiveDate>, Option<i32>),
+        entries: &[&MealPlanEntryWithRecipe],
+        recipes: &HashMap<uuid::Uuid, RecipeWithDetails>,
+    ) -> String {
+        let mut html = String::from(r#"<div class="page">"#);
+        
+        let day_name = RecipePdfExporter::format_day_key(day_key);
+        html.push_str(&format!("<h2>{}</h2>", day_name));
+        
+        for entry in entries {
+            if let Some(recipe) = recipes.get(&entry.recipe.id) {
+                html.push_str(&Self::recipe_card(&entry.entry.meal_type, recipe));
+            }
+        }
+        
+        html.push_str("</div>");
+        html
+    }
+
+    fn recipe_card(meal_type: &str, recipe: &RecipeWithDetails) -> String {
+        let mut html = String::from(r#"<div class="recipe-card">"#);
+        
+        // Meal badge and title
+        let meal_label = meal_type.chars().next()
+            .map(|c| c.to_uppercase().collect::<String>() + &meal_type[1..])
+            .unwrap_or_else(|| meal_type.to_string());
+        html.push_str(&format!(r#"<div class="meal-badge">{}</div>"#, meal_label));
+        html.push_str(&format!(r#"<div class="recipe-title">{}</div>"#, recipe.recipe.name));
+        
+        // Description
+        if let Some(desc) = &recipe.recipe.description {
+            html.push_str(&format!(r#"<div class="recipe-desc">{}</div>"#, desc));
+        }
+        
+        // Metadata
+        let mut meta = Vec::new();
+        if let Some(s) = recipe.recipe.servings { meta.push(format!("Serves {}", s)); }
+        if let Some(p) = recipe.recipe.prep_time_minutes { meta.push(format!("{} min prep", p)); }
+        if let Some(c) = recipe.recipe.cook_time_minutes { meta.push(format!("{} min cook", c)); }
+        if !meta.is_empty() {
+            html.push_str(&format!(r#"<div class="meta">{}</div>"#, meta.join(" · ")));
+        }
+        
+        // Ingredients
+        if !recipe.ingredients.is_empty() {
+            html.push_str("<h4>Ingredients</h4>");
+            html.push_str(r#"<div class="ingredients-list">"#);
+            for ing in &recipe.ingredients {
+                let (qty, unit) = PdfBuilder::to_american_units(
+                    &ing.recipe_ingredient.quantity,
+                    &ing.recipe_ingredient.unit
+                );
+                html.push_str(&format!(
+                    r#"<div class="ingredient">• {} {} {}</div>"#,
+                    qty, unit, ing.ingredient.name
+                ));
+            }
+            html.push_str("</div>");
+        }
+        
+        // Instructions
+        if !recipe.steps.is_empty() {
+            html.push_str("<h4>Instructions</h4>");
+            html.push_str(r#"<div class="instructions">"#);
+            for step in &recipe.steps {
+                html.push_str(&format!(
+                    r#"<div class="step"><span class="step-num">{}.</span> {}</div>"#,
+                    step.step_number, step.instruction
+                ));
+            }
+            html.push_str("</div>");
+        }
+        
+        html.push_str("</div>");
+        html
+    }
+
+    fn shopping_list_page(ingredients: &[AggregatedIngredient]) -> String {
+        let mut html = String::from(r#"<div class="page"><h2>Shopping List</h2>"#);
+        
+        let categories = RecipePdfExporter::categorize_ingredients(ingredients);
+        let category_order = ["Proteins", "Vegetables & Produce", "Dairy & Refrigerated", 
+                            "Pantry Staples", "Condiments & Seasonings", "Other"];
+        
+        html.push_str("<table>");
+        html.push_str("<tr><th></th><th>Qty</th><th>Item</th></tr>");
+        
+        for cat_name in category_order {
+            if let Some(items) = categories.get(cat_name) {
+                if items.is_empty() { continue; }
+                
+                html.push_str(&format!(
+                    r#"<tr><td colspan="3" class="category-header">{}</td></tr>"#,
+                    cat_name
+                ));
+                
+                for ing in items {
+                    let (qty, unit) = PdfBuilder::to_american_units(&ing.total_quantity, &ing.unit);
+                    html.push_str(&format!(
+                        r#"<tr><td><span class="checkbox"></span></td><td>{} {}</td><td>{}</td></tr>"#,
+                        qty, unit, ing.ingredient.name
+                    ));
+                }
+            }
+        }
+        
+        html.push_str("</table></div>");
+        html
+    }
+
+    fn prep_guide_page(ingredients: &[AggregatedIngredient]) -> String {
+        let mut html = String::from(r#"<div class="page"><h2>Meal Prep Guide</h2>"#);
+        
+        html.push_str("<h3>Prep Timeline</h3>");
+        html.push_str("<table>");
+        html.push_str("<tr><th>When</th><th>What to Do</th></tr>");
+        
+        let tips = [
+            ("Sunday", "Prep vegetables that last 5-7 days (onions, carrots, potatoes)"),
+            ("Sunday", "Portion and marinate proteins if needed"),
+            ("Day Before", "Prep fresh vegetables (broccoli, peppers)"),
+            ("Day Of", "Prep delicate items (fresh herbs, lettuce)"),
+        ];
+        
+        for (when, what) in tips {
+            html.push_str(&format!("<tr><td><strong>{}</strong></td><td>{}</td></tr>", when, what));
+        }
+        html.push_str("</table>");
+        
+        html.push_str("<h3>Storage Notes</h3>");
+        html.push_str("<table>");
+        html.push_str("<tr><th>Ingredient</th><th>Storage Tip</th></tr>");
+        
+        for ing in ingredients.iter().take(12) {
+            let name = ing.ingredient.name.to_lowercase();
+            let tip = if name.contains("onion") || name.contains("garlic") {
+                Some("2-3 days ahead, refrigerate")
+            } else if name.contains("broccoli") || name.contains("pepper") {
+                Some("1-2 days ahead, airtight container")
+            } else if name.contains("lettuce") || name.contains("spinach") {
+                Some("Day-of, wash and dry")
+            } else if name.contains("chicken") || name.contains("beef") || name.contains("pork") {
+                Some("1 day ahead, marinate refrigerated")
+            } else {
+                None
+            };
+            
+            if let Some(tip) = tip {
+                html.push_str(&format!("<tr><td>{}</td><td>{}</td></tr>", ing.ingredient.name, tip));
+            }
+        }
+        
+        html.push_str("</table></div>");
+        html
+    }
+
+    fn nutrition_page(nutrition: &MealPlanNutrition) -> String {
+        let mut html = String::from(r#"<div class="page"><h2>Nutrition Summary</h2>"#);
+        
+        if let Some(weekly) = &nutrition.weekly_totals {
+            html.push_str("<h3>Weekly Totals</h3>");
+            html.push_str("<table>");
+            html.push_str(&format!("<tr><td>Total Calories</td><td><strong>{}</strong></td></tr>", 
+                PdfBuilder::format_decimal(&weekly.total_calories)));
+            html.push_str(&format!("<tr><td>Avg Daily Calories</td><td><strong>{}</strong></td></tr>", 
+                PdfBuilder::format_decimal(&weekly.average_daily_calories)));
+            html.push_str(&format!("<tr><td>Total Protein</td><td><strong>{}g</strong></td></tr>", 
+                PdfBuilder::format_decimal(&weekly.total_protein_g)));
+            html.push_str(&format!("<tr><td>Total Carbs</td><td><strong>{}g</strong></td></tr>", 
+                PdfBuilder::format_decimal(&weekly.total_carbs_g)));
+            html.push_str(&format!("<tr><td>Total Fat</td><td><strong>{}g</strong></td></tr>", 
+                PdfBuilder::format_decimal(&weekly.total_fat_g)));
+            html.push_str("</table>");
+        }
+        
+        html.push_str("<h3>Daily Breakdown</h3>");
+        html.push_str("<table>");
+        html.push_str("<tr><th>Day</th><th>Calories</th><th>Protein</th><th>Carbs</th><th>Fat</th></tr>");
+        
+        for daily in &nutrition.daily_nutrition {
+            let day_label = if let Some(date) = daily.date {
+                date.format("%A").to_string()
+            } else if let Some(dow) = daily.day_of_week {
+                DayOfWeek::from_int(dow)
+                    .map(|d| format!("{:?}", d))
+                    .unwrap_or_else(|| format!("Day {}", dow))
+            } else {
+                continue;
+            };
+            
+            html.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}g</td><td>{}g</td><td>{}g</td></tr>",
+                day_label,
+                PdfBuilder::format_decimal(&daily.total_calories),
+                PdfBuilder::format_decimal(&daily.total_protein_g),
+                PdfBuilder::format_decimal(&daily.total_carbs_g),
+                PdfBuilder::format_decimal(&daily.total_fat_g),
+            ));
+        }
+        
+        html.push_str("</table></div>");
+        html
+    }
+
+    fn closing_page() -> String {
+        r#"<div class="page">
+            <div class="closing-page">
+                <div class="closing-title">Bon Appétit!</div>
+                <div class="closing-text">
+                    Thank you for using this meal plan.<br>
+                    We hope these recipes bring joy to your kitchen and nourishment to your table.
+                </div>
+                <div class="closing-tagline">Happy cooking!</div>
+            </div>
+        </div>"#.to_string()
+    }
+
+    /// Find a Chrome/Chromium executable that works with headless mode
+    fn find_chrome_executable() -> Option<String> {
+        let candidates = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/opt/google/chrome/chrome",
+        ];
+        
+        for path in candidates {
+            if std::path::Path::new(path).exists() {
+                return Some(path.to_string());
+            }
+        }
+        
+        // Don't use snap chromium - it doesn't work well with headless automation
+        None
+    }
+}
