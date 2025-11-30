@@ -35,6 +35,10 @@ pub struct WebcamRecordingConfig {
     pub enable_preview: bool,
     /// Preview window title
     pub preview_title: Option<String>,
+    /// Skip PTZ reset on startup (preserves AI tracking mode on smart cameras)
+    pub skip_ptz_reset: bool,
+    /// Reset PTZ then reconnect to reinitialize AI tracking
+    pub ai_reinit: bool,
 }
 
 impl Default for WebcamRecordingConfig {
@@ -46,6 +50,8 @@ impl Default for WebcamRecordingConfig {
             max_duration_secs: None,
             enable_preview: false,
             preview_title: Some("Webcam Recording".to_string()),
+            skip_ptz_reset: true, // Default true to preserve AI tracking mode on smart cameras
+            ai_reinit: false,
         }
     }
 }
@@ -63,7 +69,30 @@ pub struct WebcamRecorder {
 impl WebcamRecorder {
     /// Create a new webcam recorder.
     pub fn new(config: WebcamRecordingConfig) -> Result<Self> {
-        let mut device = WebcamDevice::open(&config.device_path)?;
+        // If AI reinit is requested, we need to reset PTZ, disconnect, then reconnect
+        let device = if config.ai_reinit {
+            info!("🤖 AI reinit requested: resetting PTZ and reconnecting...");
+            
+            // First, open device and reset PTZ
+            let mut temp_device = WebcamDevice::open(&config.device_path)?;
+            Self::reset_ptz_on_device(&mut temp_device)?;
+            
+            // Drop the device to close the connection
+            info!("🔌 Disconnecting from camera...");
+            drop(temp_device);
+            
+            // Wait for camera to process the disconnect
+            info!("⏳ Waiting for camera AI to reinitialize...");
+            thread::sleep(Duration::from_millis(2000));
+            
+            // Reconnect - camera's AI should now reinitialize
+            info!("🔌 Reconnecting to camera...");
+            WebcamDevice::open(&config.device_path)?
+        } else {
+            WebcamDevice::open(&config.device_path)?
+        };
+        
+        let mut device = device;
         
         // Get and verify format
         let format = device.device().format()
@@ -183,11 +212,15 @@ impl WebcamRecorder {
         info!("Waiting for recording to start before resetting PTZ...");
         thread::sleep(Duration::from_millis(2000));
         
-        // Reset PTZ controls to default after recording has started
-        info!("Resetting PTZ controls to 50% positions (center)...");
-        if let Err(e) = self.reset_ptz_to_default() {
-            warn!("Failed to reset PTZ controls: {}", e);
-            // Don't fail recording if PTZ reset fails
+        // Reset PTZ controls to default after recording has started (unless skipped)
+        if !self.config.skip_ptz_reset {
+            info!("Resetting PTZ controls to 50% positions (center)...");
+            if let Err(e) = self.reset_ptz_to_default() {
+                warn!("Failed to reset PTZ controls: {}", e);
+                // Don't fail recording if PTZ reset fails
+            }
+        } else {
+            info!("Skipping PTZ reset (preserving AI tracking mode)");
         }
         
         // Give device time to settle after PTZ reset
@@ -303,6 +336,64 @@ impl WebcamRecorder {
     /// Stop the recording.
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::Relaxed);
+    }
+
+    /// Reset PTZ controls on a device (static helper for AI reinit).
+    /// Centers pan/tilt and sets zoom to minimum.
+    fn reset_ptz_on_device(device: &mut WebcamDevice) -> Result<()> {
+        use v4l::control::{Control, Value};
+
+        // V4L2 Camera Class Control IDs
+        const V4L2_CTRL_CLASS_CAMERA: u32 = 0x009a0000;
+        const V4L2_CID_CAMERA_CLASS_BASE: u32 = V4L2_CTRL_CLASS_CAMERA | 0x900;
+        const V4L2_CID_PAN_ABSOLUTE: u32 = V4L2_CID_CAMERA_CLASS_BASE + 8;
+        const V4L2_CID_TILT_ABSOLUTE: u32 = V4L2_CID_CAMERA_CLASS_BASE + 9;
+        const V4L2_CID_ZOOM_ABSOLUTE: u32 = V4L2_CID_CAMERA_CLASS_BASE + 13;
+
+        let controls: Vec<_> = device.device().query_controls().unwrap_or_default();
+
+        // Reset pan to center (0)
+        if device.device().control(V4L2_CID_PAN_ABSOLUTE).is_ok() {
+            let (min, max) = controls.iter()
+                .find(|c| c.id == V4L2_CID_PAN_ABSOLUTE)
+                .map(|c| (c.minimum, c.maximum))
+                .unwrap_or((-648000, 648000));
+            let center = min + (max - min) / 2;
+            let _ = device.device_mut().set_control(Control {
+                id: V4L2_CID_PAN_ABSOLUTE,
+                value: Value::Integer(center),
+            });
+            info!("Reset pan to center: {}", center);
+        }
+
+        // Reset tilt to center
+        if device.device().control(V4L2_CID_TILT_ABSOLUTE).is_ok() {
+            let (min, max) = controls.iter()
+                .find(|c| c.id == V4L2_CID_TILT_ABSOLUTE)
+                .map(|c| (c.minimum, c.maximum))
+                .unwrap_or((-324000, 324000));
+            let center = min + (max - min) / 2;
+            let _ = device.device_mut().set_control(Control {
+                id: V4L2_CID_TILT_ABSOLUTE,
+                value: Value::Integer(center),
+            });
+            info!("Reset tilt to center: {}", center);
+        }
+
+        // Reset zoom to minimum (widest view)
+        if device.device().control(V4L2_CID_ZOOM_ABSOLUTE).is_ok() {
+            let min = controls.iter()
+                .find(|c| c.id == V4L2_CID_ZOOM_ABSOLUTE)
+                .map(|c| c.minimum)
+                .unwrap_or(100);
+            let _ = device.device_mut().set_control(Control {
+                id: V4L2_CID_ZOOM_ABSOLUTE,
+                value: Value::Integer(min),
+            });
+            info!("Reset zoom to minimum: {}", min);
+        }
+
+        Ok(())
     }
 
     /// Reset PTZ controls to default positions.

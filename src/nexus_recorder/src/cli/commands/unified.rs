@@ -54,6 +54,14 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub no_screen: bool,
 
+    /// Reset PTZ to center on webcam start (disables AI tracking mode)
+    #[arg(long)]
+    pub ptz_reset: bool,
+
+    /// Reset PTZ and reconnect to reinitialize camera AI tracking
+    #[arg(long)]
+    pub ai_reinit: bool,
+
     /// Disable system audio in screen recording
     #[arg(long)]
     pub no_audio: bool,
@@ -189,6 +197,8 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 },
                 enable_preview: args.webcam_preview,
                 preview_title: Some("Webcam Recording".to_string()),
+                skip_ptz_reset: !args.ptz_reset, // Default skips PTZ reset to preserve AI tracking
+                ai_reinit: args.ai_reinit, // Reset PTZ and reconnect to reinitialize AI
             })
         } else {
             None
