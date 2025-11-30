@@ -9,6 +9,7 @@ use crate::services::storage::{BatchEvent, BatchEventInserter, Database, Rotatin
 use crate::services::input::InputEvent;
 use crate::services::context::{ClickContextHandle, ClickContextService};
 use crate::services::context::context_processing::ProcessingJob;
+use crate::services::context::{WebcamAnalysisHandle, WebcamAnalysisService};
 use chrono::{DateTime, Local, Utc};
 use log::{error, info, warn};
 use serde_json::json;
@@ -250,6 +251,40 @@ impl UnifiedRecordingService {
             Some(tokio::task::spawn_blocking(move || {
                 Self::run_webcam_recording_blocking(webcam_config, stop_signal_webcam)
             }))
+        } else {
+            None
+        };
+
+        // Start webcam sentiment analysis (if enabled and webcam is recording)
+        let webcam_analysis_handle = if self.config.webcam_config.is_some() {
+            if let Some(analysis_config) = self.config.webcam_analysis_config.clone() {
+                let video_path = self.config.webcam_config.as_ref()
+                    .map(|c| c.output_path.clone())
+                    .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
+                let video_path = if video_path.is_absolute() {
+                    video_path
+                } else {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|cwd| cwd.join(&video_path))
+                        .unwrap_or(video_path)
+                };
+                
+                match Database::new().await {
+                    Ok(db) => WebcamAnalysisService::maybe_start(
+                        Some(analysis_config),
+                        db,
+                        session_id.to_string(),
+                        video_path,
+                    ),
+                    Err(e) => {
+                        warn!("⚠️  Failed to create database for webcam analysis: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -671,6 +706,7 @@ impl UnifiedRecordingService {
             input_handle,
             screen_handle,
             webcam_handle,
+            webcam_analysis_handle,
             audio_handles,
             process_handle,
             stop_signal,
@@ -1660,6 +1696,7 @@ pub struct RecordingSession {
     input_handle: tokio::task::JoinHandle<Result<()>>,
     screen_handle: Option<tokio::task::JoinHandle<Result<()>>>,
     webcam_handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    webcam_analysis_handle: Option<WebcamAnalysisHandle>,
     audio_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
     audio_config_indices: Vec<usize>, // Maps handle index to config index
     process_handle: tokio::task::JoinHandle<Result<()>>,
@@ -1796,6 +1833,13 @@ impl RecordingSession {
             let webcam_result = webcam_handle.await;
             webcam_result
                 .map_err(|e| RecorderError::Other(format!("Webcam recording task failed: {}", e)))??;
+        }
+
+        // Stop and wait for webcam analysis if enabled
+        if let Some(analysis_handle) = self.webcam_analysis_handle {
+            info!("🎭 Stopping webcam sentiment analysis...");
+            analysis_handle.wait_for_completion().await;
+            info!("🎭 Webcam sentiment analysis completed");
         }
 
         // Wait for all audio recordings to complete

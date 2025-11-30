@@ -153,7 +153,23 @@ impl WebcamRecorder {
         let device_path = self.device.path().to_string();
         let start_time = std::time::Instant::now();
         
+        // Determine output format based on extension
+        // Use MPEG-TS for live analysis (streaming format, can be read while writing)
+        let output_ext = output_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4");
+        let use_ts_for_live = output_ext == "mp4"; // We'll transcode to MP4 at the end if needed
+        
+        // For live webcam analysis, we use MPEG-TS format (designed for streaming)
+        // TS can be read while being written, unlike MP4/MKV
+        let live_output_path = if use_ts_for_live {
+            output_path.with_extension("ts")
+        } else {
+            output_path.clone()
+        };
+        
         info!("Starting ffmpeg to capture and encode webcam video...");
+        info!("Live recording to: {:?} (will convert to {:?} when done)", live_output_path, output_path);
         let mut ffmpeg_process = match Command::new("ffmpeg")
             .arg("-y") // Overwrite output file
             .arg("-f").arg("v4l2")
@@ -162,10 +178,14 @@ impl WebcamRecorder {
             .arg("-framerate").arg(framerate.to_string())
             .arg("-i").arg(&device_path)
             .arg("-c:v").arg("libx264")
-            .arg("-preset").arg("medium")
+            .arg("-preset").arg("ultrafast") // Faster encoding = quicker data availability
+            .arg("-tune").arg("zerolatency") // Minimize latency for live streaming
             .arg("-crf").arg("23")
             .arg("-pix_fmt").arg("yuv420p")
-            .arg(&output_path)
+            .arg("-g").arg("30") // Keyframe every 30 frames (1 second at 30fps)
+            .arg("-flush_packets").arg("1") // Flush packets immediately to disk
+            .arg("-fflags").arg("+flush_packets+genpts") // Additional flush flags
+            .arg(&live_output_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -294,6 +314,38 @@ impl WebcamRecorder {
                     "Failed to wait for ffmpeg process: {}",
                     e
                 )));
+            }
+        }
+        
+        // If we recorded to TS, convert to MP4
+        if use_ts_for_live && live_output_path != output_path {
+            info!("Converting TS to MP4...");
+            let convert_result = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i").arg(&live_output_path)
+                .arg("-c").arg("copy")
+                .arg(&output_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output();
+            
+            match convert_result {
+                Ok(output) if output.status.success() => {
+                    info!("✅ Converted to MP4: {:?}", output_path);
+                    // Remove the temporary TS file
+                    if let Err(e) = std::fs::remove_file(&live_output_path) {
+                        warn!("Failed to remove temporary TS file: {}", e);
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("TS to MP4 conversion failed: {}", stderr);
+                    info!("Keeping TS file: {:?}", live_output_path);
+                }
+                Err(e) => {
+                    warn!("Failed to run conversion: {}", e);
+                    info!("Keeping TS file: {:?}", live_output_path);
+                }
             }
         }
         

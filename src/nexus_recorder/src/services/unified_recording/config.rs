@@ -3,6 +3,7 @@
 //! This module contains all configuration structs and traits for the unified
 //! recording service, including screen, audio, and input capture settings.
 
+use crate::services::context::webcam_analysis::WebcamAnalysisConfig;
 use crate::services::storage::BatchInserterConfig;
 use crate::services::input::InputEvent;
 use crate::services::storage::EventWriterConfig;
@@ -144,6 +145,8 @@ pub struct UnifiedRecordingConfig {
     pub screen_config: Option<ScreenRecordingConfig>,
     /// Webcam recording configuration (None = disabled)
     pub webcam_config: Option<WebcamRecordingConfig>,
+    /// Webcam sentiment analysis configuration (None = disabled)
+    pub webcam_analysis_config: Option<WebcamAnalysisConfig>,
     /// Input capture configuration
     pub input_config: InputCaptureConfig,
     /// Audio recording configurations (can have multiple for mic + monitor)
@@ -173,6 +176,7 @@ impl Default for UnifiedRecordingConfig {
         Self {
             screen_config: Some(ScreenRecordingConfig::default()),
             webcam_config: None,
+            webcam_analysis_config: None,
             input_config: InputCaptureConfig::default(),
             audio_configs: Vec::new(),
             database_path: PathBuf::from("events.db"),

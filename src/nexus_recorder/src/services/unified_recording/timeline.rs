@@ -70,86 +70,110 @@ pub fn print_timeline(
 
         match event.event_type.as_str() {
             "analysis" => {
-                // Extract frame descriptions from metadata
-                if let Some(metadata) = event.metadata.as_object() {
-                    // Check if this is full video sampling (frames have absolute timestamps)
-                    // The mode is stored in metadata.metadata (from job.metadata)
-                    let is_full_video = metadata
-                        .get("metadata")
-                        .and_then(|m| m.get("mode"))
-                        .and_then(|v| v.as_str())
-                        .map(|v| v == "full_video")
-                        .unwrap_or(false);
+                // Check if this is webcam sentiment analysis
+                if event.event_subtype.as_deref() == Some("webcam_sentiment") {
+                    if let Some(metadata) = event.metadata.as_object() {
+                        // Build a summary of the webcam analysis
+                        let sentiment = metadata.get("sentiment").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let attention = metadata.get("attention").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let energy = metadata.get("energy").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let notes = metadata.get("notes").and_then(|v| v.as_str());
+                        
+                        let mut desc = format!("Sentiment: {}, Attention: {}, Energy: {}", sentiment, attention, energy);
+                        if let Some(n) = notes {
+                            if !n.is_empty() {
+                                desc.push_str(&format!(" - {}", n));
+                            }
+                        }
+                        
+                        timed_events.push(TimedEvent {
+                            timecode: event_timecode,
+                            event_type: "webcam_sentiment".to_string(),
+                            data: desc,
+                        });
+                    }
+                } else {
+                    // Extract frame descriptions from metadata (screen analysis)
+                    if let Some(metadata) = event.metadata.as_object() {
+                        // Check if this is full video sampling (frames have absolute timestamps)
+                        // The mode is stored in metadata.metadata (from job.metadata)
+                        let is_full_video = metadata
+                            .get("metadata")
+                            .and_then(|m| m.get("mode"))
+                            .and_then(|v| v.as_str())
+                            .map(|v| v == "full_video")
+                            .unwrap_or(false);
 
-                    // Get base video timestamp from job metadata if available
-                    let base_video_timestamp = metadata
-                        .get("job")
-                        .and_then(|job| job.get("video_timestamp"))
-                        .and_then(|v| v.as_f64());
+                        // Get base video timestamp from job metadata if available
+                        let base_video_timestamp = metadata
+                            .get("job")
+                            .and_then(|job| job.get("video_timestamp"))
+                            .and_then(|v| v.as_f64());
 
-                    if let Some(frames) = metadata.get("frames") {
-                        if let Some(frames_array) = frames.as_array() {
-                            for frame in frames_array {
-                                if let Some(desc) =
-                                    frame.get("description").and_then(|v| v.as_str())
-                                {
-                                    let frame_offset = frame
-                                        .get("offset_secs")
-                                        .and_then(|v| v.as_f64())
-                                        .unwrap_or(0.0);
+                        if let Some(frames) = metadata.get("frames") {
+                            if let Some(frames_array) = frames.as_array() {
+                                for frame in frames_array {
+                                    if let Some(desc) =
+                                        frame.get("description").and_then(|v| v.as_str())
+                                    {
+                                        let frame_offset = frame
+                                            .get("offset_secs")
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.0);
 
-                                    // Calculate absolute video timestamp for this frame
-                                    // For full video, offset_secs is the absolute video timestamp (0.0, 0.2, 0.4, etc.)
-                                    // For click context, offset is relative to click time (+0.0s, +0.2s, etc.)
-                                    let frame_timecode = if is_full_video {
-                                        // For full video, offset_secs is already the absolute video timestamp
-                                        frame_offset
-                                    } else if let Some(base) = base_video_timestamp {
-                                        // For click context, offset is relative to click time
-                                        base + frame_offset
-                                    } else {
-                                        // Heuristic: if offset is small (< 100s) and first frame is near 0,
-                                        // it's likely an absolute timestamp from full video sampling
-                                        // Otherwise, if offset is very small (< 5s), assume it's relative to some base
-                                        // But we don't have the base, so use offset directly as a best guess
-                                        if frame_offset < 100.0 && frame_offset >= 0.0 {
-                                            // Likely absolute timestamp from full video
+                                        // Calculate absolute video timestamp for this frame
+                                        // For full video, offset_secs is the absolute video timestamp (0.0, 0.2, 0.4, etc.)
+                                        // For click context, offset is relative to click time (+0.0s, +0.2s, etc.)
+                                        let frame_timecode = if is_full_video {
+                                            // For full video, offset_secs is already the absolute video timestamp
                                             frame_offset
+                                        } else if let Some(base) = base_video_timestamp {
+                                            // For click context, offset is relative to click time
+                                            base + frame_offset
                                         } else {
-                                            // Can't determine - this shouldn't happen, but use offset as fallback
-                                            frame_offset
-                                        }
-                                    };
+                                            // Heuristic: if offset is small (< 100s) and first frame is near 0,
+                                            // it's likely an absolute timestamp from full video sampling
+                                            // Otherwise, if offset is very small (< 5s), assume it's relative to some base
+                                            // But we don't have the base, so use offset directly as a best guess
+                                            if frame_offset < 100.0 && frame_offset >= 0.0 {
+                                                // Likely absolute timestamp from full video
+                                                frame_offset
+                                            } else {
+                                                // Can't determine - this shouldn't happen, but use offset as fallback
+                                                frame_offset
+                                            }
+                                        };
 
-                                    let offset_str = if is_full_video {
-                                        format!("{:.2}s", frame_offset)
-                                    } else {
-                                        format!("+{:.2}s", frame_offset)
-                                    };
+                                        let offset_str = if is_full_video {
+                                            format!("{:.2}s", frame_offset)
+                                        } else {
+                                            format!("+{:.2}s", frame_offset)
+                                        };
 
-                                    timed_events.push(TimedEvent {
-                                        timecode: frame_timecode,
-                                        event_type: "frame".to_string(),
-                                        data: format!("{} {}", offset_str, desc),
-                                    });
+                                        timed_events.push(TimedEvent {
+                                            timecode: frame_timecode,
+                                            event_type: "frame".to_string(),
+                                            data: format!("{} {}", offset_str, desc),
+                                        });
+                                    }
                                 }
                             }
                         }
-                    }
-                    if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
-                        // For summary, use the timecode of the last frame or event timecode
-                        let summary_timecode = timed_events
-                            .iter()
-                            .filter(|e| e.event_type == "frame")
-                            .last()
-                            .map(|e| e.timecode)
-                            .unwrap_or(event_timecode);
+                        if let Some(summary) = metadata.get("summary").and_then(|v| v.as_str()) {
+                            // For summary, use the timecode of the last frame or event timecode
+                            let summary_timecode = timed_events
+                                .iter()
+                                .filter(|e| e.event_type == "frame")
+                                .last()
+                                .map(|e| e.timecode)
+                                .unwrap_or(event_timecode);
 
-                        timed_events.push(TimedEvent {
-                            timecode: summary_timecode,
-                            event_type: "summary".to_string(),
-                            data: format!("Summary: {}", summary),
-                        });
+                            timed_events.push(TimedEvent {
+                                timecode: summary_timecode,
+                                event_type: "summary".to_string(),
+                                data: format!("Summary: {}", summary),
+                            });
+                        }
                     }
                 }
             }
@@ -254,6 +278,7 @@ pub fn print_timeline(
     let mut keys_entered: Vec<String> = Vec::new();
     let mut clicks: Vec<(f64, String)> = Vec::new(); // Store timecode with each click
     let mut transcriptions: Vec<(f64, String)> = Vec::new(); // Store timecode with each transcription
+    let mut webcam_sentiments: Vec<(f64, String)> = Vec::new(); // Store webcam sentiment analysis
 
     for timed_event in timed_events {
         // If timecode changed significantly (more than 0.1s difference), print previous group
@@ -270,11 +295,13 @@ pub fn print_timeline(
                 &keys_entered,
                 &clicks,
                 &transcriptions,
+                &webcam_sentiments,
             );
             frame_descriptions.clear();
             keys_entered.clear();
             clicks.clear();
             transcriptions.clear();
+            webcam_sentiments.clear();
         }
 
         current_timecode = Some(timed_event.timecode);
@@ -292,6 +319,9 @@ pub fn print_timeline(
             "transcription" => {
                 transcriptions.push((timed_event.timecode, timed_event.data));
             }
+            "webcam_sentiment" => {
+                webcam_sentiments.push((timed_event.timecode, timed_event.data));
+            }
             _ => {}
         }
     }
@@ -301,6 +331,7 @@ pub fn print_timeline(
         || !keys_entered.is_empty()
         || !clicks.is_empty()
         || !transcriptions.is_empty()
+        || !webcam_sentiments.is_empty()
     {
         print_timeline_entry(
             current_timecode,
@@ -308,6 +339,7 @@ pub fn print_timeline(
             &keys_entered,
             &clicks,
             &transcriptions,
+            &webcam_sentiments,
         );
     }
 
@@ -322,6 +354,7 @@ fn print_timeline_entry(
     keys_entered: &[String],
     clicks: &[(f64, String)],
     transcriptions: &[(f64, String)],
+    webcam_sentiments: &[(f64, String)],
 ) {
     let time_str = if let Some(tc) = timecode {
         format!("{:>8.2}s", tc)
@@ -415,6 +448,24 @@ fn print_timeline_entry(
                 } else {
                     // Continuation lines: "║    " (5 chars) + text + " ║" (2) = 78
                     let continuation_width = 74 - 4; // 4 chars for "    " indent
+                    println!("║    {}", pad_right(line, continuation_width));
+                }
+            }
+        }
+    }
+
+    if !webcam_sentiments.is_empty() {
+        for (_sentiment_timecode, sentiment_text) in webcam_sentiments {
+            let prefix = "🎭 Webcam: ";
+            let prefix_len = prefix.chars().count();
+            let available_width = 74 - prefix_len;
+
+            let wrapped = wrap_text(sentiment_text, available_width);
+            for (idx, line) in wrapped.iter().enumerate() {
+                if idx == 0 {
+                    println!("║ {}{}", prefix, pad_right(line, available_width));
+                } else {
+                    let continuation_width = 74 - 4;
                     println!("║    {}", pad_right(line, continuation_width));
                 }
             }

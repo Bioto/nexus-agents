@@ -62,6 +62,14 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub ai_reinit: bool,
 
+    /// Enable webcam sentiment analysis (analyzes user emotions/attention)
+    #[arg(long)]
+    pub webcam_analysis: bool,
+
+    /// Webcam analysis interval in seconds (default: 5)
+    #[arg(long, default_value = "5")]
+    pub webcam_analysis_interval: u64,
+
     /// Disable system audio in screen recording
     #[arg(long)]
     pub no_audio: bool,
@@ -361,6 +369,15 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         // Use optimized writers by default for better performance
         event_writer_config: None, // Use legacy file writing (rotating writer not enabled by default)
         batch_inserter_config: None, // Use legacy direct inserts (batch inserter not enabled by default)
+        // Webcam sentiment analysis configuration
+        webcam_analysis_config: if use_webcam && args.webcam_analysis {
+            Some(crate::services::context::WebcamAnalysisConfig::with_device(
+                args.webcam_analysis_interval,
+                args.webcam_device.clone(),
+            ))
+        } else {
+            None
+        },
     };
 
     println!("🎬 Starting unified recording...");
