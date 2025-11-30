@@ -279,6 +279,7 @@ impl UnifiedRecordingService {
         for (config_idx, audio_config) in self.config.audio_configs.iter().enumerate() {
             if audio_config.enabled && audio_config.monitor_desktop_audio {
                 // Set up loopback sink and default source BEFORE starting recording
+                let mut loopback_created = false;
                 #[cfg(target_os = "linux")]
                 {
                     use crate::services::audio::AudioRecorder;
@@ -296,6 +297,7 @@ impl UnifiedRecordingService {
                             info!("✅ Created loopback sink: {}", monitor_name);
                             loopback_module_ids.extend(module_ids);
                             previous_default_sink = Some(prev_sink);
+                            loopback_created = true;
 
                             // DON'T change the default source - we'll use the monitor source name directly
                             // This allows the microphone to continue using the default source
@@ -305,28 +307,35 @@ impl UnifiedRecordingService {
                             );
                         }
                         Err(e) => {
-                            error!("❌ Failed to create loopback sink: {}", e);
-                            return Err(RecorderError::Other(format!(
-                                "Failed to create loopback sink: {}",
-                                e
-                            )));
+                            warn!("⚠️  Failed to create loopback sink: {}", e);
+                            warn!("   Desktop audio monitoring will be disabled, but recording will continue");
+                            // Don't create audio handle for this config, but continue with other configs
+                            loopback_created = false;
                         }
                     }
 
                     // Give a moment for the loopback sink to be ready
-                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    if loopback_created {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
                 }
 
-                let audio_config_clone = audio_config.clone();
-                let stop_signal_audio = stop_signal.clone();
+                // Only create audio handle if loopback was successfully created (or on non-Linux)
+                #[cfg(not(target_os = "linux"))]
+                let loopback_created = true; // On non-Linux, always proceed
 
-                audio_config_indices.push(config_idx);
-                audio_handles.push(tokio::task::spawn_blocking(move || {
-                    Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
-                }));
+                if loopback_created {
+                    let audio_config_clone = audio_config.clone();
+                    let stop_signal_audio = stop_signal.clone();
 
-                // Give desktop audio 500ms to start recording before microphone tries to connect
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                    audio_config_indices.push(config_idx);
+                    audio_handles.push(tokio::task::spawn_blocking(move || {
+                        Self::run_audio_recording_blocking(audio_config_clone, stop_signal_audio)
+                    }));
+
+                    // Give desktop audio 500ms to start recording before microphone tries to connect
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
             }
         }
 

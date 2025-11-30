@@ -207,13 +207,22 @@ impl WebcamRecorder {
             thread::sleep(Duration::from_millis(100));
             
             // Check if ffmpeg process has exited unexpectedly
+            // Note: Exit code 255 is normal when FFmpeg is interrupted (Ctrl+C/SIGINT)
             if let Ok(Some(status)) = ffmpeg_process.try_wait() {
                 if !status.success() {
-                    error!("FFmpeg process exited unexpectedly with code: {:?}", status.code());
-                    return Err(RecorderError::Other(format!(
-                        "FFmpeg process exited with error code: {:?}",
-                        status.code()
-                    )));
+                    let exit_code = status.code();
+                    // Exit code 255 means FFmpeg was interrupted by a signal (Ctrl+C)
+                    // This is expected and not an error - FFmpeg receives SIGINT before our stop_flag is set
+                    if exit_code == Some(255) || self.stop_flag.load(Ordering::Relaxed) {
+                        info!("FFmpeg exited with code {:?} (interrupted, this is normal)", exit_code);
+                        break; // Exit the loop gracefully
+                    } else {
+                        error!("FFmpeg process exited unexpectedly with code: {:?}", exit_code);
+                        return Err(RecorderError::Other(format!(
+                            "FFmpeg process exited with error code: {:?}",
+                            exit_code
+                        )));
+                    }
                 }
             }
         }
@@ -236,7 +245,14 @@ impl WebcamRecorder {
                 if status.success() || status.code().is_none() {
                     info!("✅ FFmpeg encoding completed");
                 } else {
-                    warn!("FFmpeg exited with code: {:?} (may be normal if interrupted)", status.code());
+                    // Exit code 255 is normal when FFmpeg is interrupted (Ctrl+C)
+                    // Other non-zero codes might indicate an error, but if we're stopping, it's likely fine
+                    let exit_code = status.code();
+                    if self.stop_flag.load(Ordering::Relaxed) {
+                        info!("✅ FFmpeg stopped (exit code: {:?})", exit_code);
+                    } else {
+                        warn!("FFmpeg exited with code: {:?} (may indicate an error)", exit_code);
+                    }
                 }
             }
             Err(e) => {
