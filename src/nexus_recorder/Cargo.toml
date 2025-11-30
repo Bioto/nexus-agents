@@ -54,6 +54,10 @@ ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg" }
 image = "0.25"
 glob = "0.3"
 
+# Webcam/V4L2
+v4l = "0.14"
+minifb = "0.25"
+
 # Input capture (from nexus_logger)
 device_query = "3.0"
 

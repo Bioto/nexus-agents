@@ -213,7 +213,11 @@ impl UnifiedRecordingService {
 
         let click_context_for_input = click_context.clone();
         let session_id_for_input = Arc::clone(&session_id);
-        let video_path_for_input = self.config.screen_config.output_path.clone();
+        // Use webcam output path if webcam is enabled, otherwise screen output path
+        let video_path_for_input = self.config.webcam_config.as_ref()
+            .map(|c| c.output_path.clone())
+            .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+            .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
         let rotating_writer_for_input = rotating_writer_handle.clone();
         let input_handle = tokio::task::spawn_blocking(move || {
             Self::run_input_capture_blocking(
@@ -230,14 +234,25 @@ impl UnifiedRecordingService {
             )
         });
 
-        // Start screen recording in background
-        // Note: This requires nexus_screen to be available
-        // For now, we'll create a placeholder that can be implemented
-        let screen_config = self.config.screen_config.clone();
-        let stop_signal_screen = stop_signal.clone();
-        let screen_handle = tokio::task::spawn_blocking(move || {
-            Self::run_screen_recording_blocking(screen_config, stop_signal_screen)
-        });
+        // Start screen recording in background (if enabled)
+        let screen_handle = if let Some(screen_config) = self.config.screen_config.clone() {
+            let stop_signal_screen = stop_signal.clone();
+            Some(tokio::task::spawn_blocking(move || {
+                Self::run_screen_recording_blocking(screen_config, stop_signal_screen)
+            }))
+        } else {
+            None
+        };
+
+        // Start webcam recording in background (if enabled)
+        let webcam_handle = if let Some(webcam_config) = self.config.webcam_config.clone() {
+            let stop_signal_webcam = stop_signal.clone();
+            Some(tokio::task::spawn_blocking(move || {
+                Self::run_webcam_recording_blocking(webcam_config, stop_signal_webcam)
+            }))
+        } else {
+            None
+        };
 
         // Start audio recording tasks for all enabled audio configs
         // CRITICAL: Desktop audio MUST start first to set up loopback sink and default source
@@ -646,6 +661,7 @@ impl UnifiedRecordingService {
             recording_start,
             input_handle,
             screen_handle,
+            webcam_handle,
             audio_handles,
             process_handle,
             stop_signal,
@@ -868,6 +884,57 @@ impl UnifiedRecordingService {
                 .map_err(|e| RecorderError::Other(format!("Screen recording failed: {}", e)))?;
         }
 
+        Ok(())
+    }
+
+    fn run_webcam_recording_blocking(
+        config: crate::services::webcam::WebcamRecordingConfig,
+        stop_signal: Arc<AtomicBool>,
+    ) -> Result<()> {
+        use crate::services::webcam::WebcamRecorder;
+        use std::sync::Arc as StdArc;
+
+        info!("📹 Starting webcam recording: {:?}", config.output_path);
+
+        // Create recorder
+        let mut recorder = WebcamRecorder::new(config.clone()).map_err(|e| {
+            RecorderError::Other(format!("Failed to initialize webcam recorder: {}", e))
+        })?;
+
+        // Wrap recorder in Arc so we can share it with the monitor thread
+        let recorder_arc = StdArc::new(std::sync::Mutex::new(recorder));
+        let recorder_for_monitor = StdArc::clone(&recorder_arc);
+        let stop_signal_clone = stop_signal.clone();
+
+        // Spawn a thread to monitor stop_signal and stop the recorder
+        let monitor_handle = std::thread::spawn(move || {
+            while !stop_signal_clone.load(Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            // Stop the recorder when stop_signal is set
+            if let Ok(rec) = recorder_for_monitor.lock() {
+                rec.stop();
+            }
+        });
+
+        // Record (blocking call - will check stop_flag internally)
+        let result = {
+            let mut rec = recorder_arc.lock().map_err(|e| {
+                RecorderError::Other(format!("Failed to lock recorder: {}", e))
+            })?;
+            rec.record()
+        };
+
+        // Signal monitor to stop
+        stop_signal.store(true, Ordering::Relaxed);
+        let _ = monitor_handle.join();
+
+        if let Err(e) = result {
+            error!("Webcam recording error: {}", e);
+            return Err(RecorderError::Other(format!("Webcam recording failed: {}", e)));
+        }
+
+        info!("✅ Webcam recording complete");
         Ok(())
     }
 
@@ -1582,7 +1649,8 @@ pub struct RecordingSession {
     session_id: Arc<str>,
     recording_start: DateTime<Utc>,
     input_handle: tokio::task::JoinHandle<Result<()>>,
-    screen_handle: tokio::task::JoinHandle<Result<()>>,
+    screen_handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    webcam_handle: Option<tokio::task::JoinHandle<Result<()>>>,
     audio_handles: Vec<tokio::task::JoinHandle<Result<()>>>,
     audio_config_indices: Vec<usize>, // Maps handle index to config index
     process_handle: tokio::task::JoinHandle<Result<()>>,
@@ -1607,21 +1675,33 @@ impl RecordingSession {
         // Store audio recording start events if enabled
         let db = Database::new().await?;
 
-        // Store video recording path
-        let video_path = if self.config.screen_config.output_path.is_absolute() {
-            self.config.screen_config.output_path.clone()
+        // Store video recording path (prefer webcam, fallback to screen)
+        let video_path = self.config.webcam_config.as_ref()
+            .map(|c| c.output_path.clone())
+            .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+            .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
+        
+        let video_path = if video_path.is_absolute() {
+            video_path
         } else {
             std::env::current_dir()
                 .ok()
-                .map(|cwd| cwd.join(&self.config.screen_config.output_path))
-                .unwrap_or_else(|| self.config.screen_config.output_path.clone())
+                .map(|cwd| cwd.join(&video_path))
+                .unwrap_or_else(|| video_path)
         };
 
         let timestamp = Local::now().to_rfc3339();
+        let framerate = self.config.webcam_config.as_ref()
+            .map(|c| c.framerate)
+            .or_else(|| self.config.screen_config.as_ref().map(|c| c.framerate))
+            .unwrap_or(30);
+        let include_audio = self.config.screen_config.as_ref()
+            .map(|c| c.include_audio)
+            .unwrap_or(false);
         let video_metadata = json!({
             "output_path": video_path.to_string_lossy(),
-            "framerate": self.config.screen_config.framerate,
-            "include_audio": self.config.screen_config.include_audio,
+            "framerate": framerate,
+            "include_audio": include_audio,
         });
         if let Err(e) = db
             .insert_event(
@@ -1688,15 +1768,26 @@ impl RecordingSession {
         // Wait for all tasks to complete
         // They will exit when stop_signal is set
         let input_result = self.input_handle.await;
-        let screen_result = self.screen_handle.await;
         let process_result = self.process_handle.await;
 
         input_result
             .map_err(|e| RecorderError::Other(format!("Input capture task failed: {}", e)))??;
-        screen_result
-            .map_err(|e| RecorderError::Other(format!("Screen recording task failed: {}", e)))??;
         process_result
             .map_err(|e| RecorderError::Other(format!("Event processing task failed: {}", e)))??;
+
+        // Wait for screen recording if enabled
+        if let Some(screen_handle) = self.screen_handle {
+            let screen_result = screen_handle.await;
+            screen_result
+                .map_err(|e| RecorderError::Other(format!("Screen recording task failed: {}", e)))??;
+        }
+
+        // Wait for webcam recording if enabled
+        if let Some(webcam_handle) = self.webcam_handle {
+            let webcam_result = webcam_handle.await;
+            webcam_result
+                .map_err(|e| RecorderError::Other(format!("Webcam recording task failed: {}", e)))??;
+        }
 
         // Wait for all audio recordings to complete
         for (handle_idx, audio_handle) in self.audio_handles.into_iter().enumerate() {
@@ -1938,7 +2029,10 @@ impl RecordingSession {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             if let Err(e) = UnifiedRecordingService::apply_video_overlays(
-                &self.config.screen_config.output_path,
+                self.config.webcam_config.as_ref()
+                    .map(|c| &c.output_path)
+                    .or_else(|| self.config.screen_config.as_ref().map(|c| &c.output_path))
+                    .unwrap_or(&PathBuf::from("output/recording.mp4")),
                 &labels,
                 self.config.show_timestamp,
                 self.config.show_labels,
@@ -1950,21 +2044,33 @@ impl RecordingSession {
         }
 
         // Store video recording stop event with final path
-        let video_path = if self.config.screen_config.output_path.is_absolute() {
-            self.config.screen_config.output_path.clone()
+        let video_path = self.config.webcam_config.as_ref()
+            .map(|c| c.output_path.clone())
+            .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+            .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
+        
+        let video_path = if video_path.is_absolute() {
+            video_path
         } else {
             std::env::current_dir()
                 .ok()
-                .map(|cwd| cwd.join(&self.config.screen_config.output_path))
-                .unwrap_or_else(|| self.config.screen_config.output_path.clone())
+                .map(|cwd| cwd.join(&video_path))
+                .unwrap_or_else(|| video_path)
         };
 
         let timestamp = Local::now().to_rfc3339();
         let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
+        let framerate = self.config.webcam_config.as_ref()
+            .map(|c| c.framerate)
+            .or_else(|| self.config.screen_config.as_ref().map(|c| c.framerate))
+            .unwrap_or(30);
+        let include_audio = self.config.screen_config.as_ref()
+            .map(|c| c.include_audio)
+            .unwrap_or(false);
         let video_stop_metadata = json!({
             "output_path": video_path.to_string_lossy(),
-            "framerate": self.config.screen_config.framerate,
-            "include_audio": self.config.screen_config.include_audio,
+            "framerate": framerate,
+            "include_audio": include_audio,
             "duration_seconds": video_duration,
         });
         if let Err(e) = db
@@ -1994,7 +2100,10 @@ impl RecordingSession {
                     fps
                 );
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                let video_path = self.config.screen_config.output_path.clone();
+                let video_path = self.config.webcam_config.as_ref()
+                    .map(|c| c.output_path.clone())
+                    .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+                    .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
                 let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
 
                 let metadata = json!({

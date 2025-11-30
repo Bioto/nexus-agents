@@ -6,6 +6,7 @@
 use crate::services::storage::BatchInserterConfig;
 use crate::services::input::InputEvent;
 use crate::services::storage::EventWriterConfig;
+use crate::services::webcam::WebcamRecordingConfig;
 use std::time::Duration;
 
 /// Default video segment duration in seconds (1 hour).
@@ -139,8 +140,10 @@ impl EventCallback for DefaultEventCallback {
 /// Configuration for unified recording (screen + input).
 #[derive(Clone, Debug)]
 pub struct UnifiedRecordingConfig {
-    /// Screen recording configuration
-    pub screen_config: ScreenRecordingConfig,
+    /// Screen recording configuration (None = disabled)
+    pub screen_config: Option<ScreenRecordingConfig>,
+    /// Webcam recording configuration (None = disabled)
+    pub webcam_config: Option<WebcamRecordingConfig>,
     /// Input capture configuration
     pub input_config: InputCaptureConfig,
     /// Audio recording configurations (can have multiple for mic + monitor)
@@ -168,7 +171,8 @@ pub struct UnifiedRecordingConfig {
 impl Default for UnifiedRecordingConfig {
     fn default() -> Self {
         Self {
-            screen_config: ScreenRecordingConfig::default(),
+            screen_config: Some(ScreenRecordingConfig::default()),
+            webcam_config: None,
             input_config: InputCaptureConfig::default(),
             audio_configs: Vec::new(),
             database_path: PathBuf::from("events.db"),

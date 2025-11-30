@@ -38,6 +38,22 @@ pub struct UnifiedArgs {
     #[arg(short = 'm', long)]
     pub monitor: Option<usize>,
 
+    /// Use webcam instead of screen recording
+    #[arg(long)]
+    pub webcam: bool,
+
+    /// Webcam device path (e.g., /dev/video0)
+    #[arg(long, default_value = "/dev/video0")]
+    pub webcam_device: String,
+
+    /// Enable webcam preview window
+    #[arg(long)]
+    pub webcam_preview: bool,
+
+    /// Disable screen recording (use with --webcam)
+    #[arg(long)]
+    pub no_screen: bool,
+
     /// Disable system audio in screen recording
     #[arg(long)]
     pub no_audio: bool,
@@ -140,19 +156,42 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         crate::error::RecorderError::Other(format!("Failed to set signal handler: {}", e))
     })?;
 
+    // Determine if we're using webcam or screen recording
+    let use_webcam = args.webcam || args.no_screen;
+    
     // Create configuration
     let config = UnifiedRecordingConfig {
-        screen_config: ScreenRecordingConfig {
-            output_path: args.output.clone(),
-            framerate: args.framerate,
-            duration_secs: if args.duration > 0 {
-                Some(args.duration)
-            } else {
-                None
-            },
-            monitor_index: args.monitor,
-            include_audio: !args.no_audio,
-            segment_duration_secs: None, // TODO: Add CLI arg for video segmentation
+        screen_config: if use_webcam {
+            None
+        } else {
+            Some(ScreenRecordingConfig {
+                output_path: args.output.clone(),
+                framerate: args.framerate,
+                duration_secs: if args.duration > 0 {
+                    Some(args.duration)
+                } else {
+                    None
+                },
+                monitor_index: args.monitor,
+                include_audio: !args.no_audio,
+                segment_duration_secs: None, // TODO: Add CLI arg for video segmentation
+            })
+        },
+        webcam_config: if use_webcam {
+            Some(crate::services::webcam::WebcamRecordingConfig {
+                device_path: args.webcam_device.clone(),
+                output_path: args.output.clone(),
+                framerate: args.framerate,
+                max_duration_secs: if args.duration > 0 {
+                    Some(args.duration)
+                } else {
+                    None
+                },
+                enable_preview: args.webcam_preview,
+                preview_title: Some("Webcam Recording".to_string()),
+            })
+        } else {
+            None
         },
         input_config: InputCaptureConfig {
             output_file: args.events.clone(),

@@ -31,9 +31,15 @@ pub use services::{
     InputEvent,
     
     // Unified recording
-    DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel, RecordingSession,
-    UnifiedRecordingConfig, UnifiedRecordingService,
+        DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel, RecordingSession,
+        UnifiedRecordingConfig, UnifiedRecordingService,
     
     // Storage services
     BatchEvent, BatchInserterConfig, Database, EventWriterConfig,
+    
+    // Webcam services
+    list_v4l2_devices, show_device_info, WebcamDevice, WebcamDeviceInfo,
+    mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb,
+    WebcamRecorder, WebcamRecordingConfig,
+    WebcamController, PtzControl, PtzState,
 };

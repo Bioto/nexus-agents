@@ -17,6 +17,7 @@ pub mod storage;
 pub mod context;
 pub mod video;
 pub mod unified_recording;
+pub mod webcam;
 
 // Re-exports for convenience (maintaining backward compatibility)
 pub use audio::{
@@ -32,4 +33,10 @@ pub use unified_recording::{
     AudioRecordingConfig as UnifiedAudioConfig, DefaultEventCallback, EventCallback,
     InputCaptureConfig, OverlayLabel, RecordingSession, ScreenRecordingConfig as UnifiedScreenConfig,
     UnifiedRecordingConfig, UnifiedRecordingService, print_timeline,
+};
+pub use webcam::{
+    list_v4l2_devices, show_device_info, WebcamDevice, WebcamDeviceInfo,
+    mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb,
+    WebcamRecorder, WebcamRecordingConfig,
+    WebcamController, PtzControl, PtzState,
 };
