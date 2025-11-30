@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use sqlx::{types::BigDecimal, PgPool};
 use tower_http::cors::CorsLayer;
@@ -38,6 +39,7 @@ pub async fn start_server(
 
 fn create_router(pool: PgPool) -> Router {
     Router::new()
+        // Ingredient endpoints
         .route(
             "/api/nutrition/ingredients",
             get(list_ingredients).post(create_ingredient),
@@ -48,6 +50,15 @@ fn create_router(pool: PgPool) -> Router {
                 .put(update_ingredient)
                 .delete(delete_ingredient),
         )
+        .route(
+            "/api/nutrition/ingredients/:id/nutrition",
+            get(get_ingredient_nutrition),
+        )
+        .route(
+            "/api/nutrition/ingredients/batch",
+            post(get_ingredients_batch),
+        )
+        // Recipe endpoints
         .route(
             "/api/nutrition/recipes",
             get(list_recipes).post(create_recipe),
@@ -61,12 +72,66 @@ fn create_router(pool: PgPool) -> Router {
             get(calculate_recipe_nutrition),
         )
         .route(
+            "/api/nutrition/recipes/batch",
+            post(get_recipes_batch),
+        )
+        .route(
             "/api/nutrition/recipes/:recipe_id/ingredients",
             post(add_ingredient_to_recipe).delete(remove_ingredient_from_recipe),
         )
         .route(
             "/api/nutrition/recipes/:recipe_id/steps",
             post(add_step_to_recipe).delete(remove_step_from_recipe),
+        )
+        // Meal plan endpoints (read-only for mobile app)
+        .route(
+            "/api/nutrition/meal-plans",
+            get(list_meal_plans),
+        )
+        .route(
+            "/api/nutrition/meal-plans/:id",
+            get(get_meal_plan),
+        )
+        .route(
+            "/api/nutrition/meal-plans/:id/entries",
+            get(get_meal_plan_with_entries),
+        )
+        .route(
+            "/api/nutrition/meal-plans/:id/nutrition",
+            get(calculate_meal_plan_nutrition),
+        )
+        .route(
+            "/api/nutrition/meal-plans/:id/prep-analysis",
+            get(get_meal_plan_prep_analysis),
+        )
+        .route(
+            "/api/nutrition/meal-plans/batch",
+            post(get_meal_plans_batch),
+        )
+        // Family member endpoints (read-only for mobile app)
+        .route(
+            "/api/nutrition/family-members",
+            get(list_family_members),
+        )
+        .route(
+            "/api/nutrition/family-members/:id",
+            get(get_family_member),
+        )
+        .route(
+            "/api/nutrition/family-members/:id/allergies",
+            get(get_family_member_with_allergies),
+        )
+        .route(
+            "/api/nutrition/family-members/:id/favorites",
+            get(get_family_member_favorites),
+        )
+        .route(
+            "/api/nutrition/family-members/batch",
+            post(get_family_members_batch),
+        )
+        .route(
+            "/api/nutrition/recipes/:recipe_id/favorited-by",
+            get(get_recipe_favorited_by),
         )
         .layer(CorsLayer::permissive())
         .with_state(pool)
@@ -346,6 +411,237 @@ async fn remove_step_from_recipe(
         .await
         .map_err(ApiError::from)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ========== Nutritional Info Handlers ==========
+
+async fn get_ingredient_nutrition(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<Option<NutritionalInfo>>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let nutrition = NutritionService::get_nutritional_info(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(nutrition))
+}
+
+// ========== Batch Query Handlers ==========
+
+#[derive(Deserialize)]
+struct BatchIdsRequest {
+    ids: Vec<String>,
+}
+
+async fn get_ingredients_batch(
+    State(pool): State<PgPool>,
+    Json(req): Json<BatchIdsRequest>,
+) -> std::result::Result<Json<Vec<Ingredient>>, ApiError> {
+    let uuids: std::result::Result<Vec<Uuid>, _> = req.ids.iter().map(|id| Uuid::parse_str(id)).collect();
+    let uuids = uuids.map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    
+    let mut ingredients = Vec::new();
+    for uuid in uuids {
+        match NutritionService::get_ingredient(&pool, uuid).await {
+            Ok(ingredient) => ingredients.push(ingredient),
+            Err(_) => continue, // Skip not found ingredients
+        }
+    }
+    Ok(Json(ingredients))
+}
+
+async fn get_recipes_batch(
+    State(pool): State<PgPool>,
+    Json(req): Json<BatchIdsRequest>,
+) -> std::result::Result<Json<Vec<Recipe>>, ApiError> {
+    let uuids: std::result::Result<Vec<Uuid>, _> = req.ids.iter().map(|id| Uuid::parse_str(id)).collect();
+    let uuids = uuids.map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    
+    let mut recipes = Vec::new();
+    for uuid in uuids {
+        match NutritionService::get_recipe(&pool, uuid).await {
+            Ok(recipe) => recipes.push(recipe),
+            Err(_) => continue, // Skip not found recipes
+        }
+    }
+    Ok(Json(recipes))
+}
+
+async fn get_meal_plans_batch(
+    State(pool): State<PgPool>,
+    Json(req): Json<BatchIdsRequest>,
+) -> std::result::Result<Json<Vec<MealPlan>>, ApiError> {
+    let uuids: std::result::Result<Vec<Uuid>, _> = req.ids.iter().map(|id| Uuid::parse_str(id)).collect();
+    let uuids = uuids.map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    
+    let mut meal_plans = Vec::new();
+    for uuid in uuids {
+        match NutritionService::get_meal_plan(&pool, uuid).await {
+            Ok(meal_plan) => meal_plans.push(meal_plan),
+            Err(_) => continue, // Skip not found meal plans
+        }
+    }
+    Ok(Json(meal_plans))
+}
+
+async fn get_family_members_batch(
+    State(pool): State<PgPool>,
+    Json(req): Json<BatchIdsRequest>,
+) -> std::result::Result<Json<Vec<FamilyMember>>, ApiError> {
+    let uuids: std::result::Result<Vec<Uuid>, _> = req.ids.iter().map(|id| Uuid::parse_str(id)).collect();
+    let uuids = uuids.map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    
+    let mut family_members = Vec::new();
+    for uuid in uuids {
+        match NutritionService::get_family_member(&pool, uuid).await {
+            Ok(member) => family_members.push(member),
+            Err(_) => continue, // Skip not found family members
+        }
+    }
+    Ok(Json(family_members))
+}
+
+// ========== Meal Plan Handlers ==========
+
+#[derive(Deserialize)]
+struct ListMealPlansQuery {
+    search: Option<String>,
+    is_template: Option<bool>,
+    start_date: Option<String>, // ISO date string
+    end_date: Option<String>,   // ISO date string
+}
+
+async fn list_meal_plans(
+    Query(params): Query<ListMealPlansQuery>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<Vec<MealPlan>>, ApiError> {
+    let start_date = params
+        .start_date
+        .map(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid start_date format: {}", e)))?;
+    
+    let end_date = params
+        .end_date
+        .map(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d"))
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("Invalid end_date format: {}", e)))?;
+
+    let meal_plans = NutritionService::list_meal_plans(
+        &pool,
+        params.search.as_deref(),
+        params.is_template,
+        start_date,
+        end_date,
+    )
+    .await
+    .map_err(ApiError::from)?;
+    Ok(Json(meal_plans))
+}
+
+async fn get_meal_plan(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<MealPlan>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let meal_plan = NutritionService::get_meal_plan(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(meal_plan))
+}
+
+async fn get_meal_plan_with_entries(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<MealPlanWithEntries>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let meal_plan = NutritionService::get_meal_plan_with_entries(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(meal_plan))
+}
+
+async fn calculate_meal_plan_nutrition(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<MealPlanNutrition>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let nutrition = NutritionService::calculate_meal_plan_nutrition(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(nutrition))
+}
+
+async fn get_meal_plan_prep_analysis(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<MealPlanPrepData>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let prep_data = NutritionService::get_meal_plan_for_prep_analysis(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(prep_data))
+}
+
+// ========== Family Member Handlers ==========
+
+#[derive(Deserialize)]
+struct ListFamilyMembersQuery {
+    search: Option<String>,
+}
+
+async fn list_family_members(
+    Query(params): Query<ListFamilyMembersQuery>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<Vec<FamilyMember>>, ApiError> {
+    let family_members = NutritionService::list_family_members(&pool, params.search.as_deref())
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(family_members))
+}
+
+async fn get_family_member(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<FamilyMember>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let family_member = NutritionService::get_family_member(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(family_member))
+}
+
+async fn get_family_member_with_allergies(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<FamilyMemberWithAllergies>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let family_member = NutritionService::get_family_member_with_allergies(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(family_member))
+}
+
+async fn get_family_member_favorites(
+    Path(id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<Vec<RecipeFavoriteWithRecipe>>, ApiError> {
+    let uuid = Uuid::parse_str(&id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let favorites = NutritionService::get_family_member_favorites(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(favorites))
+}
+
+async fn get_recipe_favorited_by(
+    Path(recipe_id): Path<String>,
+    State(pool): State<PgPool>,
+) -> std::result::Result<Json<Vec<FamilyMember>>, ApiError> {
+    let uuid = Uuid::parse_str(&recipe_id).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let family_members = NutritionService::get_recipe_favorited_by(&pool, uuid)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(family_members))
 }
 
 // ========== Error Handling ==========
