@@ -341,6 +341,11 @@ impl ProcessingService {
             return Self::process_webcam_analysis_job(api_service, config, db, job).await;
         }
 
+        // Handle periodic context jobs
+        if job.kind == "periodic_context" {
+            return Self::process_periodic_context_job(api_service, config, db, job).await;
+        }
+
         if job.video_path.is_none() {
             return Err(RecorderError::Other(
                 "Processing job missing video path (skipping)".to_string(),
@@ -1821,6 +1826,330 @@ impl ProcessingService {
             .unwrap_or_default();
 
         Ok(text.trim().to_string())
+    }
+
+    /// Process a periodic context job.
+    /// Extracts frames and events from a time interval and generates a comprehensive summary.
+    async fn process_periodic_context_job(
+        api_service: Arc<NexusApiService>,
+        config: Arc<ProcessingConfig>,
+        db: Arc<Database>,
+        job: ProcessingJob,
+    ) -> Result<()> {
+        let video_path = job.video_path.as_ref().ok_or_else(|| {
+            RecorderError::Other("Periodic context job missing video path".to_string())
+        })?;
+
+        let interval_start = job.video_timestamp.ok_or_else(|| {
+            RecorderError::Other("Periodic context job missing video timestamp".to_string())
+        })?;
+
+        // Get interval metadata
+        let interval_end = job.metadata
+            .get("interval_end")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(interval_start);
+        let frames_per_interval = job.metadata
+            .get("frames_per_interval")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(config.frame_count);
+
+        let session_id = job.session_id.as_ref().ok_or_else(|| {
+            RecorderError::Other("Periodic context job missing session ID".to_string())
+        })?;
+
+        info!(
+            "🔄 Processing periodic context: {:.1}s - {:.1}s ({} frames)",
+            interval_start,
+            interval_end,
+            frames_per_interval
+        );
+
+        // Use .ts extension for live recording files
+        let live_video_path = if video_path.extension().and_then(|e| e.to_str()) == Some("mp4") {
+            video_path.with_extension("ts")
+        } else {
+            video_path.clone()
+        };
+
+        // Extract frames around the interval start timestamp
+        // Extract frames at: [timestamp - 2s, timestamp - 1s, timestamp, timestamp + 1s, timestamp + 2s]
+        // Or use frames_per_interval to determine distribution
+        let mut frame_timestamps = Vec::new();
+        let interval_duration = (interval_end - interval_start).max(1.0);
+        let frame_interval = interval_duration / (frames_per_interval as f64).max(1.0);
+        
+        for i in 0..frames_per_interval {
+            let offset = (i as f64) * frame_interval;
+            let frame_timestamp = (interval_start + offset).max(0.0);
+            frame_timestamps.push(frame_timestamp);
+        }
+
+        // Extract frames
+        let mut frames = Vec::new();
+        if live_video_path.exists() {
+            let output_dir = if let Some(root) = &config.save_frames_dir {
+                root.clone()
+            } else {
+                let temp = tempdir().map_err(RecorderError::Io)?;
+                let path = temp.path().to_path_buf();
+                std::mem::forget(temp);
+                path
+            };
+
+            if !output_dir.exists() {
+                fs::create_dir_all(&output_dir).map_err(|e| {
+                    RecorderError::Other(format!("Failed to create output directory: {}", e))
+                })?;
+            }
+
+            let mut extract_tasks = Vec::new();
+            for (idx, timestamp) in frame_timestamps.iter().enumerate() {
+                let output_path = output_dir.join(Self::frame_filename(&job, idx as u32));
+                let video_path_clone = live_video_path.clone();
+                let ts = *timestamp;
+
+                let task = tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+                    Self::extract_single_frame(&video_path_clone, ts, &output_path)?;
+                    Ok(output_path)
+                });
+                extract_tasks.push((ts - interval_start, task));
+            }
+
+            for (offset_secs, task) in extract_tasks {
+                match task.await {
+                    Ok(Ok(path)) => {
+                        let data = tokio::fs::read(&path).await?;
+                        let base64 = BASE64.encode(&data);
+                        frames.push(CapturedFrame {
+                            offset_secs,
+                            base64_image: base64,
+                            file_path: config.save_frames_dir.as_ref().map(|_| path),
+                        });
+                    }
+                    Ok(Err(e)) => {
+                        warn!("⚠️  Failed to extract frame at +{:.2}s: {}", offset_secs, e);
+                    }
+                    Err(e) => {
+                        warn!("⚠️  Frame extraction task at +{:.2}s failed: {}", offset_secs, e);
+                    }
+                }
+            }
+        } else {
+            warn!("⚠️  Video file not found: {}, skipping frame extraction", live_video_path.display());
+        }
+
+        // Gather events from the time window
+        let events = db.get_events_in_window(
+            session_id,
+            interval_start,
+            interval_duration / 2.0, // window_before
+            interval_duration / 2.0, // window_after
+        ).await.unwrap_or_default();
+
+        // Reconstruct text from keyboard events
+        let reconstructed_text = Self::reconstruct_text_from_keys(&events);
+        
+        // Collect click summaries
+        let mut clicks = Vec::new();
+        for event in &events {
+            if event.event_type == "mouse" && event.event_subtype.as_deref() == Some("click") {
+                let button = event.button.as_deref().unwrap_or("unknown");
+                let coords = if let (Some(x), Some(y)) = (event.x, event.y) {
+                    format!("({}, {})", x, y)
+                } else {
+                    String::new()
+                };
+                let time_str = if let Some(tc) = event.timecode {
+                    format!("{:.2}s", tc)
+                } else {
+                    "?".to_string()
+                };
+                clicks.push(format!("{} click at {} {}", button, coords, time_str));
+            }
+        }
+
+        // Analyze frames if we have any
+        let descriptions = if !frames.is_empty() {
+            Self::describe_frames_in_batches(
+                Arc::clone(&api_service),
+                Arc::clone(&config),
+                &job,
+                &frames,
+                Arc::clone(&db),
+            )
+            .await
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Generate comprehensive summary
+        let summary = Self::summarize_periodic_context(
+            Arc::clone(&api_service),
+            &config,
+            &job,
+            &descriptions,
+            &reconstructed_text,
+            &clicks,
+            interval_start,
+            interval_end,
+        ).await?;
+
+        // Print result
+        println!(
+            "\n🔄 Periodic context summary @ {} ({:.1}s - {:.1}s):",
+            job.timestamp_local(),
+            interval_start,
+            interval_end
+        );
+        if !descriptions.is_empty() {
+            for frame in &descriptions {
+                println!("   • {:+.2}s: {}", frame.offset_secs, frame.description);
+            }
+        }
+        if !clicks.is_empty() {
+            println!("   • Clicks: {}", clicks.join(", "));
+        }
+        if !reconstructed_text.is_empty() {
+            println!("   • Text entered: \"{}\"", reconstructed_text);
+        }
+        println!("   → Summary: {}", summary.trim());
+
+        // Store summary
+        Self::store_periodic_context_summary(
+            db,
+            &job,
+            &descriptions,
+            &summary,
+            &reconstructed_text,
+            &clicks,
+            interval_start,
+            interval_end,
+        ).await?;
+
+        Ok(())
+    }
+
+    /// Summarize periodic context with frames, events, and time range
+    async fn summarize_periodic_context(
+        api_service: Arc<NexusApiService>,
+        config: &ProcessingConfig,
+        job: &ProcessingJob,
+        frames: &[FrameDescription],
+        reconstructed_text: &str,
+        clicks: &[String],
+        interval_start: f64,
+        interval_end: f64,
+    ) -> Result<String> {
+        let mut prompt = format!(
+            "Periodic context summary for interval {:.1}s - {:.1}s (duration: {:.1}s).\n\n",
+            interval_start,
+            interval_end,
+            interval_end - interval_start
+        );
+
+        if !frames.is_empty() {
+            prompt.push_str("Frame descriptions:\n");
+            for frame in frames {
+                prompt.push_str(&format!(
+                    "• +{:.2}s: {}\n",
+                    frame.offset_secs, frame.description
+                ));
+            }
+            prompt.push_str("\n");
+        }
+
+        if !clicks.is_empty() {
+            prompt.push_str(&format!("Mouse clicks: {}\n", clicks.join(", ")));
+        }
+
+        if !reconstructed_text.is_empty() {
+            prompt.push_str(&format!("Text entered: \"{}\"\n", reconstructed_text));
+        }
+
+        prompt.push_str(
+            "\nGenerate a comprehensive summary of what the user was doing during this interval. \
+            Focus on the user's activities, tasks, and context. This summary will be part of a \
+            'second brain' history, so make it detailed and useful for future reference."
+        );
+
+        let messages = vec![
+            Message::system(SUMMARY_SYSTEM_PROMPT),
+            Message::user(prompt),
+        ];
+        let request = ChatCompletionRequest::new(config.summary_model.clone(), messages);
+
+        let response = api_service.chat(request).await?;
+        let text = response
+            .content
+            .as_ref()
+            .map(|c| c.extract_text())
+            .unwrap_or_default();
+        Ok(text.trim().to_string())
+    }
+
+    /// Store periodic context summary in database
+    async fn store_periodic_context_summary(
+        db: Arc<Database>,
+        job: &ProcessingJob,
+        frames: &[FrameDescription],
+        summary: &str,
+        reconstructed_text: &str,
+        clicks: &[String],
+        interval_start: f64,
+        interval_end: f64,
+    ) -> Result<()> {
+        let session_id = match &job.session_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        let metadata = json!({
+            "summary": summary,
+            "interval_start": interval_start,
+            "interval_end": interval_end,
+            "interval_duration": interval_end - interval_start,
+            "frames": frames.iter().map(|frame| {
+                json!({
+                    "offset_secs": frame.offset_secs,
+                    "description": frame.description,
+                    "file_path": frame.file_path.as_ref().map(|p| p.display().to_string()),
+                })
+            }).collect::<Vec<_>>(),
+            "events": {
+                "reconstructed_text": reconstructed_text,
+                "clicks": clicks,
+                "click_count": clicks.len(),
+            },
+            "job": {
+                "timestamp": job.timestamp_utc.to_rfc3339(),
+                "kind": job.kind,
+                "label": job.label,
+            },
+            "metadata": job.metadata
+        });
+
+        let timestamp = job.timestamp_utc.to_rfc3339();
+
+        db.insert_event(
+            session_id,
+            "analysis",
+            Some("periodic_context"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            &timestamp,
+            Some(interval_start),
+            Some(metadata),
+            None,
+        )
+        .await?;
+
+        Ok(())
     }
 }
 

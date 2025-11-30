@@ -261,6 +261,109 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
         NutritionCommands::Db { .. } => {
             // Already handled above
         }
+        NutritionCommands::Export {
+            recipe_id,
+            output,
+            include_nutrition,
+        } => {
+            let recipe_uuid = Uuid::parse_str(&recipe_id)?;
+            let recipe = NutritionService::get_recipe_with_details(pool, recipe_uuid).await?;
+
+            // Calculate nutrition if requested
+            let nutrition = if include_nutrition {
+                Some(
+                    NutritionService::calculate_recipe_nutrition(
+                        pool,
+                        recipe_uuid,
+                        recipe.recipe.servings,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+
+            // Determine output path
+            let output_path = if let Some(path) = output {
+                std::path::PathBuf::from(path)
+            } else {
+                // Default: output/recipes/{recipe_name}.pdf
+                let output_dir = std::path::PathBuf::from("output/recipes");
+                std::fs::create_dir_all(&output_dir)?;
+                let sanitized_name = recipe
+                    .recipe
+                    .name
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+                    .collect::<String>()
+                    .replace(' ', "_");
+                output_dir.join(format!("{}.pdf", sanitized_name))
+            };
+
+            // Ensure parent directory exists
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            // Export to PDF
+            crate::nutrition::pdf_export::RecipePdfExporter::export_recipe(
+                &recipe,
+                nutrition.as_ref(),
+                &output_path,
+            )?;
+
+            println!("✅ Recipe exported to PDF: {}", output_path.display());
+        }
+        NutritionCommands::ExportMealPlan {
+            meal_plan_id,
+            output,
+            include_nutrition,
+        } => {
+            let meal_plan_uuid = Uuid::parse_str(&meal_plan_id)?;
+            let meal_plan = NutritionService::get_meal_plan_with_entries(pool, meal_plan_uuid).await?;
+
+            // Calculate nutrition if requested
+            let nutrition = if include_nutrition {
+                Some(
+                    NutritionService::calculate_meal_plan_nutrition(pool, meal_plan_uuid).await?,
+                )
+            } else {
+                None
+            };
+
+            // Determine output path
+            let output_path = if let Some(path) = output {
+                std::path::PathBuf::from(path)
+            } else {
+                // Default: output/meal_plans/{meal_plan_name}.pdf
+                let output_dir = std::path::PathBuf::from("output/meal_plans");
+                std::fs::create_dir_all(&output_dir)?;
+                let sanitized_name = meal_plan
+                    .meal_plan
+                    .name
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+                    .collect::<String>()
+                    .replace(' ', "_");
+                output_dir.join(format!("{}.pdf", sanitized_name))
+            };
+
+            // Ensure parent directory exists
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            // Export to PDF (async function now)
+            crate::nutrition::pdf_export::RecipePdfExporter::export_meal_plan(
+                &meal_plan,
+                nutrition.as_ref(),
+                pool,
+                &output_path,
+            )
+            .await?;
+
+            println!("✅ Meal plan exported to PDF: {}", output_path.display());
+        }
     }
 
     Ok(())

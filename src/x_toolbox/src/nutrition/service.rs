@@ -1679,6 +1679,306 @@ Return only valid JSON, no markdown formatting."#,
         })
     }
 
+    /// Get meal plan data prepared for prep analysis
+    /// Aggregates all ingredients across recipes and provides usage information
+    pub async fn get_meal_plan_for_prep_analysis(
+        pool: &PgPool,
+        meal_plan_id: Uuid,
+    ) -> Result<MealPlanPrepData> {
+        let meal_plan = Self::get_meal_plan(pool, meal_plan_id).await?;
+
+        // Get all entries
+        let entries = sqlx::query_as!(
+            MealPlanEntry,
+            r#"
+            SELECT id, meal_plan_id, day_of_week, date, meal_type, recipe_id, created_at
+            FROM meal_plan_entries
+            WHERE meal_plan_id = $1
+            ORDER BY 
+                CASE 
+                    WHEN date IS NOT NULL THEN date
+                    ELSE NULL
+                END,
+                day_of_week,
+                CASE meal_type
+                    WHEN 'breakfast' THEN 1
+                    WHEN 'lunch' THEN 2
+                    WHEN 'dinner' THEN 3
+                    WHEN 'snack' THEN 4
+                    ELSE 5
+                END
+            "#,
+            meal_plan_id
+        )
+        .fetch_all(pool)
+        .await?;
+
+        // Fetch full recipe details for each entry
+        let mut entries_with_full_recipes = Vec::new();
+        for entry in entries {
+            let recipe_with_details = Self::get_recipe_with_details(pool, entry.recipe_id).await?;
+            entries_with_full_recipes.push(MealPlanEntryWithFullRecipe {
+                entry,
+                recipe: recipe_with_details,
+            });
+        }
+
+        // Aggregate ingredients across all recipes
+        use std::collections::HashMap;
+        let mut ingredient_map: HashMap<Uuid, AggregatedIngredient> = HashMap::new();
+
+        for entry_with_recipe in &entries_with_full_recipes {
+            let entry = &entry_with_recipe.entry;
+            let recipe = &entry_with_recipe.recipe;
+
+            for recipe_ingredient in &recipe.ingredients {
+                let ingredient_id = recipe_ingredient.ingredient.id;
+                let quantity = &recipe_ingredient.recipe_ingredient.quantity;
+                let unit = &recipe_ingredient.recipe_ingredient.unit;
+
+                let aggregated = ingredient_map.entry(ingredient_id).or_insert_with(|| {
+                    AggregatedIngredient {
+                        ingredient: recipe_ingredient.ingredient.clone(),
+                        total_quantity: BigDecimal::from(0),
+                        unit: unit.clone(),
+                        used_in_recipes: Vec::new(),
+                    }
+                });
+
+                // Add to total quantity (assuming same unit for now)
+                aggregated.total_quantity += quantity;
+
+                // Add usage information
+                aggregated.used_in_recipes.push(IngredientUsage {
+                    recipe_id: recipe.recipe.id,
+                    recipe_name: recipe.recipe.name.clone(),
+                    quantity: quantity.clone(),
+                    unit: unit.clone(),
+                    date: entry.date,
+                    day_of_week: entry.day_of_week,
+                    meal_type: entry.meal_type.clone(),
+                });
+            }
+        }
+
+        // Convert HashMap to sorted Vec
+        let mut aggregated_ingredients: Vec<AggregatedIngredient> =
+            ingredient_map.into_values().collect();
+        aggregated_ingredients.sort_by(|a, b| a.ingredient.name.cmp(&b.ingredient.name));
+
+        Ok(MealPlanPrepData {
+            meal_plan,
+            entries: entries_with_full_recipes,
+            aggregated_ingredients,
+        })
+    }
+
+    /// Generate a meal prep report using LLM analysis
+    pub async fn generate_meal_prep_report(
+        pool: &PgPool,
+        meal_plan_id: Uuid,
+    ) -> Result<String> {
+        use reqwest::Client;
+        use std::env;
+
+        // Get meal plan data for analysis
+        let prep_data = Self::get_meal_plan_for_prep_analysis(pool, meal_plan_id).await?;
+
+        // Build comprehensive prompt with meal plan data
+        let mut prompt = String::from(
+            r#"You are a meal prep expert. Analyze the following meal plan and generate a comprehensive meal prep report in markdown format.
+
+The report should include:
+1. **High-Level Prep Timeline**: A timeline showing what to prep when (e.g., "Sunday: Prep vegetables that last 5-7 days")
+2. **Ingredient-by-Ingredient Prep Recommendations**: For each ingredient, specify:
+   - When to prep it (days ahead or day-of)
+   - How to prep it (chopped, sliced, etc.)
+   - Storage recommendations
+   - Shelf life considerations
+3. **Day-by-Day Prep Schedule**: A detailed schedule organized by day
+4. **Storage Tips**: General storage recommendations
+5. **Notes on Shelf Life**: Important notes about ingredient freshness and timing
+
+Consider:
+- Ingredient shelf life (e.g., root vegetables last longer than leafy greens, fresh herbs need day-of prep)
+- Prep timing (what can be done days ahead vs. day-of)
+- Batch prep opportunities (same ingredient across multiple recipes)
+- Storage requirements (refrigeration, airtight containers, etc.)
+- Recipe prep and cook times
+
+"#,
+        );
+
+        // Add meal plan overview
+        prompt.push_str(&format!(
+            "## Meal Plan Overview\n\nName: {}\n",
+            prep_data.meal_plan.name
+        ));
+        if let Some(desc) = &prep_data.meal_plan.description {
+            prompt.push_str(&format!("Description: {}\n", desc));
+        }
+        if let Some(start) = prep_data.meal_plan.start_date {
+            prompt.push_str(&format!("Start Date: {}\n", start));
+        }
+        if let Some(end) = prep_data.meal_plan.end_date {
+            prompt.push_str(&format!("End Date: {}\n", end));
+        }
+        prompt.push_str(&format!(
+            "Total Meals: {}\n\n",
+            prep_data.entries.len()
+        ));
+
+        // Add all recipes with full details
+        prompt.push_str("## Recipes\n\n");
+        for entry_with_recipe in &prep_data.entries {
+            let entry = &entry_with_recipe.entry;
+            let recipe = &entry_with_recipe.recipe;
+
+            let day_info = if let Some(date) = entry.date {
+                format!("Date: {}", date)
+            } else if let Some(dow) = entry.day_of_week {
+                let day_name = match dow {
+                    0 => "Monday",
+                    1 => "Tuesday",
+                    2 => "Wednesday",
+                    3 => "Thursday",
+                    4 => "Friday",
+                    5 => "Saturday",
+                    6 => "Sunday",
+                    _ => "Unknown",
+                };
+                format!("Day: {}", day_name)
+            } else {
+                "No date/day".to_string()
+            };
+
+            prompt.push_str(&format!(
+                "### {} ({}, {})\n",
+                recipe.recipe.name, entry.meal_type, day_info
+            ));
+            if let Some(desc) = &recipe.recipe.description {
+                prompt.push_str(&format!("Description: {}\n", desc));
+            }
+            if let Some(servings) = recipe.recipe.servings {
+                prompt.push_str(&format!("Servings: {}\n", servings));
+            }
+            if let Some(prep_time) = recipe.recipe.prep_time_minutes {
+                prompt.push_str(&format!("Prep Time: {} minutes\n", prep_time));
+            }
+            if let Some(cook_time) = recipe.recipe.cook_time_minutes {
+                prompt.push_str(&format!("Cook Time: {} minutes\n", cook_time));
+            }
+
+            prompt.push_str("\n**Ingredients:**\n");
+            for ingredient in &recipe.ingredients {
+                prompt.push_str(&format!(
+                    "- {}: {} {}\n",
+                    ingredient.ingredient.name,
+                    ingredient.recipe_ingredient.quantity,
+                    ingredient.recipe_ingredient.unit
+                ));
+            }
+
+            prompt.push_str("\n**Steps:**\n");
+            for (idx, step) in recipe.steps.iter().enumerate() {
+                prompt.push_str(&format!("{}. {}\n", idx + 1, step.instruction));
+            }
+            prompt.push_str("\n");
+        }
+
+        // Add aggregated ingredients summary
+        prompt.push_str("## Aggregated Ingredients Summary\n\n");
+        for agg_ingredient in &prep_data.aggregated_ingredients {
+            prompt.push_str(&format!(
+                "- **{}**: Total {} {} (used in {} recipe(s))\n",
+                agg_ingredient.ingredient.name,
+                agg_ingredient.total_quantity,
+                agg_ingredient.unit,
+                agg_ingredient.used_in_recipes.len()
+            ));
+        }
+
+        prompt.push_str(
+            r#"
+
+## Instructions
+
+Generate a comprehensive meal prep report in markdown format. Focus on practical, actionable advice for meal prepping. Consider ingredient shelf life, optimal prep timing, and storage requirements. Make the report easy to follow and well-organized.
+
+Return only the markdown report, no additional commentary."#,
+        );
+
+        // Get LLM configuration
+        let llm_api_key = env::var("LLM_API_KEY")
+            .or_else(|_| env::var("OPENAI_API_KEY"))
+            .map_err(|_| {
+                ToolboxError::Configuration(
+                    "LLM_API_KEY or OPENAI_API_KEY environment variable not set".to_string(),
+                )
+            })?;
+
+        let llm_base_url = env::var("LLM_BASE_URL")
+            .or_else(|_| env::var("OPENAI_BASE_URL"))
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+        let model = env::var("DEFAULT_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+        // Create HTTP client
+        let client = Client::builder()
+            .build()
+            .map_err(|e| ToolboxError::Other(format!("Failed to create HTTP client: {}", e)))?;
+
+        // Make LLM API call
+        let llm_request = serde_json::json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.3,
+        });
+
+        let llm_response = client
+            .post(&format!("{}/chat/completions", llm_base_url))
+            .header("Authorization", format!("Bearer {}", llm_api_key))
+            .header("Content-Type", "application/json")
+            .json(&llm_request)
+            .send()
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to call LLM API: {}", e)))?;
+
+        let status = llm_response.status();
+        if !status.is_success() {
+            let error_text = llm_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ToolboxError::Other(format!(
+                "LLM API error: HTTP {} - {}",
+                status, error_text
+            )));
+        }
+
+        let llm_json: serde_json::Value = llm_response
+            .json()
+            .await
+            .map_err(|e| ToolboxError::Other(format!("Failed to parse LLM response: {}", e)))?;
+
+        // Extract the report content from LLM response
+        let report_content = llm_json
+            .get("choices")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| ToolboxError::Other("Invalid LLM response format".to_string()))?;
+
+        Ok(report_content.to_string())
+    }
+
     // ========== Family Member Operations ==========
 
     /// Create a new family member

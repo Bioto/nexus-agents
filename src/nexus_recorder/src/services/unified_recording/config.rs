@@ -187,6 +187,13 @@ pub struct UnifiedRecordingConfig {
     pub event_writer_config: Option<EventWriterConfig>,
     /// Batch inserter configuration (batched database inserts)
     pub batch_inserter_config: Option<BatchInserterConfig>,
+    /// Periodic context processing interval in seconds (None = disabled)
+    /// When enabled, processes context at regular intervals during recording
+    pub periodic_context_interval_secs: Option<u64>,
+    /// Number of frames to extract per periodic context interval (default: 3)
+    pub periodic_context_frames_per_interval: u32,
+    /// Whether periodic context processing is enabled
+    pub periodic_context_enabled: bool,
 }
 
 impl Default for UnifiedRecordingConfig {
@@ -206,6 +213,9 @@ impl Default for UnifiedRecordingConfig {
             context_fps: None,
             event_writer_config: None, // Use legacy file writing by default
             batch_inserter_config: None, // Use individual inserts by default
+            periodic_context_interval_secs: None, // Disabled by default
+            periodic_context_frames_per_interval: 3,
+            periodic_context_enabled: false,
         }
     }
 }

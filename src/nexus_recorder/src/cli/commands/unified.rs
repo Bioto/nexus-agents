@@ -147,6 +147,15 @@ pub struct UnifiedArgs {
     /// Disable event label overlays on video
     #[arg(long)]
     pub no_labels: bool,
+
+    /// Periodic context processing interval in seconds (0 = disabled)
+    /// Processes context at regular intervals during recording to build live history
+    #[arg(long, default_value = "0")]
+    pub periodic_context_interval: u64,
+
+    /// Number of frames to extract per periodic context interval (default: 3)
+    #[arg(long, default_value = "3")]
+    pub periodic_context_frames: u32,
 }
 
 /// Runs the unified recording command based on args.
@@ -378,6 +387,14 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         } else {
             None
         },
+        // Periodic context processing configuration
+        periodic_context_interval_secs: if args.periodic_context_interval > 0 {
+            Some(args.periodic_context_interval)
+        } else {
+            None
+        },
+        periodic_context_frames_per_interval: args.periodic_context_frames,
+        periodic_context_enabled: args.periodic_context_interval > 0,
     };
 
     println!("🎬 Starting unified recording...");
@@ -493,6 +510,16 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         "   Context analysis: {}",
         if let Some(fps) = config.context_fps {
             format!("{:.2} fps", fps)
+        } else {
+            "disabled".to_string()
+        }
+    );
+    println!(
+        "   Periodic context: {}",
+        if config.periodic_context_enabled {
+            format!("every {}s ({} frames)", 
+                config.periodic_context_interval_secs.unwrap_or(0),
+                config.periodic_context_frames_per_interval)
         } else {
             "disabled".to_string()
         }

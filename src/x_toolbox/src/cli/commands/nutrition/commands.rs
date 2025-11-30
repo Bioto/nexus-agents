@@ -117,6 +117,28 @@ pub enum NutritionCommands {
         #[command(subcommand)]
         command: FavoriteCommand,
     },
+    /// Export recipe to PDF
+    Export {
+        /// Recipe ID
+        recipe_id: String,
+        /// Output file path (default: output/recipes/{recipe_name}.pdf)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Include nutritional information
+        #[arg(long)]
+        include_nutrition: bool,
+    },
+    /// Export meal plan to PDF
+    ExportMealPlan {
+        /// Meal plan ID
+        meal_plan_id: String,
+        /// Output file path (default: output/meal_plans/{meal_plan_name}.pdf)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Include nutritional information
+        #[arg(long)]
+        include_nutrition: bool,
+    },
 }
 
 #[derive(Subcommand)]

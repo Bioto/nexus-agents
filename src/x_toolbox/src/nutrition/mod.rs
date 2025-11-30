@@ -3,6 +3,7 @@ pub mod config;
 pub mod database;
 pub mod mcp_server;
 pub mod models;
+pub mod pdf_export;
 pub mod service;
 
 pub use database::Database;

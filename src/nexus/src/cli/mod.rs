@@ -2,6 +2,7 @@ pub mod commands;
 
 use clap::{Parser, Subcommand};
 use nexus_core::Commands as CoreCommands;
+use nexus_exporter::Commands as ExporterCommands;
 use nexus_gui::Commands as GuiCommands;
 use nexus_mcp::Commands as McpCommands;
 use nexus_recorder::Commands as RecorderCommands;
@@ -37,6 +38,11 @@ pub enum Commands {
     Mcp {
         #[command(subcommand)]
         command: McpCommands,
+    },
+    /// Document export commands (PDF, etc.) from nexus-exporter
+    Exporter {
+        #[command(subcommand)]
+        command: ExporterCommands,
     },
     /// Start an MCP agent with access to MCP server tools
     McpAgent(commands::mcp_agent::McpAgentArgs),

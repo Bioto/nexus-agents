@@ -309,6 +309,112 @@ impl UnifiedRecordingService {
             None
         };
 
+        // Start periodic context processing (if enabled)
+        let periodic_context_handle = if self.config.periodic_context_enabled {
+            if let Some(interval_secs) = self.config.periodic_context_interval_secs {
+                // Get or create ProcessingService handle
+                let processing_handle = if let Some(ref ctx) = click_context {
+                    // Reuse click context handle if available
+                    ctx.inner().clone()
+                } else {
+                    // Create new ProcessingService if click context is disabled
+                    let processing_config = crate::services::context::context_processing::ProcessingConfig::from_env();
+                    match ProcessingService::start(processing_config, db.clone()) {
+                        Ok(handle) => handle,
+                        Err(e) => {
+                            warn!("⚠️  Failed to start processing service for periodic context: {}", e);
+                            return Err(RecorderError::Other(format!(
+                                "Failed to start processing service: {}", e
+                            )));
+                        }
+                    }
+                };
+
+                let video_path = self.config.webcam_config.as_ref()
+                    .map(|c| c.output_path.clone())
+                    .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+                    .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
+                
+                let video_path = if video_path.is_absolute() {
+                    video_path
+                } else {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|cwd| cwd.join(&video_path))
+                        .unwrap_or(video_path)
+                };
+
+                let session_id_str = session_id.to_string();
+                let frames_per_interval = self.config.periodic_context_frames_per_interval;
+                let stop_signal_periodic = stop_signal.clone();
+                let recording_start_instant_clone = recording_start_instant;
+
+                Some(tokio::spawn(async move {
+                    // Wait for initial delay (1 minute to accumulate data)
+                    info!("🔄 Periodic context processing: waiting 60s for initial data accumulation...");
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+
+                    let mut last_processed_timestamp = 0.0f64;
+                    let mut interval_count = 0u64;
+
+                    loop {
+                        if stop_signal_periodic.load(Ordering::SeqCst) {
+                            info!("🔄 Periodic context processing stopping...");
+                            break;
+                        }
+
+                        // Calculate current video timestamp from elapsed time
+                        let elapsed = recording_start_instant_clone.elapsed();
+                        let current_timestamp = elapsed.as_secs_f64();
+
+                        // Check if we have enough time elapsed since last processing
+                        if current_timestamp - last_processed_timestamp >= interval_secs as f64 {
+                            let interval_start = last_processed_timestamp;
+                            let interval_end = current_timestamp;
+
+                            info!(
+                                "🔄 Processing periodic context interval {}: {:.1}s - {:.1}s",
+                                interval_count + 1,
+                                interval_start,
+                                interval_end
+                            );
+
+                            // Create processing job for this interval
+                            let job = ProcessingJob::new(
+                                "periodic_context",
+                                format!("interval_{}", interval_count),
+                                Utc::now(),
+                            )
+                            .with_session_id(Some(session_id_str.clone()))
+                            .with_video_context(Some(interval_start), Some(video_path.clone()))
+                            .with_metadata(json!({
+                                "interval_start": interval_start,
+                                "interval_end": interval_end,
+                                "interval_duration": interval_end - interval_start,
+                                "interval_count": interval_count,
+                                "frames_per_interval": frames_per_interval,
+                            }));
+
+                            // Trigger job (non-blocking)
+                            processing_handle.trigger(job);
+
+                            last_processed_timestamp = current_timestamp;
+                            interval_count += 1;
+                        }
+
+                        // Sleep for a short time before checking again
+                        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+                    }
+
+                    info!("🔄 Periodic context processing completed: {} intervals processed", interval_count);
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Start audio recording tasks for all enabled audio configs
         // CRITICAL: Desktop audio MUST start first to set up loopback sink and default source
         // before microphone recording tries to connect to its device
@@ -737,6 +843,7 @@ impl UnifiedRecordingService {
             previous_default_sink,
             loopback_module_ids,
             audio_config_indices,
+            periodic_context_handle,
         })
     }
 
@@ -1727,6 +1834,7 @@ pub struct RecordingSession {
     previous_default_source: Option<String>,
     previous_default_sink: Option<String>,
     loopback_module_ids: Vec<u32>,
+    periodic_context_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RecordingSession {
@@ -1862,6 +1970,13 @@ impl RecordingSession {
             info!("🎭 Webcam sentiment analysis will complete when processing queue is empty...");
             handle.wait_for_completion().await;
             info!("🎭 Webcam sentiment analysis completed");
+        }
+
+        // Wait for periodic context processing to complete
+        if let Some(handle) = self.periodic_context_handle.take() {
+            info!("🔄 Waiting for periodic context processing to complete...");
+            let _ = handle.await;
+            info!("🔄 Periodic context processing completed");
         }
 
         // Wait for all audio recordings to complete

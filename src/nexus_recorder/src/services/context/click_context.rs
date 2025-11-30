@@ -30,6 +30,11 @@ impl ClickContextHandle {
     pub async fn wait_for_completion(self) {
         self.inner.wait_for_completion().await;
     }
+
+    /// Get the inner ProcessingHandle for direct access
+    pub fn inner(&self) -> &ProcessingHandle {
+        &self.inner
+    }
 }
 
 #[derive(Clone, Debug)]

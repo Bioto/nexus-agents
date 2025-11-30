@@ -4,6 +4,7 @@ use chrono;
 use clap::Parser;
 use cli::{Cli, Commands};
 use nexus_core::{self, Commands as CoreCommands};
+use nexus_exporter::{self, Commands as ExporterCommands};
 use nexus_gui::{self, Commands as GuiCommands};
 use nexus_mcp::{self, Commands as McpCommands};
 use nexus_recorder::{self, Commands as RecorderCommands};
@@ -113,6 +114,10 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
             McpCommands::StartServers(args) => nexus_mcp::run_start_servers(args)
                 .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+        },
+        Commands::Exporter { command } => match command {
+            ExporterCommands::Pdf(args) => nexus_exporter::run_pdf(args)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         },
         Commands::McpAgent(args) => cli::commands::mcp_agent::run_mcp_agent(args)

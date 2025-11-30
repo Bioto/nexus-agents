@@ -422,3 +422,42 @@ pub struct AddRecipeFavoriteRequest {
     pub recipe_id: Uuid,
     pub notes: Option<String>,
 }
+
+// ========== Meal Prep Report Models ==========
+
+/// Meal plan entry with full recipe details (for prep analysis)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MealPlanEntryWithFullRecipe {
+    #[serde(flatten)]
+    pub entry: MealPlanEntry,
+    pub recipe: RecipeWithDetails,
+}
+
+/// Ingredient usage information in a recipe
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngredientUsage {
+    pub recipe_id: Uuid,
+    pub recipe_name: String,
+    pub quantity: BigDecimal,
+    pub unit: String,
+    pub date: Option<NaiveDate>,
+    pub day_of_week: Option<i32>,
+    pub meal_type: String,
+}
+
+/// Aggregated ingredient information across all recipes in a meal plan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedIngredient {
+    pub ingredient: Ingredient,
+    pub total_quantity: BigDecimal,
+    pub unit: String,
+    pub used_in_recipes: Vec<IngredientUsage>,
+}
+
+/// Meal plan data prepared for prep analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MealPlanPrepData {
+    pub meal_plan: MealPlan,
+    pub entries: Vec<MealPlanEntryWithFullRecipe>,
+    pub aggregated_ingredients: Vec<AggregatedIngredient>,
+}

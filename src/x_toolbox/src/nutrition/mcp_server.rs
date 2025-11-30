@@ -1,4 +1,5 @@
 use crate::error::ToolboxError;
+use chrono::{DateTime, Utc};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters, ServerHandler},
     model::*,
@@ -6,16 +7,24 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{types::BigDecimal, PgPool};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 use super::{Database, NutritionService};
+
+/// Cached meal prep report with version tracking
+struct CachedReport {
+    report: String,
+    version: DateTime<Utc>,
+}
 
 /// MCP Server for nutrition module
 #[derive(Clone)]
 pub struct NutritionMcpServer {
     pool: Arc<PgPool>,
     pub tool_router: ToolRouter<Self>,
+    report_cache: Arc<RwLock<HashMap<Uuid, CachedReport>>>,
 }
 
 // Tool definitions
@@ -29,6 +38,7 @@ impl NutritionMcpServer {
         Ok(Self {
             pool: Arc::new(db.pool().clone()),
             tool_router: Self::tool_router(),
+            report_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -36,6 +46,7 @@ impl NutritionMcpServer {
         Ok(Self {
             pool: Arc::new(db.pool().clone()),
             tool_router: Self::tool_router(),
+            report_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -1444,6 +1455,104 @@ impl NutritionMcpServer {
         }
     }
 
+    /// Compute cache version for a meal plan (max of meal plan and recipe updated_at timestamps)
+    async fn compute_meal_plan_cache_version(
+        &self,
+        meal_plan_id: Uuid,
+    ) -> Result<DateTime<Utc>, ToolboxError> {
+        // Get meal plan
+        let meal_plan = NutritionService::get_meal_plan(&self.pool, meal_plan_id).await?;
+        let mut max_timestamp = meal_plan.updated_at;
+
+        // Get max updated_at from all recipes used in this meal plan using dynamic query
+        let recipe_max_result: Option<DateTime<Utc>> = sqlx::query_scalar(
+            r#"
+            SELECT MAX(r.updated_at)
+            FROM recipes r
+            INNER JOIN meal_plan_entries mpe ON r.id = mpe.recipe_id
+            WHERE mpe.meal_plan_id = $1
+            "#,
+        )
+        .bind(meal_plan_id)
+        .fetch_optional(&*self.pool)
+        .await?;
+
+        // Update max_timestamp if recipe max is greater
+        if let Some(recipe_max) = recipe_max_result {
+            if recipe_max > max_timestamp {
+                max_timestamp = recipe_max;
+            }
+        }
+
+        Ok(max_timestamp)
+    }
+
+    /// Generate a meal prep report for a meal plan
+    #[tool(
+        description = "Generate a comprehensive meal prep report for a meal plan. Analyzes ingredients, shelf life, and prep timing to create a detailed prep plan with timeline and storage recommendations."
+    )]
+    async fn generate_meal_prep_report(
+        &self,
+        params: Parameters<GenerateMealPrepReportParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let meal_plan_id = params.0.meal_plan_id.ok_or_else(|| {
+            McpError::invalid_params("meal_plan_id is required", None)
+        })?;
+        let uuid = Uuid::parse_str(&meal_plan_id)
+            .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
+
+        let format = params.0.format.as_deref().unwrap_or("markdown");
+        if format != "markdown" {
+            return Err(McpError::invalid_params(
+                format!("Unsupported format: {}. Only 'markdown' is currently supported", format),
+                None,
+            ));
+        }
+
+        // Compute current cache version
+        let current_version = self
+            .compute_meal_plan_cache_version(uuid)
+            .await
+            .map_err(convert_error)?;
+
+        // Check cache
+        {
+            let cache = self.report_cache.read().map_err(|e| {
+                McpError::internal_error(format!("Cache lock error: {}", e), None)
+            })?;
+
+            if let Some(cached) = cache.get(&uuid) {
+                // Check if cached version matches current version
+                if cached.version == current_version {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        cached.report.clone(),
+                    )]));
+                }
+            }
+        }
+
+        // Cache miss or version mismatch - generate new report
+        let report = NutritionService::generate_meal_prep_report(&self.pool, uuid)
+            .await
+            .map_err(convert_error)?;
+
+        // Store in cache
+        {
+            let mut cache = self.report_cache.write().map_err(|e| {
+                McpError::internal_error(format!("Cache lock error: {}", e), None)
+            })?;
+            cache.insert(
+                uuid,
+                CachedReport {
+                    report: report.clone(),
+                    version: current_version,
+                },
+            );
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(report)]))
+    }
+
     // ========== Consolidated Family Member Management ==========
 
     /// Manage family members: create, update, or delete
@@ -2068,6 +2177,12 @@ struct ManageFamilyMemberDataParams {
 struct CheckAllergensParams {
     family_member_id: String,
     recipe_id: String,
+}
+
+#[derive(Deserialize, Serialize, schemars::JsonSchema)]
+struct GenerateMealPrepReportParams {
+    meal_plan_id: Option<String>,
+    format: Option<String>,
 }
 
 // Error conversion helper
