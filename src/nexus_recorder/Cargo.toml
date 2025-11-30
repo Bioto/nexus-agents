@@ -1,0 +1,94 @@
+[package]
+name = "nexus-recorder"
+version = "0.1.0"
+edition = "2021"
+description = "Unified recording module for audio, screen, and input capture"
+
+[[bin]]
+name = "nexus-recorder"
+path = "src/main.rs"
+
+[dependencies]
+# CLI & Async
+clap = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+log = "0.4.22"
+simplelog = "0.12.2"
+tracing = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+rmp-serde = "1.1"
+
+# Time & IDs
+chrono = { version = "0.4.38", features = ["serde"] }
+uuid = { workspace = true }
+
+# TUI
+ratatui = { workspace = true }
+crossterm = "0.28"
+ctrlc = "3.4"
+
+# Audio (from nexus_audio)
+portaudio = "0.7"
+cpal = "0.15"
+hound = "3.5"
+whisper-rs = "0.15"
+rodio = "0.18"
+
+# WebSocket/Network (from nexus_audio)
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+url = "2.5"
+futures-util = "0.3"
+http = "1.1"
+reqwest = { workspace = true }
+
+# Screen/Video (from nexus_screen)
+ffmpeg-next = { git = "https://github.com/zmwangx/rust-ffmpeg" }
+image = "0.25"
+glob = "0.3"
+
+# Input capture (from nexus_logger)
+device_query = "3.0"
+
+# Database & Storage (from nexus_logger)
+tempfile = "3.10"
+flate2 = "1.0"
+crossbeam-channel = "0.5"
+
+# System tray (from nexus_logger)
+tray-icon = "0.21"
+
+# Core dependency
+nexus-core = { path = "../nexus_core" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.5"
+
+[lints.clippy]
+# Enable pedantic lints (very strict, but helpful)
+pedantic = "warn"
+# Warn about unwrap() usage (prefer proper error handling)
+unwrap_used = "warn"
+# Warn about expect() usage (prefer proper error handling)
+expect_used = "warn"
+# Warn about missing documentation on public items
+missing_docs = "warn"
+# Warn about unused results (encourages #[must_use])
+unused_must_use = "warn"
+# Note: To allow specific clippy lints, use #[allow(clippy::lint_name)] in code
+# Common ones we allow: module_name_repetitions, must_use_candidate, missing_errors_doc
+

@@ -1,13 +1,11 @@
 [workspace]
 members = [
-    "src/nexus_audio",
     "src/nexus_core",
     "src/nexus_gui",
-    "src/nexus_screen",
     "src/nexus",
     "src/nexus_sandbox",
     "src/nexus_mcp",
-    "src/nexus_logger",
+    "src/nexus_recorder",
     "src/x_toolbox",
 ]
 resolver = "2"

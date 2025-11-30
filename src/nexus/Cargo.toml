@@ -10,8 +10,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 anyhow = "1.0"
-nexus-audio = { path = "../nexus_audio" }
-nexus-screen = { path = "../nexus_screen" }
+nexus-recorder = { path = "../nexus_recorder" }
 tokio = { workspace = true }
 nexus-gui = { path = "../nexus_gui" }
 nexus-core = { path = "../nexus_core" }

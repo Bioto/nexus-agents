@@ -3145,22 +3145,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyper-tls"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper",
- "hyper-util",
- "native-tls",
- "tokio",
- "tokio-native-tls",
- "tower-service",
-]
-
-[[package]]
 name = "hyper-util"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3179,11 +3163,9 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2",
- "system-configuration",
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry",
 ]
 
 [[package]]
@@ -4329,46 +4311,14 @@ dependencies = [
  "clap",
  "crossterm",
  "log",
- "nexus-audio",
  "nexus-core",
  "nexus-gui",
- "nexus-screen",
+ "nexus-recorder",
  "nexus_mcp",
  "ratatui",
  "serde_json",
  "simplelog",
  "tokio",
-]
-
-[[package]]
-name = "nexus-audio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "clap",
- "cpal",
- "crossterm",
- "ctrlc",
- "futures-util",
- "hound",
- "http",
- "libc",
- "log",
- "portaudio",
- "ratatui",
- "reqwest",
- "rmp-serde",
- "rodio",
- "serde",
- "serde_json",
- "simplelog",
- "thiserror 2.0.17",
- "tokio",
- "tokio-tungstenite",
- "url",
- "whisper-rs",
 ]
 
 [[package]]
@@ -4416,57 +4366,46 @@ dependencies = [
 ]
 
 [[package]]
-name = "nexus-screen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "criterion",
- "crossterm",
- "ctrlc",
- "ffmpeg-next",
- "glob",
- "image",
- "libc",
- "log",
- "proptest",
- "ratatui",
- "reqwest",
- "serde",
- "serde_json",
- "simplelog",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "nexus_logger"
+name = "nexus-recorder"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
  "clap",
+ "cpal",
+ "criterion",
  "crossbeam-channel",
+ "crossterm",
  "ctrlc",
  "device_query",
+ "ffmpeg-next",
  "flate2",
+ "futures-util",
+ "glob",
  "gtk",
  "hound",
+ "http",
  "image",
+ "libc",
  "log",
- "nexus-audio",
  "nexus-core",
- "nexus-screen",
+ "portaudio",
+ "proptest",
+ "ratatui",
  "reqwest",
+ "rmp-serde",
+ "rodio",
  "serde",
  "serde_json",
+ "simplelog",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-tungstenite",
+ "tracing",
  "tray-icon",
+ "url",
  "uuid",
  "whisper-rs",
 ]
@@ -6034,22 +5973,17 @@ checksum = "9d0946410b9f7b082a427e4ef5c8ff541a88b357bc6c637c40db3a68ac70a36f"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "encoding_rs",
  "futures-core",
  "futures-util",
- "h2",
  "http",
  "http-body",
  "http-body-util",
  "hyper",
  "hyper-rustls",
- "hyper-tls",
  "hyper-util",
  "js-sys",
  "log",
- "mime",
  "mime_guess",
- "native-tls",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -6060,7 +5994,6 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-native-tls",
  "tokio-rustls",
  "tokio-util",
  "tower 0.5.2",
@@ -7495,27 +7428,6 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
- "libc",
-]
-
-[[package]]
-name = "system-configuration"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c879d448e9d986b661742763247d3693ed13609438cf3d006f51f5368a5ba6b"
-dependencies = [
- "bitflags 2.10.0",
- "core-foundation 0.9.4",
- "system-configuration-sys",
-]
-
-[[package]]
-name = "system-configuration-sys"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
-dependencies = [
- "core-foundation-sys",
  "libc",
 ]
 
@@ -9018,17 +8930,6 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
-
-[[package]]
-name = "windows-registry"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
-dependencies = [
- "windows-link",
- "windows-result 0.4.1",
- "windows-strings",
-]
 
 [[package]]
 name = "windows-result"

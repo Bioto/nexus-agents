@@ -3,11 +3,10 @@ mod cli;
 use chrono;
 use clap::Parser;
 use cli::{Cli, Commands};
-use nexus_audio::{self, Commands as AudioCommands};
 use nexus_core::{self, Commands as CoreCommands};
 use nexus_gui::{self, Commands as GuiCommands};
 use nexus_mcp::{self, Commands as McpCommands};
-use nexus_screen::{self, Commands as ScreenCommands};
+use nexus_recorder::{self, Commands as RecorderCommands};
 use simplelog::{
     ColorChoice, CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger,
 };
@@ -79,16 +78,17 @@ async fn main() -> anyhow::Result<()> {
     let _log_path = init_logging();
 
     match cli.command {
-        Commands::Audio { command } => match command {
-            AudioCommands::Record(args) => nexus_audio::run_record(args)?,
-            AudioCommands::Monitor(args) => nexus_audio::run_monitor(args)?,
-            AudioCommands::Listen(args) => nexus_audio::run_listen(args)?,
-            AudioCommands::Speak(args) => nexus_audio::run_speak(args).await?,
-            AudioCommands::TestVoice(args) => nexus_audio::run_test_voice(args).await?,
-        },
-        Commands::Screen { command } => match command {
-            ScreenCommands::Screenshot(args) => nexus_screen::run_screenshot(args)?,
-            ScreenCommands::Record(args) => nexus_screen::run_record(args).await?,
+        Commands::Recorder { command } => match command {
+            RecorderCommands::Record(args) => nexus_recorder::run_record(args)?,
+            RecorderCommands::Monitor(args) => nexus_recorder::run_monitor(args)?,
+            RecorderCommands::Listen(args) => nexus_recorder::run_listen(args)?,
+            RecorderCommands::Speak(args) => nexus_recorder::run_speak(args).await?,
+            RecorderCommands::TestVoice(args) => nexus_recorder::run_test_voice(args).await?,
+            RecorderCommands::Screenshot(args) => nexus_recorder::run_screenshot(args)?,
+            RecorderCommands::RecordScreen(args) => nexus_recorder::run_record_screen(args).await?,
+            RecorderCommands::Capture(args) => nexus_recorder::run_capture(args).await?,
+            RecorderCommands::Unified(args) => nexus_recorder::run_unified(args).await?,
+            RecorderCommands::Report(args) => nexus_recorder::run_report(args).await?,
         },
         Commands::Gui { command } => match command {
             GuiCommands::Show(args) => nexus_gui::run_show(args)?,

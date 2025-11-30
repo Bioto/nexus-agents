@@ -1,11 +1,10 @@
 pub mod commands;
 
 use clap::{Parser, Subcommand};
-use nexus_audio::Commands as AudioCommands;
 use nexus_core::Commands as CoreCommands;
 use nexus_gui::Commands as GuiCommands;
 use nexus_mcp::Commands as McpCommands;
-use nexus_screen::Commands as ScreenCommands;
+use nexus_recorder::Commands as RecorderCommands;
 
 /// Nexus - AI Agent Framework
 #[derive(Parser)]
@@ -19,15 +18,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Voice interface commands from nexus-audio
-    Audio {
+    /// Recording commands (audio, screen, input capture) from nexus-recorder
+    Recorder {
         #[command(subcommand)]
-        command: AudioCommands,
-    },
-    /// Screen interface commands from nexus-screen
-    Screen {
-        #[command(subcommand)]
-        command: ScreenCommands,
+        command: RecorderCommands,
     },
     /// GUI interface commands from nexus-gui
     Gui {
