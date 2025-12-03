@@ -19,7 +19,7 @@ use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 
 use super::window_info::{WindowInfo, WindowInfoService};
 

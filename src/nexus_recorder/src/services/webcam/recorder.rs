@@ -6,16 +6,12 @@
 
 use crate::error::{RecorderError, Result};
 use crate::services::webcam::device::WebcamDevice;
-use crate::services::webcam::format::{mjpeg_to_rgb, yuyv_to_rgb};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use v4l::buffer::Type;
-use v4l::io::mmap::Stream;
-use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 use v4l::FourCC;
 use log::{debug, error, info, warn};

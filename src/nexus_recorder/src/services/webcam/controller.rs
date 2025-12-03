@@ -270,7 +270,7 @@ impl WebcamController {
             }).map_err(|e| RecorderError::Other(format!("Failed to reset tilt: {}", e)))?;
         }
 
-        if let Some((id, min, max)) = self.zoom_ctrl {
+        if let Some((id, min, _max)) = self.zoom_ctrl {
             let default = min; // Usually zoom out is minimum
             device.device_mut().set_control(Control {
                 id,

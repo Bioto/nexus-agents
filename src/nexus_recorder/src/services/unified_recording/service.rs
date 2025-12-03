@@ -319,7 +319,7 @@ impl UnifiedRecordingService {
                 } else {
                     // Create new ProcessingService if click context is disabled
                     let processing_config = crate::services::context::context_processing::ProcessingConfig::from_env();
-                    match ProcessingService::start(processing_config, db.clone()) {
+                    match ProcessingService::start(processing_config, (*db).clone()) {
                         Ok(handle) => handle,
                         Err(e) => {
                             warn!("⚠️  Failed to start processing service for periodic context: {}", e);
@@ -440,6 +440,7 @@ impl UnifiedRecordingService {
         for (config_idx, audio_config) in self.config.audio_configs.iter().enumerate() {
             if audio_config.enabled && audio_config.monitor_desktop_audio {
                 // Set up loopback sink and default source BEFORE starting recording
+                #[cfg(target_os = "linux")]
                 let mut loopback_created = false;
                 #[cfg(target_os = "linux")]
                 {
@@ -1069,7 +1070,7 @@ impl UnifiedRecordingService {
         info!("📹 Starting webcam recording: {:?}", config.output_path);
 
         // Create recorder
-        let mut recorder = WebcamRecorder::new(config.clone()).map_err(|e| {
+        let recorder = WebcamRecorder::new(config.clone()).map_err(|e| {
             RecorderError::Other(format!("Failed to initialize webcam recorder: {}", e))
         })?;
 

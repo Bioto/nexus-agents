@@ -13,11 +13,9 @@ use std::fs;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
-use tokio::time::sleep;
 use uuid::Uuid;
 
 const FRAME_SYSTEM_PROMPT: &str = "You are an expert UI and user behavior analyst. Analyze the provided screenshot and, if given, use any prior frame descriptions to infer the user's likely action. In one or two clear sentences, describe what the user is doing, referencing salient UI elements, visible text, and any change or intent you can deduce from the visual context.";
@@ -2036,7 +2034,7 @@ impl ProcessingService {
     async fn summarize_periodic_context(
         api_service: Arc<NexusApiService>,
         config: &ProcessingConfig,
-        job: &ProcessingJob,
+        _job: &ProcessingJob,
         frames: &[FrameDescription],
         reconstructed_text: &str,
         clicks: &[String],

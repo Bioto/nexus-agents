@@ -26,7 +26,6 @@ impl WebcamAnalysisConfig {
 use crate::services::input::InputEvent;
 use crate::services::storage::EventWriterConfig;
 use crate::services::webcam::WebcamRecordingConfig;
-use std::time::Duration;
 
 /// Default video segment duration in seconds (1 hour).
 /// Used when segmenting long recordings into multiple files.
