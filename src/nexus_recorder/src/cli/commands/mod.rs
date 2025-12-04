@@ -18,3 +18,6 @@ pub mod unified;
 // Report (from nexus_logger)
 pub mod report;
 
+// Webcam splitter
+pub mod splitter;
+

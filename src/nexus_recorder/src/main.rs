@@ -91,6 +91,9 @@ async fn main() -> anyhow::Result<()> {
 
         // Report
         Commands::Report(args) => nexus_recorder::run_report(args).await?,
+
+        // Webcam splitter
+        Commands::Splitter(args) => nexus_recorder::run_splitter(args)?,
     }
 
     Ok(())

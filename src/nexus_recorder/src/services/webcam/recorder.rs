@@ -100,18 +100,30 @@ impl WebcamRecorder {
         
         info!("Webcam recorder initialized: {}x{} {:?}", width, height, fourcc);
         
-        // Try to set MJPEG if not already set
+        // Check for supported formats:
+        // - MJPG: Compressed MJPEG (most webcams)
+        // - YUYV: Packed YUV 4:2:2 (some webcams)
+        // - YU12/I420: Planar YUV 4:2:0 (v4l2loopback devices)
+        // - NV12: Semi-planar YUV 4:2:0
         let is_mjpeg = fourcc == FourCC::new(b"MJPG");
         let is_yuyv = fourcc == FourCC::new(b"YUYV");
+        let is_yuv420p = fourcc == FourCC::new(b"YU12") 
+            || fourcc == FourCC::new(b"I420")
+            || fourcc == FourCC::new(b"NV12");
         
-        if !is_mjpeg && !is_yuyv {
+        let is_supported = is_mjpeg || is_yuyv || is_yuv420p;
+        
+        if !is_supported {
             warn!("Unsupported format: {:?}. Trying to set MJPEG...", fourcc);
             let mut new_format = format.clone();
             new_format.fourcc = FourCC::new(b"MJPG");
             if let Err(e) = device.device_mut().set_format(&new_format) {
-                return Err(RecorderError::Other(format!("Failed to set format: {}", e)));
+                // v4l2loopback devices may not support format changes - that's OK
+                // They output whatever format the writer provides
+                warn!("Could not change format to MJPEG: {}. Will try rawvideo.", e);
+            } else {
+                info!("Changed format to MJPEG");
             }
-            info!("Changed format to MJPEG");
         }
 
         Ok(Self {
@@ -131,9 +143,24 @@ impl WebcamRecorder {
         let width = format.width as usize;
         let height = format.height as usize;
         let fourcc = format.fourcc;
-        let is_mjpeg = fourcc == FourCC::new(b"MJPG");
         
-        info!("Starting recording: {}x{} (MJPEG={})", width, height, is_mjpeg);
+        // Determine the FFmpeg input format based on device fourcc
+        let (input_format, format_name) = if fourcc == FourCC::new(b"MJPG") {
+            ("mjpeg", "MJPEG")
+        } else if fourcc == FourCC::new(b"YUYV") {
+            ("yuyv422", "YUYV")
+        } else if fourcc == FourCC::new(b"YU12") || fourcc == FourCC::new(b"I420") {
+            ("yuv420p", "YUV420P")
+        } else if fourcc == FourCC::new(b"NV12") {
+            ("nv12", "NV12")
+        } else {
+            // For v4l2loopback or unknown formats, try rawvideo with yuv420p
+            // This is the most common format for virtual cameras
+            warn!("Unknown fourcc {:?}, assuming rawvideo yuv420p", fourcc);
+            ("rawvideo", "rawvideo")
+        };
+        
+        info!("Starting recording: {}x{} (format={})", width, height, format_name);
         info!("Output: {:?}", self.config.output_path);
 
         // Create output directory if needed
@@ -166,10 +193,21 @@ impl WebcamRecorder {
         
         info!("Starting ffmpeg to capture and encode webcam video...");
         info!("Live recording to: {:?} (will convert to {:?} when done)", live_output_path, output_path);
-        let mut ffmpeg_process = match Command::new("ffmpeg")
-            .arg("-y") // Overwrite output file
-            .arg("-f").arg("v4l2")
-            .arg("-input_format").arg(if is_mjpeg { "mjpeg" } else { "yuyv422" })
+        
+        // Build FFmpeg command with appropriate input format
+        // For rawvideo (v4l2loopback), we need to specify pixel format explicitly
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y"); // Overwrite output file
+        cmd.arg("-f").arg("v4l2");
+        
+        if input_format == "rawvideo" {
+            // For v4l2loopback devices outputting raw frames
+            cmd.arg("-pix_fmt").arg("yuv420p");
+        } else {
+            cmd.arg("-input_format").arg(input_format);
+        }
+        
+        let mut ffmpeg_process = match cmd
             .arg("-video_size").arg(format!("{}x{}", width, height))
             .arg("-framerate").arg(framerate.to_string())
             .arg("-i").arg(&device_path)
@@ -346,6 +384,166 @@ impl WebcamRecorder {
         }
         
         info!("✅ Webcam recording saved to: {:?}", output_path);
+        Ok(())
+    }
+
+    /// Record directly using FFmpeg without v4l2 crate format detection.
+    /// 
+    /// This is useful for v4l2loopback virtual cameras where the v4l2 crate
+    /// may fail to query format information. FFmpeg handles these devices better.
+    pub fn record_direct(
+        config: &WebcamRecordingConfig,
+        stop_flag: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let device_path = &config.device_path;
+        let output_path = &config.output_path;
+        let framerate = config.framerate;
+        
+        info!("📹 Direct FFmpeg recording from {} to {:?}", device_path, output_path);
+        
+        // Create output directory if needed
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| RecorderError::Other(format!("Failed to create output directory: {}", e)))?;
+        }
+        
+        // Use MPEG-TS for live analysis (can be read while writing)
+        let output_ext = output_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("mp4");
+        let use_ts_for_live = output_ext == "mp4";
+        
+        let live_output_path = if use_ts_for_live {
+            output_path.with_extension("ts")
+        } else {
+            output_path.clone()
+        };
+        
+        info!("Live recording to: {:?} (will convert to {:?} when done)", live_output_path, output_path);
+        
+        // For v4l2loopback devices, we need to explicitly specify the input format
+        // because the device doesn't properly advertise its format until data is flowing.
+        // The splitter outputs raw YUV420P frames at the camera's native resolution.
+        // We use rawvideo format with explicit pixel format for v4l2loopback compatibility.
+        // Detect v4l2loopback: typically /dev/video10, /dev/video11, etc. (video1X where X is a digit)
+        let is_loopback = device_path.starts_with("/dev/video1") 
+            && device_path.len() > "/dev/video1".len()
+            && device_path.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false);
+        
+        info!("📹 Device {} detected as v4l2loopback: {}", device_path, is_loopback);
+        
+        // Build FFmpeg command
+        // For v4l2loopback: we need to specify the input format because the device
+        // doesn't properly advertise its capabilities until data is flowing
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y"); // Overwrite output
+        cmd.arg("-f").arg("v4l2"); // Input format is v4l2 for both real and loopback devices
+        
+        if is_loopback {
+            // v4l2loopback: specify the pixel format the splitter is writing
+            // The splitter outputs YUV420P frames
+            cmd.arg("-input_format").arg("yuv420p")
+                .arg("-video_size").arg("1280x720"); // Match splitter output (TODO: make configurable)
+        }
+        
+        cmd.arg("-framerate").arg(framerate.to_string())
+            .arg("-i").arg(device_path);
+        
+        // Output encoding settings
+        let mut ffmpeg_process = cmd
+            .arg("-c:v").arg("libx264")
+            .arg("-preset").arg("ultrafast")
+            .arg("-tune").arg("zerolatency")
+            .arg("-crf").arg("23")
+            .arg("-pix_fmt").arg("yuv420p")
+            .arg("-g").arg("30")
+            .arg("-flush_packets").arg("1")
+            .arg("-fflags").arg("+flush_packets+genpts")
+            .arg(&live_output_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| RecorderError::Other(format!(
+                "Failed to start ffmpeg: {}. Make sure ffmpeg is installed.", e
+            )))?;
+        
+        info!("✅ FFmpeg direct recording started");
+        
+        // Monitor stderr in background
+        let ffmpeg_stderr = ffmpeg_process.stderr.take();
+        let stop_flag_clone = Arc::clone(&stop_flag);
+        let _monitor_handle = if let Some(stderr) = ffmpeg_stderr {
+            Some(thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    if stop_flag_clone.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if let Ok(line) = line {
+                        if line.contains("error") || line.contains("Error") || line.contains("failed") {
+                            error!("FFmpeg: {}", line);
+                        } else if line.contains("frame=") {
+                            debug!("FFmpeg: {}", line);
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+        
+        // Wait for stop signal or process exit
+        while !stop_flag.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(100));
+            
+            if let Ok(Some(status)) = ffmpeg_process.try_wait() {
+                if !status.success() && !stop_flag.load(Ordering::Relaxed) {
+                    return Err(RecorderError::Other(format!(
+                        "FFmpeg exited unexpectedly with code: {:?}",
+                        status.code()
+                    )));
+                }
+                break;
+            }
+        }
+        
+        // Stop ffmpeg gracefully
+        info!("Stopping FFmpeg recording...");
+        let _ = ffmpeg_process.kill();
+        let _ = ffmpeg_process.wait();
+        
+        // Convert TS to MP4 if needed
+        if use_ts_for_live && live_output_path != *output_path {
+            info!("Converting TS to MP4...");
+            let convert_result = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i").arg(&live_output_path)
+                .arg("-c").arg("copy")
+                .arg(output_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output();
+            
+            match convert_result {
+                Ok(output) if output.status.success() => {
+                    info!("✅ Converted to MP4: {:?}", output_path);
+                    if let Err(e) = std::fs::remove_file(&live_output_path) {
+                        warn!("Failed to remove temporary TS file: {}", e);
+                    }
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("TS to MP4 conversion failed: {}", stderr);
+                }
+                Err(e) => {
+                    warn!("Failed to run conversion: {}", e);
+                }
+            }
+        }
+        
+        info!("✅ Direct webcam recording complete: {:?}", output_path);
         Ok(())
     }
 

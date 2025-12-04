@@ -43,6 +43,10 @@ pub enum Commands {
     // Report
     /// Generate a report of all collected data from ClickHouse
     Report(commands::report::ReportArgs),
+
+    // Webcam splitter
+    /// Split webcam to multiple virtual cameras (requires v4l2loopback)
+    Splitter(commands::splitter::SplitterArgs),
 }
 
 // Re-export command handlers for convenience
@@ -65,4 +69,7 @@ pub use commands::unified::run_unified;
 
 // Report
 pub use commands::report::run_report;
+
+// Webcam splitter
+pub use commands::splitter::run_splitter;
 

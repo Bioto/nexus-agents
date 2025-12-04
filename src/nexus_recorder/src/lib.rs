@@ -9,7 +9,7 @@ pub mod tui;
 /// CLI entry points and argument parsers.
 pub use cli::{
     run_capture, run_listen, run_monitor, run_record, run_record_screen, run_report,
-    run_screenshot, run_speak, run_test_voice, run_unified, Cli, Commands,
+    run_screenshot, run_speak, run_splitter, run_test_voice, run_unified, Cli, Commands,
 };
 
 /// Custom error types and Result alias for the crate.
@@ -42,4 +42,5 @@ pub use services::{
     mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb,
     WebcamRecorder, WebcamRecordingConfig,
     WebcamController, PtzControl, PtzState,
+    WebcamSplitter, SplitterConfig, SplitterHandle,
 };

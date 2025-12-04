@@ -1069,42 +1069,52 @@ impl UnifiedRecordingService {
 
         info!("📹 Starting webcam recording: {:?}", config.output_path);
 
-        // Create recorder
-        let recorder = WebcamRecorder::new(config.clone()).map_err(|e| {
-            RecorderError::Other(format!("Failed to initialize webcam recorder: {}", e))
-        })?;
+        // Try to create recorder using v4l2 crate
+        // This may fail for v4l2loopback virtual camera devices
+        match WebcamRecorder::new(config.clone()) {
+            Ok(recorder) => {
+                info!("📹 Using v4l2 format detection");
+                
+                // Wrap recorder in Arc so we can share it with the monitor thread
+                let recorder_arc = StdArc::new(std::sync::Mutex::new(recorder));
+                let recorder_for_monitor = StdArc::clone(&recorder_arc);
+                let stop_signal_clone = stop_signal.clone();
 
-        // Wrap recorder in Arc so we can share it with the monitor thread
-        let recorder_arc = StdArc::new(std::sync::Mutex::new(recorder));
-        let recorder_for_monitor = StdArc::clone(&recorder_arc);
-        let stop_signal_clone = stop_signal.clone();
+                // Spawn a thread to monitor stop_signal and stop the recorder
+                let monitor_handle = std::thread::spawn(move || {
+                    while !stop_signal_clone.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    // Stop the recorder when stop_signal is set
+                    if let Ok(rec) = recorder_for_monitor.lock() {
+                        rec.stop();
+                    }
+                });
 
-        // Spawn a thread to monitor stop_signal and stop the recorder
-        let monitor_handle = std::thread::spawn(move || {
-            while !stop_signal_clone.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                // Record (blocking call - will check stop_flag internally)
+                let result = {
+                    let mut rec = recorder_arc.lock().map_err(|e| {
+                        RecorderError::Other(format!("Failed to lock recorder: {}", e))
+                    })?;
+                    rec.record()
+                };
+
+                // Signal monitor to stop
+                stop_signal.store(true, Ordering::Relaxed);
+                let _ = monitor_handle.join();
+
+                if let Err(e) = result {
+                    error!("Webcam recording error: {}", e);
+                    return Err(RecorderError::Other(format!("Webcam recording failed: {}", e)));
+                }
             }
-            // Stop the recorder when stop_signal is set
-            if let Ok(rec) = recorder_for_monitor.lock() {
-                rec.stop();
+            Err(e) => {
+                // v4l2 format detection failed - use direct FFmpeg recording
+                // This is common for v4l2loopback virtual camera devices
+                warn!("📹 v4l2 format detection failed: {}. Using direct FFmpeg recording.", e);
+                
+                WebcamRecorder::record_direct(&config, stop_signal)?;
             }
-        });
-
-        // Record (blocking call - will check stop_flag internally)
-        let result = {
-            let mut rec = recorder_arc.lock().map_err(|e| {
-                RecorderError::Other(format!("Failed to lock recorder: {}", e))
-            })?;
-            rec.record()
-        };
-
-        // Signal monitor to stop
-        stop_signal.store(true, Ordering::Relaxed);
-        let _ = monitor_handle.join();
-
-        if let Err(e) = result {
-            error!("Webcam recording error: {}", e);
-            return Err(RecorderError::Other(format!("Webcam recording failed: {}", e)));
         }
 
         info!("✅ Webcam recording complete");

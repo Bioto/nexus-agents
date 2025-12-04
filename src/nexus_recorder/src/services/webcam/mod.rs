@@ -5,6 +5,7 @@
 //! - Video recording from webcams
 //! - Pan/Tilt/Zoom (PTZ) control
 //! - Format conversion utilities
+//! - Camera feed splitting (one camera → multiple virtual cameras)
 //!
 //! The services are designed to work independently - you can record video
 //! while another module controls PTZ, or vice versa.
@@ -37,14 +38,40 @@
 //! // Stop recording when done
 //! handle.stop();
 //! ```
+//!
+//! # Example: Camera Splitting
+//!
+//! ```no_run
+//! use nexus_recorder::services::webcam::splitter::{WebcamSplitter, SplitterConfig};
+//!
+//! // Split one camera to two virtual devices
+//! let config = SplitterConfig {
+//!     input_device: "/dev/video0".to_string(),
+//!     output_devices: vec![
+//!         "/dev/video10".to_string(),
+//!         "/dev/video11".to_string(),
+//!     ],
+//!     ..Default::default()
+//! };
+//!
+//! let mut splitter = WebcamSplitter::new(config)?;
+//! let handle = splitter.start()?;
+//!
+//! // App 1 can now use /dev/video10
+//! // App 2 can now use /dev/video11
+//!
+//! handle.stop();
+//! ```
 
 pub mod device;
 pub mod format;
 pub mod recorder;
 pub mod controller;
+pub mod splitter;
 
 pub use device::{list_v4l2_devices, show_device_info, WebcamDevice, WebcamDeviceInfo};
 pub use format::{mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb};
 pub use recorder::{WebcamRecorder, WebcamRecordingConfig};
 pub use controller::{WebcamController, PtzControl, PtzState};
+pub use splitter::{WebcamSplitter, SplitterConfig, SplitterHandle};
 

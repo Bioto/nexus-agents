@@ -39,4 +39,5 @@ pub use webcam::{
     mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb,
     WebcamRecorder, WebcamRecordingConfig,
     WebcamController, PtzControl, PtzState,
+    WebcamSplitter, SplitterConfig, SplitterHandle,
 };

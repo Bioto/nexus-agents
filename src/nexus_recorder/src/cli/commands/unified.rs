@@ -4,8 +4,10 @@ use crate::services::unified_recording::{
     AudioRecordingConfig, DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel,
     ScreenRecordingConfig, UnifiedRecordingConfig, UnifiedRecordingService,
 };
+use crate::services::webcam::splitter::{SplitterConfig, SplitterHandle, WebcamSplitter};
 use chrono::DateTime;
 use clap::Args;
+use log::info;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -156,6 +158,20 @@ pub struct UnifiedArgs {
     /// Number of frames to extract per periodic context interval (default: 3)
     #[arg(long, default_value = "3")]
     pub periodic_context_frames: u32,
+
+    /// Enable webcam splitting (requires v4l2loopback)
+    /// Splits the physical camera to multiple virtual cameras, allowing Nexus and other apps to use separate camera devices
+    #[arg(long)]
+    pub enable_splitter: bool,
+
+    /// Physical webcam device to split from (only used with --enable-splitter)
+    #[arg(long, default_value = "/dev/video0")]
+    pub splitter_input: String,
+
+    /// Virtual camera devices to split to (comma-separated, only used with --enable-splitter)
+    /// First device is used by Nexus, others can be used by external apps
+    #[arg(long, default_value = "/dev/video10,/dev/video11")]
+    pub splitter_outputs: String,
 }
 
 /// Runs the unified recording command based on args.
@@ -181,6 +197,56 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         crate::error::RecorderError::Other(format!("Failed to set signal handler: {}", e))
     })?;
 
+    // Start webcam splitter if enabled
+    let mut splitter_handle: Option<SplitterHandle> = None;
+    let effective_webcam_device = if args.enable_splitter {
+        info!("Starting webcam splitter...");
+        println!("📹 Starting webcam splitter...");
+        
+        let output_devices: Vec<String> = args
+            .splitter_outputs
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        if output_devices.is_empty() {
+            return Err(crate::error::RecorderError::Configuration(
+                "Splitter requires at least one output device".to_string(),
+            ));
+        }
+        
+        let splitter_config = SplitterConfig {
+            input_device: args.splitter_input.clone(),
+            output_devices: output_devices.clone(),
+            framerate: args.framerate,
+            width: None,
+            height: None,
+            input_format: None,
+        };
+        
+        let mut splitter = WebcamSplitter::new(splitter_config)?;
+        let handle = splitter.start()?;
+        
+        println!("   Physical camera: {}", args.splitter_input);
+        println!("   Virtual cameras: {:?}", output_devices);
+        println!("   Nexus will use: {}", output_devices[0]);
+        if output_devices.len() > 1 {
+            println!("   Others can use: {:?}", &output_devices[1..]);
+        }
+        
+        let nexus_device = output_devices[0].clone();
+        splitter_handle = Some(handle);
+        
+        // Wait for the splitter to fully initialize and start writing to loopback devices
+        // FFmpeg needs time to open the camera, decode, and start outputting to v4l2loopback
+        println!("   Waiting for splitter to initialize...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        
+        nexus_device
+    } else {
+        args.webcam_device.clone()
+    };
+
     // Determine if we're using webcam or screen recording
     let use_webcam = args.webcam || args.no_screen;
     
@@ -204,7 +270,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         },
         webcam_config: if use_webcam {
             Some(crate::services::webcam::WebcamRecordingConfig {
-                device_path: args.webcam_device.clone(),
+                device_path: effective_webcam_device.clone(),
                 output_path: args.output.clone(),
                 framerate: args.framerate,
                 max_duration_secs: if args.duration > 0 {
@@ -382,7 +448,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         webcam_analysis_config: if use_webcam && args.webcam_analysis {
             Some(crate::services::unified_recording::WebcamAnalysisConfig::with_device(
                 args.webcam_analysis_interval,
-                args.webcam_device.clone(),
+                effective_webcam_device.clone(),
             ))
         } else {
             None
@@ -410,6 +476,12 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         println!("   Duration: {} seconds", args.duration);
     } else {
         println!("   Duration: until stopped");
+    }
+    if args.enable_splitter {
+        println!("   Camera splitter: ✓");
+        println!("     Using device: {}", effective_webcam_device);
+    } else if use_webcam {
+        println!("   Webcam device: {}", effective_webcam_device);
     }
     println!("   Keyboard: {}", if !args.no_keyboard { "✓" } else { "✗" });
     println!("   Mouse: {}", if !args.no_mouse { "✓" } else { "✗" });
@@ -720,6 +792,13 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
 
     if let Some(s) = session {
         s.wait().await?;
+    }
+
+    // Stop the splitter if it was started
+    if let Some(handle) = splitter_handle {
+        info!("Stopping webcam splitter...");
+        println!("📹 Stopping webcam splitter...");
+        handle.stop();
     }
 
     println!("\n✅ Unified recording complete!");

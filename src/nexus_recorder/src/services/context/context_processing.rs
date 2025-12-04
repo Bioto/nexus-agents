@@ -1864,9 +1864,14 @@ impl ProcessingService {
             frames_per_interval
         );
 
-        // Use .ts extension for live recording files
+        // Check for .ts extension first (for live streaming recordings), then fall back to original path
         let live_video_path = if video_path.extension().and_then(|e| e.to_str()) == Some("mp4") {
-            video_path.with_extension("ts")
+            let ts_path = video_path.with_extension("ts");
+            if ts_path.exists() {
+                ts_path
+            } else {
+                video_path.clone()
+            }
         } else {
             video_path.clone()
         };
