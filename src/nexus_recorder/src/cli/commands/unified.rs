@@ -7,7 +7,7 @@ use crate::services::unified_recording::{
 use crate::services::webcam::splitter::{SplitterConfig, SplitterHandle, WebcamSplitter};
 use chrono::DateTime;
 use clap::Args;
-use log::info;
+use log::{info, warn};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -818,6 +818,28 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         info!("Stopping webcam splitter...");
         println!("📹 Stopping webcam splitter...");
         handle.stop();
+        
+        // Wait a moment for FFmpeg to fully release the device
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        
+        // Explicitly disconnect the webcam device by opening and closing it
+        // This ensures the device is fully released
+        if args.enable_splitter {
+            let splitter_input = &args.splitter_input;
+            match crate::services::webcam::device::WebcamDevice::open(splitter_input) {
+                Ok(device) => {
+                    info!("🔌 Disconnecting webcam device: {}", splitter_input);
+                    println!("🔌 Disconnecting webcam device: {}", splitter_input);
+                    // Drop the device to close the connection
+                    drop(device);
+                    // Wait a bit more for the device to fully release
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
+                Err(e) => {
+                    warn!("⚠️  Could not open webcam device for disconnection: {} (device may already be released)", e);
+                }
+            }
+        }
     }
 
     println!("\n✅ Unified recording complete!");
