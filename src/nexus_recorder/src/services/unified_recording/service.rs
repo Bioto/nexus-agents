@@ -213,10 +213,11 @@ impl UnifiedRecordingService {
 
         let click_context_for_input = click_context.clone();
         let session_id_for_input = Arc::clone(&session_id);
-        // Use webcam output path if webcam is enabled, otherwise screen output path
-        let video_path_for_input = self.config.webcam_config.as_ref()
+        // Use screen output path for input events (clicks/keyboard are associated with desktop)
+        // Webcam video won't have input events, only desktop recording will
+        let video_path_for_input = self.config.screen_config.as_ref()
             .map(|c| c.output_path.clone())
-            .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+            .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
             .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
         let rotating_writer_for_input = rotating_writer_handle.clone();
         let input_handle = tokio::task::spawn_blocking(move || {
@@ -330,9 +331,10 @@ impl UnifiedRecordingService {
                     }
                 };
 
-                let video_path = self.config.webcam_config.as_ref()
+                // Use screen video for periodic context (input events are associated with desktop)
+                let video_path = self.config.screen_config.as_ref()
                     .map(|c| c.output_path.clone())
-                    .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+                    .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
                     .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
                 
                 let video_path = if video_path.is_absolute() {
@@ -1860,10 +1862,11 @@ impl RecordingSession {
         // Store audio recording start events if enabled
         let db = Database::new().await?;
 
-        // Store video recording path (prefer webcam, fallback to screen)
-        let video_path = self.config.webcam_config.as_ref()
+        // Store video recording path (prefer screen, fallback to webcam)
+        // Input events are associated with desktop/screen recording
+        let video_path = self.config.screen_config.as_ref()
             .map(|c| c.output_path.clone())
-            .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+            .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
             .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
         
         let video_path = if video_path.is_absolute() {
@@ -2245,9 +2248,10 @@ impl RecordingSession {
         }
 
         // Store video recording stop event with final path
-        let video_path = self.config.webcam_config.as_ref()
+        // Prefer screen video (where input events are associated)
+        let video_path = self.config.screen_config.as_ref()
             .map(|c| c.output_path.clone())
-            .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+            .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
             .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
         
         let video_path = if video_path.is_absolute() {
@@ -2301,9 +2305,10 @@ impl RecordingSession {
                     fps
                 );
                 tokio::time::sleep(Duration::from_millis(1000)).await;
-                let video_path = self.config.webcam_config.as_ref()
+                // Use screen video for context analysis (input events are associated with desktop)
+                let video_path = self.config.screen_config.as_ref()
                     .map(|c| c.output_path.clone())
-                    .or_else(|| self.config.screen_config.as_ref().map(|c| c.output_path.clone()))
+                    .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
                     .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
                 let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
 

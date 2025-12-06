@@ -24,9 +24,13 @@ use gtk::glib;
 /// CLI arguments for the unified recording subcommand.
 #[derive(Args)]
 pub struct UnifiedArgs {
-    /// Output video file path
-    #[arg(short = 'o', long, default_value = "output/recording.mp4")]
-    pub output: PathBuf,
+    /// Screen recording output file path
+    #[arg(long, default_value = "output/video_desktop.mp4")]
+    pub screen_output: PathBuf,
+
+    /// Webcam recording output file path
+    #[arg(long, default_value = "output/video_webcam.mp4")]
+    pub webcam_output: PathBuf,
 
     /// Frame rate for video recording
     #[arg(short = 'f', long, default_value = "30")]
@@ -40,7 +44,7 @@ pub struct UnifiedArgs {
     #[arg(short = 'm', long)]
     pub monitor: Option<usize>,
 
-    /// Use webcam instead of screen recording
+    /// Enable webcam recording (can be used alongside screen recording)
     #[arg(long)]
     pub webcam: bool,
 
@@ -64,9 +68,10 @@ pub struct UnifiedArgs {
     #[arg(long)]
     pub ai_reinit: bool,
 
-    /// Enable webcam sentiment analysis (analyzes user emotions/attention)
+    /// Disable webcam sentiment analysis (analyzes user emotions/attention)
+    /// Enabled by default when webcam recording is active
     #[arg(long)]
-    pub webcam_analysis: bool,
+    pub no_webcam_analysis: bool,
 
     /// Webcam analysis interval in seconds (default: 5)
     #[arg(long, default_value = "5")]
@@ -81,8 +86,12 @@ pub struct UnifiedArgs {
     pub no_mic_audio: bool,
 
     /// Microphone audio output file path
-    #[arg(long, default_value = "output/recording.wav")]
+    #[arg(long, default_value = "output/audio_mic.wav")]
     pub mic_audio_output: PathBuf,
+
+    /// Desktop audio output file path
+    #[arg(long, default_value = "output/audio_desktop.wav")]
+    pub desktop_audio_output: PathBuf,
 
     /// Microphone audio sample rate (Hz)
     #[arg(long, default_value = "48000")]
@@ -135,8 +144,13 @@ pub struct UnifiedArgs {
     pub mouse_moves: bool,
 
     /// Frames per second for full-video context analysis (0 = disable)
-    #[arg(long, default_value = "0")]
+    /// Default: 0.2 fps (one frame every 5 seconds) for desktop video analysis
+    #[arg(long, default_value = "0.2")]
     pub analysis_fps: f64,
+
+    /// Disable desktop video context analysis
+    #[arg(long)]
+    pub no_desktop_analysis: bool,
 
     /// Enable verbose event callbacks (prints events with video timestamps)
     #[arg(long)]
@@ -247,16 +261,17 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         args.webcam_device.clone()
     };
 
-    // Determine if we're using webcam or screen recording
-    let use_webcam = args.webcam || args.no_screen;
-    
     // Create configuration
+    // Screen and webcam can now run simultaneously
+    // If splitter is enabled, automatically enable webcam recording
+    let webcam_enabled = args.webcam || args.enable_splitter;
+    
     let config = UnifiedRecordingConfig {
-        screen_config: if use_webcam {
+        screen_config: if args.no_screen {
             None
         } else {
             Some(ScreenRecordingConfig {
-                output_path: args.output.clone(),
+                output_path: args.screen_output.clone(),
                 framerate: args.framerate,
                 duration_secs: if args.duration > 0 {
                     Some(args.duration)
@@ -268,10 +283,10 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 segment_duration_secs: None, // TODO: Add CLI arg for video segmentation
             })
         },
-        webcam_config: if use_webcam {
+        webcam_config: if webcam_enabled {
             Some(crate::services::webcam::WebcamRecordingConfig {
                 device_path: effective_webcam_device.clone(),
-                output_path: args.output.clone(),
+                output_path: args.webcam_output.clone(),
                 framerate: args.framerate,
                 max_duration_secs: if args.duration > 0 {
                     Some(args.duration)
@@ -406,15 +421,9 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             // Create monitor desktop audio config if enabled (add AFTER microphone to avoid interference)
             // Enabled by default unless --no-monitor-desktop-audio is specified
             if !args.no_monitor_desktop_audio {
-                let monitor_output_path = args
-                    .mic_audio_output
-                    .parent()
-                    .map(|p| p.join("desktop_audio.wav"))
-                    .unwrap_or_else(|| PathBuf::from("output/desktop_audio.wav"));
-
                 configs.push(AudioRecordingConfig {
                     enabled: true,
-                    output_path: monitor_output_path.clone(),
+                    output_path: args.desktop_audio_output.clone(),
                     sample_rate: args.mic_sample_rate,
                     channels: 2,       // Stereo for desktop
                     device_name: None, // Will use default (monitor source)
@@ -436,7 +445,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         capture_mouse_moves: args.mouse_moves,
         show_timestamp: !args.no_timestamp,
         show_labels: !args.no_labels,
-        context_fps: if args.analysis_fps > 0.0 {
+        context_fps: if !args.no_desktop_analysis && args.analysis_fps > 0.0 {
             Some(args.analysis_fps)
         } else {
             None
@@ -445,7 +454,8 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         event_writer_config: None, // Use legacy file writing (rotating writer not enabled by default)
         batch_inserter_config: None, // Use legacy direct inserts (batch inserter not enabled by default)
         // Webcam sentiment analysis configuration
-        webcam_analysis_config: if use_webcam && args.webcam_analysis {
+        // Enabled by default when webcam recording is active, unless explicitly disabled
+        webcam_analysis_config: if webcam_enabled && !args.no_webcam_analysis {
             Some(crate::services::unified_recording::WebcamAnalysisConfig::with_device(
                 args.webcam_analysis_interval,
                 effective_webcam_device.clone(),
@@ -464,7 +474,12 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     };
 
     println!("🎬 Starting unified recording...");
-    println!("   Video: {}", args.output.display());
+    if !args.no_screen {
+        println!("   Screen video: {}", args.screen_output.display());
+    }
+    if webcam_enabled {
+        println!("   Webcam video: {}", args.webcam_output.display());
+    }
     if let Some(ref events) = args.events {
         println!("   Events: {}", events.display());
     } else {
@@ -480,8 +495,17 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     if args.enable_splitter {
         println!("   Camera splitter: ✓");
         println!("     Using device: {}", effective_webcam_device);
-    } else if use_webcam {
+    } else if webcam_enabled {
         println!("   Webcam device: {}", effective_webcam_device);
+    }
+    if webcam_enabled {
+        println!(
+            "   Webcam analysis: {}",
+            if !args.no_webcam_analysis { "✓" } else { "✗" }
+        );
+        if !args.no_webcam_analysis {
+            println!("     Interval: {} seconds", args.webcam_analysis_interval);
+        }
     }
     println!("   Keyboard: {}", if !args.no_keyboard { "✓" } else { "✗" });
     println!("   Mouse: {}", if !args.no_mouse { "✓" } else { "✗" });
@@ -540,13 +564,8 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
 
     // Display desktop audio monitoring config with actual device selection
     if !args.no_monitor_desktop_audio {
-        let monitor_output_path = args
-            .mic_audio_output
-            .parent()
-            .map(|p| p.join("desktop_audio.wav"))
-            .unwrap_or_else(|| PathBuf::from("output/desktop_audio.wav"));
         println!("   Desktop audio monitoring: ✓");
-        println!("     Output: {}", monitor_output_path.display());
+        println!("     Output: {}", args.desktop_audio_output.display());
         println!("     Sample rate: {} Hz", args.mic_sample_rate);
 
         // Find the desktop audio config to show actual device that will be used
@@ -804,7 +823,18 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     println!("\n✅ Unified recording complete!");
     println!("   Session ID: {}", session_id);
     println!("   Started at: {}", recording_start);
-    println!("   Video: {}", args.output.display());
+    if !args.no_screen {
+        println!("   Screen video: {}", args.screen_output.display());
+    }
+    if webcam_enabled {
+        println!("   Webcam video: {}", args.webcam_output.display());
+    }
+    if !args.no_mic_audio {
+        println!("   Microphone audio: {}", args.mic_audio_output.display());
+    }
+    if !args.no_monitor_desktop_audio {
+        println!("   Desktop audio: {}", args.desktop_audio_output.display());
+    }
     println!("   Database: {}", args.database.display());
 
     // Generate timeline
