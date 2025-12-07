@@ -8,6 +8,6 @@ pub mod rotating_writer;
 
 // Re-exports for convenience
 pub use batch_inserter::{BatchEvent, BatchEventInserter, BatchInserterConfig, BatchInserterHandle};
-pub use database::{Database, TimelineEvent};
+pub use database::{Database, Metrics, SessionEventCounts, TimelineEvent};
 pub use rotating_writer::{EventWriterConfig, RotatingEventWriter, RotatingEventWriterHandle};
 

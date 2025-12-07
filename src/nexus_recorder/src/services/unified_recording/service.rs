@@ -2298,6 +2298,34 @@ impl RecordingSession {
             warn!("⚠️  Failed to store video recording stop event: {}", e);
         }
 
+        // Finalize session: count events and update session metrics
+        info!("📊 Finalizing session metrics...");
+        if let Ok(event_counts) = db.count_session_events_by_type(&self.session_id).await {
+            let keyboard_events = event_counts.keyboard_presses + event_counts.keyboard_releases;
+            let mouse_events = event_counts.mouse_clicks + event_counts.mouse_releases + event_counts.mouse_moves;
+            
+            if let Err(e) = db
+                .update_session_metrics(
+                    &self.session_id,
+                    keyboard_events,
+                    event_counts.keyboard_presses,
+                    event_counts.keyboard_releases,
+                    mouse_events,
+                    event_counts.mouse_clicks,
+                    event_counts.mouse_releases,
+                    event_counts.mouse_moves,
+                )
+                .await
+            {
+                warn!("⚠️  Failed to update session metrics: {}", e);
+            }
+        }
+        
+        // Set session end time
+        if let Err(e) = db.end_session(&self.session_id).await {
+            warn!("⚠️  Failed to end session: {}", e);
+        }
+
         if let (Some(ctx), Some(fps)) = (self.click_context, self.config.context_fps) {
             if fps > 0.0 {
                 println!(

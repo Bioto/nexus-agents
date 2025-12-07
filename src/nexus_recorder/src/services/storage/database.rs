@@ -30,6 +30,16 @@ pub struct Metrics {
     pub events_per_second: f64,
 }
 
+/// Event counts by type for a session
+#[derive(Debug, Clone, Default)]
+pub struct SessionEventCounts {
+    pub keyboard_presses: u64,
+    pub keyboard_releases: u64,
+    pub mouse_clicks: u64,
+    pub mouse_releases: u64,
+    pub mouse_moves: u64,
+}
+
 impl Database {
     /// Create a new database instance with ClickHouse service from environment
     pub async fn new() -> Result<Self> {
@@ -576,6 +586,62 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    /// Count session events by type
+    pub async fn count_session_events_by_type(&self, session_id: &str) -> Result<SessionEventCounts> {
+        use nexus_core::services::ClickHouseConfig;
+
+        let config = ClickHouseConfig::from_env();
+        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let url = format!("http://{}:{}", config.host, http_port);
+
+        let query = format!(
+            "SELECT 
+                countIf(event_type = 'keyboard' AND event_subtype = 'press') as keyboard_presses,
+                countIf(event_type = 'keyboard' AND event_subtype = 'release') as keyboard_releases,
+                countIf(event_type = 'mouse' AND event_subtype = 'click') as mouse_clicks,
+                countIf(event_type = 'mouse' AND event_subtype = 'release') as mouse_releases,
+                countIf(event_type = 'mouse' AND event_subtype = 'move') as mouse_moves
+            FROM events
+            WHERE session_id = '{}'
+            FORMAT JSONEachRow",
+            session_id.replace('\'', "''")
+        );
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .query(&[("database", &config.database)])
+            .basic_auth(&config.username, Some(&config.password))
+            .body(query)
+            .send()
+            .await
+            .map_err(|e| RecorderError::Other(format!("Failed to count events: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(RecorderError::Other(format!("ClickHouse query failed: {}", error_text)));
+        }
+
+        let text = response.text().await
+            .map_err(|e| RecorderError::Other(format!("Failed to read response: {}", e)))?;
+
+        // Parse the single JSON line
+        if let Some(line) = text.lines().next() {
+            let row: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| RecorderError::Other(format!("Failed to parse JSON: {}", e)))?;
+
+            Ok(SessionEventCounts {
+                keyboard_presses: row.get("keyboard_presses").and_then(|v| v.as_u64()).unwrap_or(0),
+                keyboard_releases: row.get("keyboard_releases").and_then(|v| v.as_u64()).unwrap_or(0),
+                mouse_clicks: row.get("mouse_clicks").and_then(|v| v.as_u64()).unwrap_or(0),
+                mouse_releases: row.get("mouse_releases").and_then(|v| v.as_u64()).unwrap_or(0),
+                mouse_moves: row.get("mouse_moves").and_then(|v| v.as_u64()).unwrap_or(0),
+            })
+        } else {
+            Ok(SessionEventCounts::default())
+        }
     }
 
     /// Get session metrics

@@ -8,6 +8,8 @@ use crate::services::webcam::splitter::{SplitterConfig, SplitterHandle, WebcamSp
 use chrono::DateTime;
 use clap::Args;
 use log::{info, warn};
+use serde_json::json;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -874,6 +876,95 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             .unwrap_or(recording_start);
         crate::services::unified_recording::print_timeline(&session_id, &events, session_start)?;
     }
+
+    // Export results to JSON file
+    println!("\n💾 Exporting results to JSON...");
+    let metrics = db.get_session_metrics(&session_id).await?;
+    let session_start_time = db
+        .get_session_start_time(&session_id)
+        .await?
+        .unwrap_or(recording_start);
+    
+    // Build absolute paths for all output files
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let make_absolute = |path: &PathBuf| {
+        if path.is_absolute() {
+            path.clone()
+        } else {
+            current_dir.join(path)
+        }
+    };
+
+    let results = json!({
+        "session_id": session_id,
+        "start_time": session_start_time.to_rfc3339(),
+        "end_time": metrics.end_time.map(|dt| dt.to_rfc3339()),
+        "duration_seconds": metrics.end_time
+            .map(|end| (end - session_start_time).num_seconds() as f64)
+            .unwrap_or(0.0),
+        "files": {
+            "screen_video": if !args.no_screen {
+                Some(make_absolute(&args.screen_output).to_string_lossy().to_string())
+            } else {
+                None
+            },
+            "webcam_video": if webcam_enabled {
+                Some(make_absolute(&args.webcam_output).to_string_lossy().to_string())
+            } else {
+                None
+            },
+            "microphone_audio": if !args.no_mic_audio {
+                Some(make_absolute(&args.mic_audio_output).to_string_lossy().to_string())
+            } else {
+                None
+            },
+            "desktop_audio": if !args.no_monitor_desktop_audio {
+                Some(make_absolute(&args.desktop_audio_output).to_string_lossy().to_string())
+            } else {
+                None
+            },
+            "database": make_absolute(&args.database).to_string_lossy().to_string(),
+        },
+        "metrics": {
+            "keyboard_events": metrics.keyboard_events,
+            "keyboard_presses": metrics.keyboard_presses,
+            "keyboard_releases": metrics.keyboard_releases,
+            "mouse_events": metrics.mouse_events,
+            "mouse_clicks": metrics.mouse_clicks,
+            "mouse_releases": metrics.mouse_releases,
+            "mouse_moves": metrics.mouse_moves,
+            "events_per_second": metrics.events_per_second,
+            "key_frequency": metrics.key_frequency,
+            "mouse_button_frequency": metrics.mouse_button_frequency,
+        },
+        "event_count": events.len(),
+        "configuration": {
+            "framerate": args.framerate,
+            "screen_recording": !args.no_screen,
+            "webcam_recording": webcam_enabled,
+            "microphone_audio": !args.no_mic_audio,
+            "desktop_audio": !args.no_monitor_desktop_audio,
+            "webcam_analysis": webcam_enabled && !args.no_webcam_analysis,
+            "desktop_analysis": !args.no_desktop_analysis,
+            "analysis_fps": args.analysis_fps,
+        },
+    });
+
+    // Ensure output directory exists
+    let output_dir = current_dir.join("output");
+    if let Err(e) = fs::create_dir_all(&output_dir) {
+        warn!("⚠️  Failed to create output directory: {}", e);
+    }
+
+    // Write JSON file
+    let json_path = output_dir.join(format!("{}_results.json", session_id));
+    let json_string = serde_json::to_string_pretty(&results)
+        .map_err(|e| crate::error::RecorderError::Other(format!("Failed to serialize JSON: {}", e)))?;
+    
+    fs::write(&json_path, json_string)
+        .map_err(|e| crate::error::RecorderError::Other(format!("Failed to write JSON file: {}", e)))?;
+    
+    println!("   ✅ Results exported to: {}", json_path.display());
 
     Ok(())
 }

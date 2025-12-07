@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Query recent click-context analyses from ClickHouse with pretty formatting.
+Query recent analysis events from ClickHouse with pretty formatting.
 
 Usage:
-    python scripts/query_click_analysis.py [limit]
+    python scripts/query_click_analysis.py [limit] [--type TYPE]
+
+Arguments:
+    limit       Number of records to fetch (default: 10)
+    --type      Analysis type to query: video_context, webcam_sentiment, or all (default: video_context)
 
 Environment variables:
     CLICKHOUSE_HOST     - ClickHouse host (default: localhost)
@@ -16,13 +20,13 @@ Environment variables:
 import os
 import sys
 import json
+import argparse
 import requests
-from datetime import datetime
 from typing import List, Dict, Any
 
 
-def get_click_analyses(limit: int = 10) -> List[Dict[str, Any]]:
-    """Fetch recent click-context analyses from ClickHouse."""
+def get_analyses(limit: int = 10, analysis_type: str = "video_context") -> List[Dict[str, Any]]:
+    """Fetch recent analysis events from ClickHouse."""
     host = os.getenv("CLICKHOUSE_HOST", "localhost")
     port = os.getenv("CLICKHOUSE_PORT", "8123")
     user = os.getenv("CLICKHOUSE_USER", "default")
@@ -31,17 +35,25 @@ def get_click_analyses(limit: int = 10) -> List[Dict[str, Any]]:
 
     url = f"http://{host}:{port}"
     
+    if analysis_type == "all":
+        subtype_filter = ""
+    else:
+        subtype_filter = f"AND event_subtype = '{analysis_type}'"
+    
     query = f"""
     SELECT
+        toString(event_type) as event_type,
+        toString(event_subtype) as event_subtype,
         timestamp,
         session_id,
         button,
         x,
         y,
+        timecode,
         metadata
     FROM events
     WHERE event_type = 'analysis'
-      AND event_subtype = 'click_context'
+      {subtype_filter}
     ORDER BY timestamp DESC
     LIMIT {limit}
     FORMAT JSONEachRow
@@ -64,16 +76,22 @@ def get_click_analyses(limit: int = 10) -> List[Dict[str, Any]]:
 
 
 def print_analysis(record: Dict[str, Any], index: int):
-    """Pretty-print a single click analysis record."""
+    """Pretty-print a single analysis record."""
     metadata = json.loads(record["metadata"]) if isinstance(record["metadata"], str) else record["metadata"]
     
     print(f"\n{'='*80}")
-    print(f"📌 Click Analysis #{index + 1}")
+    print(f"📌 Analysis #{index + 1} ({record.get('event_subtype', 'unknown')})")
     print(f"{'='*80}")
     print(f"Session:   {record['session_id']}")
     print(f"Timestamp: {record['timestamp']}")
-    print(f"Button:    {record.get('button', 'unknown')}")
-    print(f"Position:  ({record.get('x', '?')}, {record.get('y', '?')})")
+    
+    if record.get('timecode'):
+        print(f"Timecode:  {record['timecode']:.2f}s")
+    
+    if record.get('button'):
+        print(f"Button:    {record['button']}")
+    if record.get('x') is not None and record.get('y') is not None:
+        print(f"Position:  ({record['x']}, {record['y']})")
     print()
     
     # Print summary
@@ -82,7 +100,7 @@ def print_analysis(record: Dict[str, Any], index: int):
     print(f"   {summary}")
     print()
     
-    # Print frame analyses
+    # Print frame analyses if present
     frames = metadata.get("frames", [])
     if frames:
         print(f"🎞️  Frame Analyses ({len(frames)} frames):")
@@ -96,30 +114,42 @@ def print_analysis(record: Dict[str, Any], index: int):
                 print(f"     📁 {file_path}")
             else:
                 print(f"   • +{offset}s: {desc}")
-    else:
-        print("   (No frame data)")
+    
+    # Print sentiment data if present (webcam_sentiment)
+    if "sentiment" in metadata or "attention" in metadata:
+        print(f"😊 Sentiment/Attention:")
+        if "sentiment" in metadata:
+            print(f"   Sentiment: {metadata['sentiment']}")
+        if "attention" in metadata:
+            print(f"   Attention: {metadata['attention']}")
 
 
 def main():
-    limit = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+    parser = argparse.ArgumentParser(description="Query analysis events from ClickHouse")
+    parser.add_argument("limit", nargs="?", type=int, default=10, help="Number of records to fetch (default: 10)")
+    parser.add_argument("--type", dest="analysis_type", default="video_context",
+                        choices=["video_context", "webcam_sentiment", "all"],
+                        help="Analysis type to query (default: video_context)")
     
-    print(f"📊 Fetching last {limit} click-context analyses from ClickHouse...")
+    args = parser.parse_args()
+    
+    type_label = "all analysis" if args.analysis_type == "all" else args.analysis_type
+    print(f"📊 Fetching last {args.limit} {type_label} events from ClickHouse...")
     
     try:
-        results = get_click_analyses(limit)
+        results = get_analyses(args.limit, args.analysis_type)
         
         if not results:
-            print("\n❌ No click-context analyses found in the database.")
-            print("   Make sure you've run the logger with click events captured.")
+            print(f"\n⚠️  No {type_label} events found in the database.")
             return
         
-        print(f"\n✅ Found {len(results)} click analysis records\n")
+        print(f"\n✅ Found {len(results)} analysis records\n")
         
         for idx, record in enumerate(results):
             print_analysis(record, idx)
         
         print(f"\n{'='*80}")
-        print(f"Total: {len(results)} click analyses")
+        print(f"Total: {len(results)} analysis events")
         print(f"{'='*80}\n")
         
     except requests.exceptions.RequestException as e:
@@ -133,10 +163,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
