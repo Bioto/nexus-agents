@@ -3,11 +3,13 @@
 Query recent analysis events from ClickHouse with pretty formatting.
 
 Usage:
-    python scripts/query_click_analysis.py [limit] [--type TYPE]
+    python scripts/query_click_analysis.py [limit] [--type TYPE] [--limit N] [--show-metadata]
 
 Arguments:
-    limit       Number of records to fetch (default: 10)
-    --type      Analysis type to query: video_context, webcam_sentiment, or all (default: video_context)
+    limit           Number of records to fetch (positional, default: 10)
+    --limit N       Number of records to fetch (flag, overrides positional)
+    --type          Analysis type: video_context, webcam_sentiment, or all (default: video_context)
+    --show-metadata Print raw metadata JSON for each record
 
 Environment variables:
     CLICKHOUSE_HOST     - ClickHouse host (default: localhost)
@@ -75,6 +77,14 @@ def get_analyses(limit: int = 10, analysis_type: str = "video_context") -> List[
     return results
 
 
+def _fmt_value(val: Any) -> str:
+    if isinstance(val, float):
+        return f"{val:.3f}"
+    if isinstance(val, (dict, list)):
+        return json.dumps(val)
+    return str(val)
+
+
 def print_analysis(record: Dict[str, Any], index: int):
     """Pretty-print a single analysis record."""
     metadata = json.loads(record["metadata"]) if isinstance(record["metadata"], str) else record["metadata"]
@@ -116,28 +126,43 @@ def print_analysis(record: Dict[str, Any], index: int):
                 print(f"   • +{offset}s: {desc}")
     
     # Print sentiment data if present (webcam_sentiment)
-    if "sentiment" in metadata or "attention" in metadata:
-        print(f"😊 Sentiment/Attention:")
-        if "sentiment" in metadata:
-            print(f"   Sentiment: {metadata['sentiment']}")
-        if "attention" in metadata:
-            print(f"   Attention: {metadata['attention']}")
+    sentiment_keys = [
+        "sentiment",
+        "attention",
+        "arousal",
+        "valence",
+        "engagement",
+        "confidence",
+        "probability",
+        "emotion",
+        "emotions",
+        "focus",
+        "face_detected",
+    ]
+    present_sentiment = [(k, metadata[k]) for k in sentiment_keys if k in metadata]
+    if present_sentiment:
+        print(f"😊 Webcam sentiment details:")
+        for key, val in present_sentiment:
+            print(f"   {key}: {_fmt_value(val)}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Query analysis events from ClickHouse")
     parser.add_argument("limit", nargs="?", type=int, default=10, help="Number of records to fetch (default: 10)")
+    parser.add_argument("--limit", dest="limit_flag", type=int, help="Number of records to fetch (overrides positional)")
     parser.add_argument("--type", dest="analysis_type", default="video_context",
                         choices=["video_context", "webcam_sentiment", "all"],
                         help="Analysis type to query (default: video_context)")
+    parser.add_argument("--show-metadata", action="store_true", help="Print raw metadata JSON for each record")
     
     args = parser.parse_args()
+    limit = args.limit_flag if args.limit_flag is not None else args.limit
     
     type_label = "all analysis" if args.analysis_type == "all" else args.analysis_type
-    print(f"📊 Fetching last {args.limit} {type_label} events from ClickHouse...")
+    print(f"📊 Fetching last {limit} {type_label} events from ClickHouse...")
     
     try:
-        results = get_analyses(args.limit, args.analysis_type)
+        results = get_analyses(limit, args.analysis_type)
         
         if not results:
             print(f"\n⚠️  No {type_label} events found in the database.")
@@ -147,6 +172,11 @@ def main():
         
         for idx, record in enumerate(results):
             print_analysis(record, idx)
+            if args.show_metadata:
+                raw = record["metadata"] if isinstance(record["metadata"], str) else json.dumps(record["metadata"])
+                print("   Raw metadata:")
+                print(f"   {raw}")
+                print()
         
         print(f"\n{'='*80}")
         print(f"Total: {len(results)} analysis events")
