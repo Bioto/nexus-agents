@@ -7,6 +7,7 @@ members = [
     "src/nexus_mcp",
     "src/nexus_recorder",
     "src/nexus_exporter",
+    "src/nexus_notetaker",
     "src/x_toolbox",
 ]
 resolver = "2"

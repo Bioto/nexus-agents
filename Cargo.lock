@@ -4824,6 +4824,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexus-notetaker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "log",
+ "nexus-core",
+ "nexus-recorder",
+ "serde",
+ "serde_json",
+ "simplelog",
+ "tokio",
+]
+
+[[package]]
 name = "nexus-recorder"
 version = "0.1.0"
 dependencies = [
