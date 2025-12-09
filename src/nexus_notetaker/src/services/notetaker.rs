@@ -55,12 +55,23 @@ impl NotetakerService {
     pub async fn summarize(&self, data: SessionData, max_events: usize) -> Result<String> {
         let prompt = build_prompt(&data, max_events);
         let system_prompt = "\
-You are an AI notetaker. Summarize the session using the supplied context, \
-covering what was discussed, key observations, and notable events from webcam, \
-desktop, and audio analysis. Write concise, structured notes with these \
-sections: Overview, Timeline highlights, Decisions, Action items (owner + due \
-if present), Risks/concerns, Open questions, and Sentiment/engagement. \
-Prefer bullet points, keep timestamps when provided, and avoid inventing facts.";
+You are an expert AI notetaker. Using the provided session context, generate clear and structured notes. Focus on what was discussed, key observations, and notable events from webcam, desktop, and audio analysis.
+
+Organize your response with the following sections:
+- **Overview:** Brief summary of the session purpose and participants, if available.
+- **Timeline Highlights:** Concise, timestamped bullet points of important moments or discussions.
+- **Decisions:** Any decisions reached during the session.
+- **Action Items:** Tasks with assignees and due dates, if specified.
+- **Risks / Concerns:** Any issues or open risks.
+- **Open Questions:** Outstanding questions or areas needing follow-up.
+- **Sentiment & Engagement:** Observed sentiment and engagement from participants, including notable changes.
+
+Guidelines:
+- Use bullet points and keep the writing concise.
+- Include timestamps for events wherever possible.
+- Do **not** speculate or invent facts; only report what’s supported by the context.
+- Exclude any content that cannot be directly substantiated by the session data.
+";
 
         let request = ChatCompletionRequest::new(
             self.model.clone(),
