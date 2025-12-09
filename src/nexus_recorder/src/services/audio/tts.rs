@@ -254,10 +254,9 @@ impl TextToSpeech {
         // Connect to WebSocket - use tungstenite's client request builder which handles handshake
         // The IntoClientRequest trait creates a request with proper WebSocket handshake headers,
         // then we add our custom header
-        let mut request = url
-            .as_str()
-            .into_client_request()
-            .map_err(|e| RecorderError::Api(format!("Failed to create WebSocket request: {}", e)))?;
+        let mut request = url.as_str().into_client_request().map_err(|e| {
+            RecorderError::Api(format!("Failed to create WebSocket request: {}", e))
+        })?;
 
         // Add custom API key header
         use http::HeaderValue;
@@ -289,8 +288,9 @@ impl TextToSpeech {
                     text: word.to_string(),
                 };
                 let mut buf = Vec::new();
-                msg.serialize(&mut Serializer::new(&mut buf))
-                    .map_err(|e| RecorderError::Api(format!("Failed to serialize message: {}", e)))?;
+                msg.serialize(&mut Serializer::new(&mut buf)).map_err(|e| {
+                    RecorderError::Api(format!("Failed to serialize message: {}", e))
+                })?;
 
                 write
                     .send(Message::Binary(buf))
@@ -618,7 +618,10 @@ impl TextToSpeech {
                             .map(|s| {
                                 s.map(|sample| (sample >> 8) as f32 / 8388608.0)
                                     .map_err(|e| {
-                                        RecorderError::Audio(format!("Failed to read sample: {}", e))
+                                        RecorderError::Audio(format!(
+                                            "Failed to read sample: {}",
+                                            e
+                                        ))
                                     })
                             })
                             .collect::<std::result::Result<Vec<_>, _>>()?
@@ -704,9 +707,9 @@ impl TextToSpeech {
 
         // Get default output device
         let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or_else(|| RecorderError::Audio("No default output device available".to_string()))?;
+        let device = host.default_output_device().ok_or_else(|| {
+            RecorderError::Audio("No default output device available".to_string())
+        })?;
 
         // Create stream config
         let config = StreamConfig {

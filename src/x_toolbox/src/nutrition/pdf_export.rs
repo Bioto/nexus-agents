@@ -1,7 +1,7 @@
 use crate::error::{Result, ToolboxError};
 use crate::nutrition::models::{
-    AggregatedIngredient, DayOfWeek, MealPlanEntryWithRecipe, MealPlanNutrition, MealPlanWithEntries,
-    RecipeNutrition, RecipeWithDetails,
+    AggregatedIngredient, DayOfWeek, MealPlanEntryWithRecipe, MealPlanNutrition,
+    MealPlanWithEntries, RecipeNutrition, RecipeWithDetails,
 };
 use crate::nutrition::NutritionService;
 use chrono::NaiveDate;
@@ -35,11 +35,11 @@ const SECTION_GAP: f32 = 16.0;
 const PARAGRAPH_GAP: f32 = 8.0;
 
 // Colors
-const COLOR_PRIMARY: (f32, f32, f32) = (0.15, 0.45, 0.35);      // Deep teal
-const COLOR_SECONDARY: (f32, f32, f32) = (0.85, 0.55, 0.25);    // Warm amber  
-const COLOR_TEXT: (f32, f32, f32) = (0.15, 0.15, 0.15);         // Near black
-const COLOR_LIGHT: (f32, f32, f32) = (0.55, 0.55, 0.55);        // Gray
-const COLOR_ACCENT_LINE: (f32, f32, f32) = (0.85, 0.85, 0.85);  // Light gray
+const COLOR_PRIMARY: (f32, f32, f32) = (0.15, 0.45, 0.35); // Deep teal
+const COLOR_SECONDARY: (f32, f32, f32) = (0.85, 0.55, 0.25); // Warm amber
+const COLOR_TEXT: (f32, f32, f32) = (0.15, 0.15, 0.15); // Near black
+const COLOR_LIGHT: (f32, f32, f32) = (0.55, 0.55, 0.55); // Gray
+const COLOR_ACCENT_LINE: (f32, f32, f32) = (0.85, 0.85, 0.85); // Light gray
 
 // ============================================================================
 // PDF Builder - Clean abstraction over printpdf
@@ -58,18 +58,17 @@ struct PdfBuilder {
 
 impl PdfBuilder {
     fn new(title: &str) -> Result<Self> {
-        let (doc, page1, layer1) = PdfDocument::new(
-            title,
-            Mm(PAGE_WIDTH),
-            Mm(PAGE_HEIGHT),
-            "Layer 1",
-        );
+        let (doc, page1, layer1) =
+            PdfDocument::new(title, Mm(PAGE_WIDTH), Mm(PAGE_HEIGHT), "Layer 1");
 
-        let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)
+        let font_bold = doc
+            .add_builtin_font(BuiltinFont::HelveticaBold)
             .map_err(|e| ToolboxError::Other(format!("Failed to add bold font: {}", e)))?;
-        let font_regular = doc.add_builtin_font(BuiltinFont::Helvetica)
+        let font_regular = doc
+            .add_builtin_font(BuiltinFont::Helvetica)
             .map_err(|e| ToolboxError::Other(format!("Failed to add regular font: {}", e)))?;
-        let font_italic = doc.add_builtin_font(BuiltinFont::HelveticaOblique)
+        let font_italic = doc
+            .add_builtin_font(BuiltinFont::HelveticaOblique)
             .map_err(|e| ToolboxError::Other(format!("Failed to add italic font: {}", e)))?;
 
         Ok(Self {
@@ -85,11 +84,15 @@ impl PdfBuilder {
     }
 
     fn layer(&self) -> PdfLayerReference {
-        self.doc.get_page(self.current_page).get_layer(self.current_layer)
+        self.doc
+            .get_page(self.current_page)
+            .get_layer(self.current_layer)
     }
 
     fn new_page(&mut self) {
-        let (page, layer) = self.doc.add_page(Mm(PAGE_WIDTH), Mm(PAGE_HEIGHT), "Layer 1");
+        let (page, layer) = self
+            .doc
+            .add_page(Mm(PAGE_WIDTH), Mm(PAGE_HEIGHT), "Layer 1");
         self.current_page = page;
         self.current_layer = layer;
         self.y_pos = PAGE_HEIGHT - MARGIN;
@@ -103,21 +106,29 @@ impl PdfBuilder {
     }
 
     fn set_color(&self, rgb: (f32, f32, f32)) {
-        self.layer().set_fill_color(Color::Rgb(Rgb::new(rgb.0, rgb.1, rgb.2, None)));
+        self.layer()
+            .set_fill_color(Color::Rgb(Rgb::new(rgb.0, rgb.1, rgb.2, None)));
     }
 
     fn set_stroke_color(&self, rgb: (f32, f32, f32)) {
-        self.layer().set_outline_color(Color::Rgb(Rgb::new(rgb.0, rgb.1, rgb.2, None)));
+        self.layer()
+            .set_outline_color(Color::Rgb(Rgb::new(rgb.0, rgb.1, rgb.2, None)));
     }
 
     // Text rendering
     fn text(&mut self, content: &str, font_size: f32, bold: bool, x: f32) {
-        let font = if bold { &self.font_bold } else { &self.font_regular };
-        self.layer().use_text(content, font_size, Mm(x), Mm(self.y_pos), font);
+        let font = if bold {
+            &self.font_bold
+        } else {
+            &self.font_regular
+        };
+        self.layer()
+            .use_text(content, font_size, Mm(x), Mm(self.y_pos), font);
     }
 
     fn text_italic(&mut self, content: &str, font_size: f32, x: f32) {
-        self.layer().use_text(content, font_size, Mm(x), Mm(self.y_pos), &self.font_italic);
+        self.layer()
+            .use_text(content, font_size, Mm(x), Mm(self.y_pos), &self.font_italic);
     }
 
     fn advance(&mut self, amount: f32) {
@@ -125,10 +136,17 @@ impl PdfBuilder {
     }
 
     // Wrapped text
-    fn wrapped_text(&mut self, content: &str, font_size: f32, max_chars: usize, x: f32, bold: bool) {
+    fn wrapped_text(
+        &mut self,
+        content: &str,
+        font_size: f32,
+        max_chars: usize,
+        x: f32,
+        bold: bool,
+    ) {
         let lines = Self::wrap_text(content, max_chars);
         let line_spacing = font_size * LINE_HEIGHT * 0.35;
-        
+
         for line in lines {
             self.ensure_space(line_spacing);
             if bold {
@@ -143,7 +161,7 @@ impl PdfBuilder {
     fn wrapped_text_italic(&mut self, content: &str, font_size: f32, max_chars: usize, x: f32) {
         let lines = Self::wrap_text(content, max_chars);
         let line_spacing = font_size * LINE_HEIGHT * 0.35;
-        
+
         for line in lines {
             self.ensure_space(line_spacing);
             self.text_italic(&line, font_size, x);
@@ -156,7 +174,7 @@ impl PdfBuilder {
         self.set_stroke_color(COLOR_ACCENT_LINE);
         let layer = self.layer();
         layer.set_outline_thickness(thickness);
-        
+
         let line = Line {
             points: vec![
                 (Point::new(Mm(MARGIN), Mm(self.y_pos)), false),
@@ -171,7 +189,7 @@ impl PdfBuilder {
         self.set_stroke_color(COLOR_PRIMARY);
         let layer = self.layer();
         layer.set_outline_thickness(2.0);
-        
+
         let line = Line {
             points: vec![
                 (Point::new(Mm(MARGIN), Mm(self.y_pos)), false),
@@ -219,7 +237,7 @@ impl PdfBuilder {
     fn to_american_units(quantity: &BigDecimal, unit: &str) -> (String, String) {
         let qty: f64 = quantity.to_string().parse().unwrap_or(0.0);
         let unit_lower = unit.to_lowercase();
-        
+
         match unit_lower.as_str() {
             // Grams to pounds/ounces
             "g" | "gram" | "grams" => {
@@ -269,20 +287,19 @@ impl PdfBuilder {
                 }
             }
             // Already American or count-based - pass through
-            "oz" | "ounce" | "ounces" | "lb" | "lbs" | "pound" | "pounds" 
-            | "cup" | "cups" | "tbsp" | "tablespoon" | "tsp" | "teaspoon"
-            | "piece" | "pieces" | "whole" | "clove" | "cloves" => {
-                (format!("{:.0}", qty), unit.to_string())
-            }
+            "oz" | "ounce" | "ounces" | "lb" | "lbs" | "pound" | "pounds" | "cup" | "cups"
+            | "tbsp" | "tablespoon" | "tsp" | "teaspoon" | "piece" | "pieces" | "whole"
+            | "clove" | "cloves" => (format!("{:.0}", qty), unit.to_string()),
             // Unknown unit - pass through with original formatting
-            _ => (Self::format_decimal(quantity), unit.to_string())
+            _ => (Self::format_decimal(quantity), unit.to_string()),
         }
     }
 
     fn save(self, output_path: &Path) -> Result<()> {
         let file = File::create(output_path).map_err(ToolboxError::Io)?;
         let mut writer = BufWriter::new(file);
-        self.doc.save(&mut writer)
+        self.doc
+            .save(&mut writer)
             .map_err(|e| ToolboxError::Other(format!("Failed to save PDF: {}", e)))?;
         Ok(())
     }
@@ -301,49 +318,49 @@ impl RecipePdfExporter {
         output_path: &Path,
     ) -> Result<()> {
         let mut pdf = PdfBuilder::new(&recipe.recipe.name)?;
-        
+
         // Cover page
         Self::render_cover(&mut pdf, recipe);
-        
+
         // Ingredients
         pdf.new_page();
         Self::render_ingredients(&mut pdf, recipe);
-        
+
         // Instructions
         pdf.new_page();
         Self::render_instructions(&mut pdf, recipe);
-        
+
         // Nutrition
         if let Some(nutrition) = nutrition {
             pdf.new_page();
             Self::render_nutrition(&mut pdf, nutrition);
         }
-        
+
         // Closing
         pdf.new_page();
         Self::render_closing(&mut pdf);
-        
+
         pdf.save(output_path)
     }
 
     fn render_cover(pdf: &mut PdfBuilder, recipe: &RecipeWithDetails) {
         pdf.advance(60.0);
-        
+
         // Title
         pdf.set_color(COLOR_PRIMARY);
         pdf.text(&recipe.recipe.name, FONT_TITLE, true, MARGIN);
         pdf.advance(FONT_TITLE * 0.5);
-        
+
         pdf.thick_line();
         pdf.advance(SECTION_GAP);
-        
+
         // Description
         if let Some(desc) = &recipe.recipe.description {
             pdf.set_color(COLOR_TEXT);
             pdf.wrapped_text_italic(desc, FONT_BODY, 80, MARGIN);
             pdf.advance(SECTION_GAP);
         }
-        
+
         // Metadata
         pdf.set_color(COLOR_LIGHT);
         let mut meta_parts = Vec::new();
@@ -367,15 +384,13 @@ impl RecipePdfExporter {
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(SECTION_GAP);
-        
+
         for ing in &recipe.ingredients {
             pdf.ensure_space(FONT_BODY * 2.0);
             pdf.set_color(COLOR_TEXT);
             let line = format!(
                 "{}  {} {}",
-                ing.recipe_ingredient.quantity,
-                ing.recipe_ingredient.unit,
-                ing.ingredient.name
+                ing.recipe_ingredient.quantity, ing.recipe_ingredient.unit, ing.ingredient.name
             );
             pdf.text(&line, FONT_BODY, false, MARGIN + 5.0);
             pdf.advance(FONT_BODY * LINE_HEIGHT * 0.4);
@@ -388,15 +403,20 @@ impl RecipePdfExporter {
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(SECTION_GAP);
-        
+
         for step in &recipe.steps {
             pdf.ensure_space(FONT_BODY * 4.0);
-            
+
             // Step number
             pdf.set_color(COLOR_SECONDARY);
-            pdf.text(&format!("Step {}", step.step_number), FONT_SUBHEADING, true, MARGIN);
+            pdf.text(
+                &format!("Step {}", step.step_number),
+                FONT_SUBHEADING,
+                true,
+                MARGIN,
+            );
             pdf.advance(FONT_SUBHEADING * 0.5);
-            
+
             // Instruction
             pdf.set_color(COLOR_TEXT);
             pdf.wrapped_text(&step.instruction, FONT_BODY, 75, MARGIN + 5.0, false);
@@ -410,14 +430,29 @@ impl RecipePdfExporter {
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(SECTION_GAP);
-        
+
         let items = [
-            ("Calories", PdfBuilder::format_decimal(&nutrition.total_calories)),
-            ("Protein", format!("{}g", PdfBuilder::format_decimal(&nutrition.total_protein_g))),
-            ("Carbs", format!("{}g", PdfBuilder::format_decimal(&nutrition.total_carbs_g))),
-            ("Fat", format!("{}g", PdfBuilder::format_decimal(&nutrition.total_fat_g))),
+            (
+                "Calories",
+                PdfBuilder::format_decimal(&nutrition.total_calories),
+            ),
+            (
+                "Protein",
+                format!(
+                    "{}g",
+                    PdfBuilder::format_decimal(&nutrition.total_protein_g)
+                ),
+            ),
+            (
+                "Carbs",
+                format!("{}g", PdfBuilder::format_decimal(&nutrition.total_carbs_g)),
+            ),
+            (
+                "Fat",
+                format!("{}g", PdfBuilder::format_decimal(&nutrition.total_fat_g)),
+            ),
         ];
-        
+
         for (label, value) in items {
             pdf.set_color(COLOR_TEXT);
             pdf.text(&format!("{}:", label), FONT_BODY, true, MARGIN + 5.0);
@@ -428,11 +463,11 @@ impl RecipePdfExporter {
 
     fn render_closing(pdf: &mut PdfBuilder) {
         pdf.advance(80.0);
-        
+
         pdf.set_color(COLOR_PRIMARY);
         pdf.text("Bon Appétit!", FONT_TITLE, true, MARGIN + 40.0);
         pdf.advance(SECTION_GAP * 2.0);
-        
+
         pdf.set_color(COLOR_TEXT);
         pdf.text("Enjoy your meal!", FONT_BODY, false, MARGIN + 55.0);
     }
@@ -450,97 +485,118 @@ impl RecipePdfExporter {
         output_path: &Path,
     ) -> Result<()> {
         let mut pdf = PdfBuilder::new(&meal_plan.meal_plan.name)?;
-        
+
         // Cover page
         Self::render_meal_plan_cover(&mut pdf, meal_plan);
-        
+
         // Daily recipes
         let daily_entries = Self::group_by_day(&meal_plan.entries);
         for (day_key, entries) in &daily_entries {
             pdf.new_page();
             Self::render_day_page(&mut pdf, day_key, entries, pool).await?;
         }
-        
+
         // Shopping list
-        let prep_data = NutritionService::get_meal_plan_for_prep_analysis(pool, meal_plan.meal_plan.id)
-            .await
-            .map_err(|e| ToolboxError::Other(format!("Failed to get prep data: {}", e)))?;
-        
+        let prep_data =
+            NutritionService::get_meal_plan_for_prep_analysis(pool, meal_plan.meal_plan.id)
+                .await
+                .map_err(|e| ToolboxError::Other(format!("Failed to get prep data: {}", e)))?;
+
         pdf.new_page();
         Self::render_shopping_list(&mut pdf, &prep_data.aggregated_ingredients);
-        
+
         // Meal prep guide
         pdf.new_page();
         Self::render_prep_guide(&mut pdf, &prep_data.aggregated_ingredients);
-        
+
         // Nutrition summary
         if let Some(nutrition) = nutrition {
             pdf.new_page();
             Self::render_nutrition_summary(&mut pdf, nutrition);
         }
-        
+
         // Closing
         pdf.new_page();
         Self::render_meal_plan_closing(&mut pdf);
-        
+
         pdf.save(output_path)
     }
 
     fn render_meal_plan_cover(pdf: &mut PdfBuilder, meal_plan: &MealPlanWithEntries) {
         pdf.advance(40.0);
-        
+
         // Title
         pdf.set_color(COLOR_PRIMARY);
         pdf.text(&meal_plan.meal_plan.name, FONT_TITLE, true, MARGIN);
         pdf.advance(FONT_TITLE * 0.5);
         pdf.thick_line();
         pdf.advance(PARAGRAPH_GAP);
-        
+
         // Description
         if let Some(desc) = &meal_plan.meal_plan.description {
             pdf.set_color(COLOR_TEXT);
             pdf.wrapped_text_italic(desc, FONT_BODY, 80, MARGIN);
             pdf.advance(PARAGRAPH_GAP);
         }
-        
+
         // Dates and metadata in a tight block
         pdf.set_color(COLOR_LIGHT);
         if let Some(start) = meal_plan.meal_plan.start_date {
-            pdf.text(&format!("From: {}", start.format("%B %d, %Y")), FONT_BODY, false, MARGIN);
+            pdf.text(
+                &format!("From: {}", start.format("%B %d, %Y")),
+                FONT_BODY,
+                false,
+                MARGIN,
+            );
             pdf.advance(FONT_BODY + 2.0);
         }
         if let Some(end) = meal_plan.meal_plan.end_date {
-            pdf.text(&format!("To: {}", end.format("%B %d, %Y")), FONT_BODY, false, MARGIN);
+            pdf.text(
+                &format!("To: {}", end.format("%B %d, %Y")),
+                FONT_BODY,
+                false,
+                MARGIN,
+            );
             pdf.advance(FONT_BODY + 2.0);
         }
-        pdf.text(&format!("Total Meals: {}", meal_plan.entries.len()), FONT_BODY, true, MARGIN);
-        
+        pdf.text(
+            &format!("Total Meals: {}", meal_plan.entries.len()),
+            FONT_BODY,
+            true,
+            MARGIN,
+        );
+
         // Overview section
         pdf.advance(SECTION_GAP);
         pdf.set_color(COLOR_SECONDARY);
         pdf.text("Your Week at a Glance", FONT_HEADING, true, MARGIN);
         pdf.advance(PARAGRAPH_GAP);
-        
+
         pdf.horizontal_line(0.5);
         pdf.advance(PARAGRAPH_GAP);
-        
+
         // Quick meal list - clean and compact
         let daily = Self::group_by_day(&meal_plan.entries);
-        
+
         for (day_key, entries) in daily.iter().take(7) {
             pdf.ensure_space(FONT_SMALL * 2.0);
-            
+
             // Day name
             pdf.set_color(COLOR_PRIMARY);
             let day_name = Self::format_day_key(day_key);
             pdf.text(&day_name, FONT_SMALL, true, MARGIN);
-            
+
             // Recipes on same line
             pdf.set_color(COLOR_TEXT);
             let recipes: Vec<_> = entries.iter().map(|e| e.recipe.name.as_str()).collect();
             let recipe_text = recipes.join(", ");
             if recipe_text.len() > 50 {
-                pdf.text(&format!("{}...", &recipe_text[..47]), FONT_SMALL, false, MARGIN + 55.0);
+                pdf.text(
+                    &format!("{}...", &recipe_text[..47]),
+                    FONT_SMALL,
+                    false,
+                    MARGIN + 55.0,
+                );
             } else {
                 pdf.text(&recipe_text, FONT_SMALL, false, MARGIN + 55.0);
             }
@@ -548,24 +604,28 @@ impl RecipePdfExporter {
         }
     }
 
-    fn group_by_day(entries: &[MealPlanEntryWithRecipe]) -> Vec<((Option<NaiveDate>, Option<i32>), Vec<&MealPlanEntryWithRecipe>)> {
-        let mut map: HashMap<(Option<NaiveDate>, Option<i32>), Vec<&MealPlanEntryWithRecipe>> = HashMap::new();
-        
+    fn group_by_day(
+        entries: &[MealPlanEntryWithRecipe],
+    ) -> Vec<(
+        (Option<NaiveDate>, Option<i32>),
+        Vec<&MealPlanEntryWithRecipe>,
+    )> {
+        let mut map: HashMap<(Option<NaiveDate>, Option<i32>), Vec<&MealPlanEntryWithRecipe>> =
+            HashMap::new();
+
         for entry in entries {
             let key = (entry.entry.date, entry.entry.day_of_week);
             map.entry(key).or_default().push(entry);
         }
-        
+
         let mut result: Vec<_> = map.into_iter().collect();
-        result.sort_by(|a, b| {
-            match (a.0.0, b.0.0) {
-                (Some(da), Some(db)) => da.cmp(&db),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.0.1.cmp(&b.0.1),
-            }
+        result.sort_by(|a, b| match (a.0 .0, b.0 .0) {
+            (Some(da), Some(db)) => da.cmp(&db),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.0 .1.cmp(&b.0 .1),
         });
-        
+
         // Sort entries within each day by meal type
         for (_, entries) in &mut result {
             entries.sort_by(|a, b| {
@@ -579,7 +639,7 @@ impl RecipePdfExporter {
                 order(&a.entry.meal_type).cmp(&order(&b.entry.meal_type))
             });
         }
-        
+
         result
     }
 
@@ -602,78 +662,86 @@ impl RecipePdfExporter {
         pool: &sqlx::PgPool,
     ) -> Result<()> {
         let day_name = Self::format_day_key(day_key);
-        
+
         // Day header
         pdf.set_color(COLOR_PRIMARY);
         pdf.text(&day_name, FONT_HEADING, true, MARGIN);
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(SECTION_GAP);
-        
+
         for entry in entries {
             // Fetch full recipe details
             let recipe = NutritionService::get_recipe_with_details(pool, entry.recipe.id)
                 .await
                 .map_err(|e| ToolboxError::Other(format!("Failed to fetch recipe: {}", e)))?;
-            
+
             pdf.ensure_space(80.0);
             Self::render_recipe_card(pdf, &entry.entry.meal_type, &recipe);
             pdf.advance(SECTION_GAP);
             pdf.horizontal_line(0.3);
             pdf.advance(SECTION_GAP);
         }
-        
+
         Ok(())
     }
 
     fn render_recipe_card(pdf: &mut PdfBuilder, meal_type: &str, recipe: &RecipeWithDetails) {
         // Meal type badge
         pdf.set_color(COLOR_SECONDARY);
-        let meal_label = meal_type.chars().next()
+        let meal_label = meal_type
+            .chars()
+            .next()
             .map(|c| c.to_uppercase().collect::<String>() + &meal_type[1..])
             .unwrap_or_else(|| meal_type.to_string());
         pdf.text(&meal_label, FONT_SMALL, true, MARGIN);
         pdf.advance(FONT_SMALL + 2.0);
-        
+
         // Recipe name
         pdf.set_color(COLOR_PRIMARY);
         pdf.text(&recipe.recipe.name, FONT_SUBHEADING, true, MARGIN);
         pdf.advance(FONT_SUBHEADING + 2.0);
-        
+
         // Description
         if let Some(desc) = &recipe.recipe.description {
             pdf.set_color(COLOR_TEXT);
             pdf.wrapped_text_italic(desc, FONT_SMALL, 85, MARGIN);
         }
-        
+
         // Metadata line
         let mut meta = Vec::new();
-        if let Some(s) = recipe.recipe.servings { meta.push(format!("Serves {}", s)); }
-        if let Some(p) = recipe.recipe.prep_time_minutes { meta.push(format!("{} min prep", p)); }
-        if let Some(c) = recipe.recipe.cook_time_minutes { meta.push(format!("{} min cook", c)); }
-        
+        if let Some(s) = recipe.recipe.servings {
+            meta.push(format!("Serves {}", s));
+        }
+        if let Some(p) = recipe.recipe.prep_time_minutes {
+            meta.push(format!("{} min prep", p));
+        }
+        if let Some(c) = recipe.recipe.cook_time_minutes {
+            meta.push(format!("{} min cook", c));
+        }
+
         if !meta.is_empty() {
             pdf.advance(PARAGRAPH_GAP * 0.5);
             pdf.set_color(COLOR_LIGHT);
             pdf.text(&meta.join("  •  "), FONT_SMALL, false, MARGIN);
             pdf.advance(FONT_SMALL * LINE_HEIGHT * 0.4);
         }
-        
+
         pdf.advance(PARAGRAPH_GAP);
-        
+
         // Ingredients (compact)
         if !recipe.ingredients.is_empty() {
             pdf.set_color(COLOR_PRIMARY);
             pdf.text("Ingredients", FONT_SMALL, true, MARGIN);
             pdf.advance(FONT_SMALL * 0.5);
-            
+
             for ing in &recipe.ingredients {
                 pdf.ensure_space(FONT_SMALL * 1.5);
                 pdf.set_color(COLOR_TEXT);
                 // Convert to American units
                 let (qty_str, unit_str) = PdfBuilder::to_american_units(
                     &ing.recipe_ingredient.quantity,
-                    &ing.recipe_ingredient.unit
+                    &ing.recipe_ingredient.unit,
                 );
                 let line = format!("• {} {} {}", qty_str, unit_str, ing.ingredient.name);
                 pdf.text(&line, FONT_SMALL, false, MARGIN + 3.0);
@@ -681,13 +749,13 @@ impl RecipePdfExporter {
             }
             pdf.advance(PARAGRAPH_GAP);
         }
-        
+
         // Instructions (compact)
         if !recipe.steps.is_empty() {
             pdf.set_color(COLOR_PRIMARY);
             pdf.text("Instructions", FONT_SMALL, true, MARGIN);
             pdf.advance(FONT_SMALL * 0.5);
-            
+
             for step in &recipe.steps {
                 pdf.ensure_space(FONT_SMALL * 3.0);
                 pdf.set_color(COLOR_TEXT);
@@ -703,7 +771,7 @@ impl RecipePdfExporter {
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(PARAGRAPH_GAP);
-        
+
         // Categorize ingredients
         let categories = Self::categorize_ingredients(ingredients);
         let category_order = [
@@ -714,34 +782,37 @@ impl RecipePdfExporter {
             "Condiments & Seasonings",
             "Other",
         ];
-        
+
         // Table columns: Checkbox | Qty | Unit | Item
         let col_check = MARGIN;
         let col_qty = MARGIN + 12.0;
         let col_unit = MARGIN + 35.0;
         let col_item = MARGIN + 55.0;
-        
+
         for cat_name in category_order {
             if let Some(items) = categories.get(cat_name) {
-                if items.is_empty() { continue; }
-                
+                if items.is_empty() {
+                    continue;
+                }
+
                 pdf.ensure_space(FONT_BODY * 4.0);
-                
+
                 // Category header with underline
                 pdf.set_color(COLOR_PRIMARY);
                 pdf.text(cat_name, FONT_BODY, true, MARGIN);
                 pdf.advance(FONT_BODY + 1.0);
                 pdf.horizontal_line(0.3);
                 pdf.advance(3.0);
-                
+
                 // Table rows
                 for ing in items {
                     pdf.ensure_space(FONT_BODY + 3.0);
                     pdf.set_color(COLOR_TEXT);
-                    
+
                     // Convert to American units
-                    let (qty_str, unit_str) = PdfBuilder::to_american_units(&ing.total_quantity, &ing.unit);
-                    
+                    let (qty_str, unit_str) =
+                        PdfBuilder::to_american_units(&ing.total_quantity, &ing.unit);
+
                     // Checkbox
                     pdf.text("[  ]", FONT_BODY, false, col_check);
                     // Quantity
@@ -755,7 +826,7 @@ impl RecipePdfExporter {
                         ing.ingredient.name.clone()
                     };
                     pdf.text(&name, FONT_BODY, false, col_item);
-                    
+
                     pdf.advance(FONT_BODY + 2.0);
                 }
                 pdf.advance(PARAGRAPH_GAP);
@@ -763,29 +834,63 @@ impl RecipePdfExporter {
         }
     }
 
-    fn categorize_ingredients(ingredients: &[AggregatedIngredient]) -> HashMap<&'static str, Vec<&AggregatedIngredient>> {
+    fn categorize_ingredients(
+        ingredients: &[AggregatedIngredient],
+    ) -> HashMap<&'static str, Vec<&AggregatedIngredient>> {
         let mut result: HashMap<&'static str, Vec<&AggregatedIngredient>> = HashMap::new();
-        
+
         for ing in ingredients {
             let name = ing.ingredient.name.to_lowercase();
-            let cat = if name.contains("chicken") || name.contains("beef") || name.contains("pork") 
-                || name.contains("salmon") || name.contains("fish") || name.contains("turkey")
-                || name.contains("lamb") || name.contains("meat") || name.contains("sausage") {
+            let cat = if name.contains("chicken")
+                || name.contains("beef")
+                || name.contains("pork")
+                || name.contains("salmon")
+                || name.contains("fish")
+                || name.contains("turkey")
+                || name.contains("lamb")
+                || name.contains("meat")
+                || name.contains("sausage")
+            {
                 "Proteins"
-            } else if name.contains("broccoli") || name.contains("spinach") || name.contains("carrot")
-                || name.contains("onion") || name.contains("pepper") || name.contains("potato")
-                || name.contains("tomato") || name.contains("garlic") || name.contains("lettuce")
-                || name.contains("vegetable") || name.contains("herb") || name.contains("beans") {
+            } else if name.contains("broccoli")
+                || name.contains("spinach")
+                || name.contains("carrot")
+                || name.contains("onion")
+                || name.contains("pepper")
+                || name.contains("potato")
+                || name.contains("tomato")
+                || name.contains("garlic")
+                || name.contains("lettuce")
+                || name.contains("vegetable")
+                || name.contains("herb")
+                || name.contains("beans")
+            {
                 "Vegetables & Produce"
-            } else if name.contains("cheese") || name.contains("milk") || name.contains("egg")
-                || name.contains("butter") || name.contains("yogurt") || name.contains("cream") {
+            } else if name.contains("cheese")
+                || name.contains("milk")
+                || name.contains("egg")
+                || name.contains("butter")
+                || name.contains("yogurt")
+                || name.contains("cream")
+            {
                 "Dairy & Refrigerated"
-            } else if name.contains("rice") || name.contains("pasta") || name.contains("flour")
-                || name.contains("bread") || name.contains("noodle") || name.contains("macaroni")
-                || name.contains("quinoa") || name.contains("tortilla") {
+            } else if name.contains("rice")
+                || name.contains("pasta")
+                || name.contains("flour")
+                || name.contains("bread")
+                || name.contains("noodle")
+                || name.contains("macaroni")
+                || name.contains("quinoa")
+                || name.contains("tortilla")
+            {
                 "Pantry Staples"
-            } else if name.contains("oil") || name.contains("sauce") || name.contains("seasoning")
-                || name.contains("spice") || name.contains("vinegar") || name.contains("soy") {
+            } else if name.contains("oil")
+                || name.contains("sauce")
+                || name.contains("seasoning")
+                || name.contains("spice")
+                || name.contains("vinegar")
+                || name.contains("soy")
+            {
                 "Condiments & Seasonings"
             } else {
                 "Other"
@@ -801,21 +906,24 @@ impl RecipePdfExporter {
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(PARAGRAPH_GAP);
-        
+
         // General tips - section header
         pdf.set_color(COLOR_PRIMARY);
         pdf.text("Prep Timeline", FONT_BODY, true, MARGIN);
         pdf.advance(FONT_BODY + 1.0);
         pdf.horizontal_line(0.3);
         pdf.advance(3.0);
-        
+
         let tips = [
-            ("Sunday", "Prep vegetables that last 5-7 days (onions, carrots, potatoes)"),
+            (
+                "Sunday",
+                "Prep vegetables that last 5-7 days (onions, carrots, potatoes)",
+            ),
             ("Sunday", "Portion and marinate proteins if needed"),
             ("Day Before", "Prep fresh vegetables (broccoli, peppers)"),
             ("Day Of", "Prep delicate items (fresh herbs, lettuce)"),
         ];
-        
+
         for (when, what) in tips {
             pdf.ensure_space(FONT_BODY + 3.0);
             pdf.set_color(COLOR_PRIMARY);
@@ -824,16 +932,16 @@ impl RecipePdfExporter {
             pdf.text(what, FONT_BODY, false, MARGIN + 40.0);
             pdf.advance(FONT_BODY + 2.0);
         }
-        
+
         pdf.advance(PARAGRAPH_GAP);
-        
+
         // Storage notes - section header
         pdf.set_color(COLOR_PRIMARY);
         pdf.text("Storage Notes", FONT_BODY, true, MARGIN);
         pdf.advance(FONT_BODY + 1.0);
         pdf.horizontal_line(0.3);
         pdf.advance(3.0);
-        
+
         for ing in ingredients.iter().take(12) {
             let name = ing.ingredient.name.to_lowercase();
             let tip = if name.contains("onion") || name.contains("garlic") {
@@ -847,7 +955,7 @@ impl RecipePdfExporter {
             } else {
                 continue;
             };
-            
+
             pdf.ensure_space(FONT_BODY + 3.0);
             pdf.set_color(COLOR_TEXT);
             pdf.text(&ing.ingredient.name, FONT_BODY, false, MARGIN + 5.0);
@@ -863,7 +971,7 @@ impl RecipePdfExporter {
         pdf.advance(FONT_HEADING * 0.4);
         pdf.thick_line();
         pdf.advance(PARAGRAPH_GAP);
-        
+
         if let Some(weekly) = &nutrition.weekly_totals {
             // Weekly totals header
             pdf.set_color(COLOR_PRIMARY);
@@ -871,32 +979,47 @@ impl RecipePdfExporter {
             pdf.advance(FONT_BODY + 1.0);
             pdf.horizontal_line(0.3);
             pdf.advance(3.0);
-            
+
             let items = [
-                ("Total Calories", PdfBuilder::format_decimal(&weekly.total_calories)),
-                ("Avg Daily Calories", PdfBuilder::format_decimal(&weekly.average_daily_calories)),
-                ("Total Protein", format!("{}g", PdfBuilder::format_decimal(&weekly.total_protein_g))),
-                ("Total Carbs", format!("{}g", PdfBuilder::format_decimal(&weekly.total_carbs_g))),
-                ("Total Fat", format!("{}g", PdfBuilder::format_decimal(&weekly.total_fat_g))),
+                (
+                    "Total Calories",
+                    PdfBuilder::format_decimal(&weekly.total_calories),
+                ),
+                (
+                    "Avg Daily Calories",
+                    PdfBuilder::format_decimal(&weekly.average_daily_calories),
+                ),
+                (
+                    "Total Protein",
+                    format!("{}g", PdfBuilder::format_decimal(&weekly.total_protein_g)),
+                ),
+                (
+                    "Total Carbs",
+                    format!("{}g", PdfBuilder::format_decimal(&weekly.total_carbs_g)),
+                ),
+                (
+                    "Total Fat",
+                    format!("{}g", PdfBuilder::format_decimal(&weekly.total_fat_g)),
+                ),
             ];
-            
+
             for (label, value) in items {
                 pdf.set_color(COLOR_TEXT);
                 pdf.text(label, FONT_BODY, false, MARGIN + 5.0);
                 pdf.text(&value, FONT_BODY, true, MARGIN + 70.0);
                 pdf.advance(FONT_BODY + 2.0);
             }
-            
+
             pdf.advance(PARAGRAPH_GAP);
         }
-        
+
         // Daily breakdown header
         pdf.set_color(COLOR_PRIMARY);
         pdf.text("Daily Breakdown", FONT_BODY, true, MARGIN);
         pdf.advance(FONT_BODY + 1.0);
         pdf.horizontal_line(0.3);
         pdf.advance(3.0);
-        
+
         // Table header row
         pdf.set_color(COLOR_LIGHT);
         pdf.text("Day", FONT_BODY, true, MARGIN + 5.0);
@@ -905,7 +1028,7 @@ impl RecipePdfExporter {
         pdf.text("Carbs", FONT_BODY, true, MARGIN + 110.0);
         pdf.text("Fat", FONT_BODY, true, MARGIN + 140.0);
         pdf.advance(FONT_BODY + 2.0);
-        
+
         for daily in &nutrition.daily_nutrition {
             let day_label = if let Some(date) = daily.date {
                 date.format("%a").to_string()
@@ -916,14 +1039,34 @@ impl RecipePdfExporter {
             } else {
                 continue;
             };
-            
+
             pdf.ensure_space(FONT_BODY + 3.0);
             pdf.set_color(COLOR_TEXT);
             pdf.text(&day_label, FONT_BODY, false, MARGIN + 5.0);
-            pdf.text(&PdfBuilder::format_decimal(&daily.total_calories), FONT_BODY, false, MARGIN + 45.0);
-            pdf.text(&format!("{}g", PdfBuilder::format_decimal(&daily.total_protein_g)), FONT_BODY, false, MARGIN + 80.0);
-            pdf.text(&format!("{}g", PdfBuilder::format_decimal(&daily.total_carbs_g)), FONT_BODY, false, MARGIN + 110.0);
-            pdf.text(&format!("{}g", PdfBuilder::format_decimal(&daily.total_fat_g)), FONT_BODY, false, MARGIN + 140.0);
+            pdf.text(
+                &PdfBuilder::format_decimal(&daily.total_calories),
+                FONT_BODY,
+                false,
+                MARGIN + 45.0,
+            );
+            pdf.text(
+                &format!("{}g", PdfBuilder::format_decimal(&daily.total_protein_g)),
+                FONT_BODY,
+                false,
+                MARGIN + 80.0,
+            );
+            pdf.text(
+                &format!("{}g", PdfBuilder::format_decimal(&daily.total_carbs_g)),
+                FONT_BODY,
+                false,
+                MARGIN + 110.0,
+            );
+            pdf.text(
+                &format!("{}g", PdfBuilder::format_decimal(&daily.total_fat_g)),
+                FONT_BODY,
+                false,
+                MARGIN + 140.0,
+            );
             pdf.advance(FONT_BODY + 2.0);
         }
     }
@@ -931,22 +1074,37 @@ impl RecipePdfExporter {
     fn render_meal_plan_closing(pdf: &mut PdfBuilder) {
         // Center content vertically on page
         pdf.y_pos = PAGE_HEIGHT / 2.0 + 30.0;
-        
+
         // All text centered horizontally (page center = 105mm)
         let center = PAGE_WIDTH / 2.0;
-        
+
         pdf.set_color(COLOR_PRIMARY);
         pdf.text("Bon Appetit!", FONT_TITLE, true, center - 40.0);
         pdf.advance(SECTION_GAP * 1.5);
-        
+
         pdf.set_color(COLOR_TEXT);
-        pdf.text("Thank you for using this meal plan.", FONT_BODY, false, center - 55.0);
+        pdf.text(
+            "Thank you for using this meal plan.",
+            FONT_BODY,
+            false,
+            center - 55.0,
+        );
         pdf.advance(FONT_BODY + 4.0);
-        pdf.text("We hope these recipes bring joy to your kitchen", FONT_BODY, false, center - 70.0);
+        pdf.text(
+            "We hope these recipes bring joy to your kitchen",
+            FONT_BODY,
+            false,
+            center - 70.0,
+        );
         pdf.advance(FONT_BODY + 4.0);
-        pdf.text("and nourishment to your table.", FONT_BODY, false, center - 45.0);
+        pdf.text(
+            "and nourishment to your table.",
+            FONT_BODY,
+            false,
+            center - 45.0,
+        );
         pdf.advance(SECTION_GAP * 1.5);
-        
+
         pdf.set_color(COLOR_SECONDARY);
         pdf.text("Happy cooking!", FONT_BODY, true, center - 22.0);
     }
@@ -956,7 +1114,7 @@ impl RecipePdfExporter {
 // HTML-based PDF Exporter using Chromiumoxide
 // ============================================================================
 
-use chromiumoxide::{Browser, BrowserConfig, cdp::browser_protocol::page::PrintToPdfParams};
+use chromiumoxide::{cdp::browser_protocol::page::PrintToPdfParams, Browser, BrowserConfig};
 use futures::StreamExt;
 
 pub struct HtmlPdfExporter;
@@ -981,9 +1139,10 @@ impl HtmlPdfExporter {
         }
 
         // Get prep data for shopping list
-        let prep_data = NutritionService::get_meal_plan_for_prep_analysis(pool, meal_plan.meal_plan.id)
-            .await
-            .map_err(|e| ToolboxError::Other(format!("Failed to get prep data: {}", e)))?;
+        let prep_data =
+            NutritionService::get_meal_plan_for_prep_analysis(pool, meal_plan.meal_plan.id)
+                .await
+                .map_err(|e| ToolboxError::Other(format!("Failed to get prep data: {}", e)))?;
 
         // Generate HTML
         let html = Self::generate_html(meal_plan, nutrition, &recipes_by_id, &prep_data);
@@ -991,26 +1150,27 @@ impl HtmlPdfExporter {
         // Launch headless Chrome and render to PDF
         // Try to find a working Chrome/Chromium installation
         let chrome_path = Self::find_chrome_executable();
-        
+
         let mut builder = BrowserConfig::builder();
-        
+
         if let Some(path) = &chrome_path {
             builder = builder.chrome_executable(path);
         }
-        
+
         let config = builder
             .no_sandbox()
             .build()
             .map_err(|e| ToolboxError::Other(format!("Failed to configure browser: {}", e)))?;
-        
-        let (browser, mut handler) = Browser::launch(config)
-            .await
-            .map_err(|e| ToolboxError::Other(format!("Failed to launch browser. Install Google Chrome for HTML PDF export: {}", e)))?;
+
+        let (browser, mut handler) = Browser::launch(config).await.map_err(|e| {
+            ToolboxError::Other(format!(
+                "Failed to launch browser. Install Google Chrome for HTML PDF export: {}",
+                e
+            ))
+        })?;
 
         // Spawn handler task
-        let handle = tokio::spawn(async move {
-            while let Some(_) = handler.next().await {}
-        });
+        let handle = tokio::spawn(async move { while let Some(_) = handler.next().await {} });
 
         // Create new page and set content
         let page = browser
@@ -1027,13 +1187,15 @@ impl HtmlPdfExporter {
 
         // Print to PDF
         let pdf_bytes = page
-            .pdf(PrintToPdfParams::builder()
-                .print_background(true)
-                .margin_top(0.4)
-                .margin_bottom(0.4)
-                .margin_left(0.4)
-                .margin_right(0.4)
-                .build())
+            .pdf(
+                PrintToPdfParams::builder()
+                    .print_background(true)
+                    .margin_top(0.4)
+                    .margin_bottom(0.4)
+                    .margin_left(0.4)
+                    .margin_right(0.4)
+                    .build(),
+            )
             .await
             .map_err(|e| ToolboxError::Other(format!("Failed to generate PDF: {}", e)))?;
 
@@ -1054,41 +1216,42 @@ impl HtmlPdfExporter {
         prep_data: &crate::nutrition::models::MealPlanPrepData,
     ) -> String {
         let mut html = String::new();
-        
+
         // HTML header with CSS
         html.push_str(&Self::html_header(&meal_plan.meal_plan.name));
-        
+
         // Cover page
         html.push_str(&Self::cover_page(meal_plan));
-        
+
         // Daily recipes
         let daily_entries = RecipePdfExporter::group_by_day(&meal_plan.entries);
         for (day_key, entries) in &daily_entries {
             html.push_str(&Self::day_page(day_key, entries, recipes));
         }
-        
+
         // Shopping list
         html.push_str(&Self::shopping_list_page(&prep_data.aggregated_ingredients));
-        
+
         // Meal prep guide
         html.push_str(&Self::prep_guide_page(&prep_data.aggregated_ingredients));
-        
+
         // Nutrition summary
         if let Some(nutrition) = nutrition {
             html.push_str(&Self::nutrition_page(nutrition));
         }
-        
+
         // Closing page
         html.push_str(&Self::closing_page());
-        
+
         // Close HTML
         html.push_str("</body></html>");
-        
+
         html
     }
 
     fn html_header(title: &str) -> String {
-        format!(r#"<!DOCTYPE html>
+        format!(
+            r#"<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -1336,18 +1499,20 @@ impl HtmlPdfExporter {
     </style>
 </head>
 <body>
-"#, title)
+"#,
+            title
+        )
     }
 
     fn cover_page(meal_plan: &MealPlanWithEntries) -> String {
         let mut html = String::from(r#"<div class="page"><div class="cover-center">"#);
-        
+
         html.push_str(&format!("<h1>{}</h1>", meal_plan.meal_plan.name));
-        
+
         if let Some(desc) = &meal_plan.meal_plan.description {
             html.push_str(&format!(r#"<p class="subtitle">{}</p>"#, desc));
         }
-        
+
         html.push_str(r#"<div class="meta">"#);
         if let Some(start) = meal_plan.meal_plan.start_date {
             html.push_str(&format!("From: {} ", start.format("%B %d, %Y")));
@@ -1357,23 +1522,23 @@ impl HtmlPdfExporter {
         }
         html.push_str(&format!("Total Meals: {}", meal_plan.entries.len()));
         html.push_str("</div>");
-        
+
         // Week overview
         html.push_str(r#"<h3 style="margin-top: 32px;">Your Week at a Glance</h3>"#);
         html.push_str(r#"<div class="overview-grid">"#);
-        
+
         let daily = RecipePdfExporter::group_by_day(&meal_plan.entries);
         for (day_key, entries) in daily.iter().take(7) {
             let day_name = RecipePdfExporter::format_day_key(day_key);
             let recipes: Vec<_> = entries.iter().map(|e| e.recipe.name.as_str()).collect();
-            
+
             html.push_str(&format!(
                 r#"<div class="overview-row"><span class="overview-day">{}</span><span>{}</span></div>"#,
                 day_name,
                 recipes.join(", ")
             ));
         }
-        
+
         html.push_str("</div></div></div>");
         html
     }
@@ -1384,44 +1549,55 @@ impl HtmlPdfExporter {
         recipes: &HashMap<uuid::Uuid, RecipeWithDetails>,
     ) -> String {
         let mut html = String::from(r#"<div class="page">"#);
-        
+
         let day_name = RecipePdfExporter::format_day_key(day_key);
         html.push_str(&format!("<h2>{}</h2>", day_name));
-        
+
         for entry in entries {
             if let Some(recipe) = recipes.get(&entry.recipe.id) {
                 html.push_str(&Self::recipe_card(&entry.entry.meal_type, recipe));
             }
         }
-        
+
         html.push_str("</div>");
         html
     }
 
     fn recipe_card(meal_type: &str, recipe: &RecipeWithDetails) -> String {
         let mut html = String::from(r#"<div class="recipe-card">"#);
-        
+
         // Meal badge and title
-        let meal_label = meal_type.chars().next()
+        let meal_label = meal_type
+            .chars()
+            .next()
             .map(|c| c.to_uppercase().collect::<String>() + &meal_type[1..])
             .unwrap_or_else(|| meal_type.to_string());
         html.push_str(&format!(r#"<div class="meal-badge">{}</div>"#, meal_label));
-        html.push_str(&format!(r#"<div class="recipe-title">{}</div>"#, recipe.recipe.name));
-        
+        html.push_str(&format!(
+            r#"<div class="recipe-title">{}</div>"#,
+            recipe.recipe.name
+        ));
+
         // Description
         if let Some(desc) = &recipe.recipe.description {
             html.push_str(&format!(r#"<div class="recipe-desc">{}</div>"#, desc));
         }
-        
+
         // Metadata
         let mut meta = Vec::new();
-        if let Some(s) = recipe.recipe.servings { meta.push(format!("Serves {}", s)); }
-        if let Some(p) = recipe.recipe.prep_time_minutes { meta.push(format!("{} min prep", p)); }
-        if let Some(c) = recipe.recipe.cook_time_minutes { meta.push(format!("{} min cook", c)); }
+        if let Some(s) = recipe.recipe.servings {
+            meta.push(format!("Serves {}", s));
+        }
+        if let Some(p) = recipe.recipe.prep_time_minutes {
+            meta.push(format!("{} min prep", p));
+        }
+        if let Some(c) = recipe.recipe.cook_time_minutes {
+            meta.push(format!("{} min cook", c));
+        }
         if !meta.is_empty() {
             html.push_str(&format!(r#"<div class="meta">{}</div>"#, meta.join(" · ")));
         }
-        
+
         // Ingredients
         if !recipe.ingredients.is_empty() {
             html.push_str("<h4>Ingredients</h4>");
@@ -1429,7 +1605,7 @@ impl HtmlPdfExporter {
             for ing in &recipe.ingredients {
                 let (qty, unit) = PdfBuilder::to_american_units(
                     &ing.recipe_ingredient.quantity,
-                    &ing.recipe_ingredient.unit
+                    &ing.recipe_ingredient.unit,
                 );
                 html.push_str(&format!(
                     r#"<div class="ingredient">• {} {} {}</div>"#,
@@ -1438,7 +1614,7 @@ impl HtmlPdfExporter {
             }
             html.push_str("</div>");
         }
-        
+
         // Instructions
         if !recipe.steps.is_empty() {
             html.push_str("<h4>Instructions</h4>");
@@ -1451,30 +1627,38 @@ impl HtmlPdfExporter {
             }
             html.push_str("</div>");
         }
-        
+
         html.push_str("</div>");
         html
     }
 
     fn shopping_list_page(ingredients: &[AggregatedIngredient]) -> String {
         let mut html = String::from(r#"<div class="page"><h2>Shopping List</h2>"#);
-        
+
         let categories = RecipePdfExporter::categorize_ingredients(ingredients);
-        let category_order = ["Proteins", "Vegetables & Produce", "Dairy & Refrigerated", 
-                            "Pantry Staples", "Condiments & Seasonings", "Other"];
-        
+        let category_order = [
+            "Proteins",
+            "Vegetables & Produce",
+            "Dairy & Refrigerated",
+            "Pantry Staples",
+            "Condiments & Seasonings",
+            "Other",
+        ];
+
         html.push_str("<table>");
         html.push_str("<tr><th></th><th>Qty</th><th>Item</th></tr>");
-        
+
         for cat_name in category_order {
             if let Some(items) = categories.get(cat_name) {
-                if items.is_empty() { continue; }
-                
+                if items.is_empty() {
+                    continue;
+                }
+
                 html.push_str(&format!(
                     r#"<tr><td colspan="3" class="category-header">{}</td></tr>"#,
                     cat_name
                 ));
-                
+
                 for ing in items {
                     let (qty, unit) = PdfBuilder::to_american_units(&ing.total_quantity, &ing.unit);
                     html.push_str(&format!(
@@ -1484,34 +1668,40 @@ impl HtmlPdfExporter {
                 }
             }
         }
-        
+
         html.push_str("</table></div>");
         html
     }
 
     fn prep_guide_page(ingredients: &[AggregatedIngredient]) -> String {
         let mut html = String::from(r#"<div class="page"><h2>Meal Prep Guide</h2>"#);
-        
+
         html.push_str("<h3>Prep Timeline</h3>");
         html.push_str("<table>");
         html.push_str("<tr><th>When</th><th>What to Do</th></tr>");
-        
+
         let tips = [
-            ("Sunday", "Prep vegetables that last 5-7 days (onions, carrots, potatoes)"),
+            (
+                "Sunday",
+                "Prep vegetables that last 5-7 days (onions, carrots, potatoes)",
+            ),
             ("Sunday", "Portion and marinate proteins if needed"),
             ("Day Before", "Prep fresh vegetables (broccoli, peppers)"),
             ("Day Of", "Prep delicate items (fresh herbs, lettuce)"),
         ];
-        
+
         for (when, what) in tips {
-            html.push_str(&format!("<tr><td><strong>{}</strong></td><td>{}</td></tr>", when, what));
+            html.push_str(&format!(
+                "<tr><td><strong>{}</strong></td><td>{}</td></tr>",
+                when, what
+            ));
         }
         html.push_str("</table>");
-        
+
         html.push_str("<h3>Storage Notes</h3>");
         html.push_str("<table>");
         html.push_str("<tr><th>Ingredient</th><th>Storage Tip</th></tr>");
-        
+
         for ing in ingredients.iter().take(12) {
             let name = ing.ingredient.name.to_lowercase();
             let tip = if name.contains("onion") || name.contains("garlic") {
@@ -1525,39 +1715,54 @@ impl HtmlPdfExporter {
             } else {
                 None
             };
-            
+
             if let Some(tip) = tip {
-                html.push_str(&format!("<tr><td>{}</td><td>{}</td></tr>", ing.ingredient.name, tip));
+                html.push_str(&format!(
+                    "<tr><td>{}</td><td>{}</td></tr>",
+                    ing.ingredient.name, tip
+                ));
             }
         }
-        
+
         html.push_str("</table></div>");
         html
     }
 
     fn nutrition_page(nutrition: &MealPlanNutrition) -> String {
         let mut html = String::from(r#"<div class="page"><h2>Nutrition Summary</h2>"#);
-        
+
         if let Some(weekly) = &nutrition.weekly_totals {
             html.push_str("<h3>Weekly Totals</h3>");
             html.push_str("<table>");
-            html.push_str(&format!("<tr><td>Total Calories</td><td><strong>{}</strong></td></tr>", 
-                PdfBuilder::format_decimal(&weekly.total_calories)));
-            html.push_str(&format!("<tr><td>Avg Daily Calories</td><td><strong>{}</strong></td></tr>", 
-                PdfBuilder::format_decimal(&weekly.average_daily_calories)));
-            html.push_str(&format!("<tr><td>Total Protein</td><td><strong>{}g</strong></td></tr>", 
-                PdfBuilder::format_decimal(&weekly.total_protein_g)));
-            html.push_str(&format!("<tr><td>Total Carbs</td><td><strong>{}g</strong></td></tr>", 
-                PdfBuilder::format_decimal(&weekly.total_carbs_g)));
-            html.push_str(&format!("<tr><td>Total Fat</td><td><strong>{}g</strong></td></tr>", 
-                PdfBuilder::format_decimal(&weekly.total_fat_g)));
+            html.push_str(&format!(
+                "<tr><td>Total Calories</td><td><strong>{}</strong></td></tr>",
+                PdfBuilder::format_decimal(&weekly.total_calories)
+            ));
+            html.push_str(&format!(
+                "<tr><td>Avg Daily Calories</td><td><strong>{}</strong></td></tr>",
+                PdfBuilder::format_decimal(&weekly.average_daily_calories)
+            ));
+            html.push_str(&format!(
+                "<tr><td>Total Protein</td><td><strong>{}g</strong></td></tr>",
+                PdfBuilder::format_decimal(&weekly.total_protein_g)
+            ));
+            html.push_str(&format!(
+                "<tr><td>Total Carbs</td><td><strong>{}g</strong></td></tr>",
+                PdfBuilder::format_decimal(&weekly.total_carbs_g)
+            ));
+            html.push_str(&format!(
+                "<tr><td>Total Fat</td><td><strong>{}g</strong></td></tr>",
+                PdfBuilder::format_decimal(&weekly.total_fat_g)
+            ));
             html.push_str("</table>");
         }
-        
+
         html.push_str("<h3>Daily Breakdown</h3>");
         html.push_str("<table>");
-        html.push_str("<tr><th>Day</th><th>Calories</th><th>Protein</th><th>Carbs</th><th>Fat</th></tr>");
-        
+        html.push_str(
+            "<tr><th>Day</th><th>Calories</th><th>Protein</th><th>Carbs</th><th>Fat</th></tr>",
+        );
+
         for daily in &nutrition.daily_nutrition {
             let day_label = if let Some(date) = daily.date {
                 date.format("%A").to_string()
@@ -1568,7 +1773,7 @@ impl HtmlPdfExporter {
             } else {
                 continue;
             };
-            
+
             html.push_str(&format!(
                 "<tr><td>{}</td><td>{}</td><td>{}g</td><td>{}g</td><td>{}g</td></tr>",
                 day_label,
@@ -1578,7 +1783,7 @@ impl HtmlPdfExporter {
                 PdfBuilder::format_decimal(&daily.total_fat_g),
             ));
         }
-        
+
         html.push_str("</table></div>");
         html
     }
@@ -1593,7 +1798,8 @@ impl HtmlPdfExporter {
                 </div>
                 <div class="closing-tagline">Happy cooking!</div>
             </div>
-        </div>"#.to_string()
+        </div>"#
+            .to_string()
     }
 
     /// Find a Chrome/Chromium executable that works with headless mode
@@ -1605,13 +1811,13 @@ impl HtmlPdfExporter {
             "/usr/bin/chromium-browser",
             "/opt/google/chrome/chrome",
         ];
-        
+
         for path in candidates {
             if std::path::Path::new(path).exists() {
                 return Some(path.to_string());
             }
         }
-        
+
         // Don't use snap chromium - it doesn't work well with headless automation
         None
     }

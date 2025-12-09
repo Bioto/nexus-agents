@@ -6,4 +6,3 @@ pub mod capture;
 
 // Re-exports for convenience
 pub use capture::InputEvent;
-

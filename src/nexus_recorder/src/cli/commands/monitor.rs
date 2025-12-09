@@ -192,9 +192,7 @@ pub fn run_monitor(args: MonitorArgs) -> Result<()> {
             }
             std::process::exit(0);
         })
-        .map_err(|e| {
-            RecorderError::Other(format!("Failed to set Ctrl+C handler: {}", e))
-        })?;
+        .map_err(|e| RecorderError::Other(format!("Failed to set Ctrl+C handler: {}", e)))?;
     }
 
     // Start recording

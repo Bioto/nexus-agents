@@ -119,4 +119,3 @@ impl From<cpal::PauseStreamError> for RecorderError {
         RecorderError::Audio(format!("Pause stream error: {}", err))
     }
 }
-

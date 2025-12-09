@@ -9,4 +9,3 @@ pub use video_overlay::{
     create_overlay_channel, format_timestamp, get_current_overlay, OverlayReceiver, OverlaySender,
     VideoOverlay,
 };
-

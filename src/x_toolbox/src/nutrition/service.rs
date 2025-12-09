@@ -1736,14 +1736,15 @@ Return only valid JSON, no markdown formatting."#,
                 let quantity = &recipe_ingredient.recipe_ingredient.quantity;
                 let unit = &recipe_ingredient.recipe_ingredient.unit;
 
-                let aggregated = ingredient_map.entry(ingredient_id).or_insert_with(|| {
-                    AggregatedIngredient {
-                        ingredient: recipe_ingredient.ingredient.clone(),
-                        total_quantity: BigDecimal::from(0),
-                        unit: unit.clone(),
-                        used_in_recipes: Vec::new(),
-                    }
-                });
+                let aggregated =
+                    ingredient_map
+                        .entry(ingredient_id)
+                        .or_insert_with(|| AggregatedIngredient {
+                            ingredient: recipe_ingredient.ingredient.clone(),
+                            total_quantity: BigDecimal::from(0),
+                            unit: unit.clone(),
+                            used_in_recipes: Vec::new(),
+                        });
 
                 // Add to total quantity (assuming same unit for now)
                 aggregated.total_quantity += quantity;
@@ -1774,10 +1775,7 @@ Return only valid JSON, no markdown formatting."#,
     }
 
     /// Generate a meal prep report using LLM analysis
-    pub async fn generate_meal_prep_report(
-        pool: &PgPool,
-        meal_plan_id: Uuid,
-    ) -> Result<String> {
+    pub async fn generate_meal_prep_report(pool: &PgPool, meal_plan_id: Uuid) -> Result<String> {
         use reqwest::Client;
         use std::env;
 
@@ -1823,10 +1821,7 @@ Consider:
         if let Some(end) = prep_data.meal_plan.end_date {
             prompt.push_str(&format!("End Date: {}\n", end));
         }
-        prompt.push_str(&format!(
-            "Total Meals: {}\n\n",
-            prep_data.entries.len()
-        ));
+        prompt.push_str(&format!("Total Meals: {}\n\n", prep_data.entries.len()));
 
         // Add all recipes with full details
         prompt.push_str("## Recipes\n\n");

@@ -1,5 +1,5 @@
-use crate::error::{RecorderError, Result};
 use super::audio_recorder::{AudioRecorder, RecordingConfig};
+use crate::error::{RecorderError, Result};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};

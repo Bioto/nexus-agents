@@ -63,15 +63,14 @@
 //! handle.stop();
 //! ```
 
+pub mod controller;
 pub mod device;
 pub mod format;
 pub mod recorder;
-pub mod controller;
 pub mod splitter;
 
+pub use controller::{PtzControl, PtzState, WebcamController};
 pub use device::{list_v4l2_devices, show_device_info, WebcamDevice, WebcamDeviceInfo};
-pub use format::{mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb};
+pub use format::{mjpeg_to_rgb, yuv_to_rgb, yuyv_to_rgb};
 pub use recorder::{WebcamRecorder, WebcamRecordingConfig};
-pub use controller::{WebcamController, PtzControl, PtzState};
-pub use splitter::{WebcamSplitter, SplitterConfig, SplitterHandle};
-
+pub use splitter::{SplitterConfig, SplitterHandle, WebcamSplitter};

@@ -111,7 +111,10 @@ impl WebcamSplitter {
     pub fn check_loopback_devices(&self) -> Result<()> {
         for device in &self.config.output_devices {
             if !Path::new(device).exists() {
-                let video_nrs = self.config.output_devices.iter()
+                let video_nrs = self
+                    .config
+                    .output_devices
+                    .iter()
                     .filter_map(|d| d.strip_prefix("/dev/video"))
                     .collect::<Vec<_>>()
                     .join(",");
@@ -171,7 +174,11 @@ impl WebcamSplitter {
     fn build_ffmpeg_command(&self) -> Result<Command> {
         let (width, height, fourcc) =
             if let (Some(w), Some(h)) = (self.config.width, self.config.height) {
-                let fmt = self.config.input_format.clone().unwrap_or_else(|| "mjpeg".to_string());
+                let fmt = self
+                    .config
+                    .input_format
+                    .clone()
+                    .unwrap_or_else(|| "mjpeg".to_string());
                 (w, h, fmt)
             } else {
                 self.query_input_format()?
@@ -187,20 +194,24 @@ impl WebcamSplitter {
         let mut cmd = Command::new("ffmpeg");
 
         // Input configuration
-        cmd.arg("-f").arg("v4l2")
-            .arg("-input_format").arg(input_format)
-            .arg("-video_size").arg(format!("{}x{}", width, height))
-            .arg("-framerate").arg(self.config.framerate.to_string())
-            .arg("-i").arg(&self.config.input_device);
+        cmd.arg("-f")
+            .arg("v4l2")
+            .arg("-input_format")
+            .arg(input_format)
+            .arg("-video_size")
+            .arg(format!("{}x{}", width, height))
+            .arg("-framerate")
+            .arg(self.config.framerate.to_string())
+            .arg("-i")
+            .arg(&self.config.input_device);
 
         // For v4l2loopback, we need to decode once and then output to each device
         // Using format filter to convert to YUV420P which v4l2loopback handles better
         let num_outputs = self.config.output_devices.len();
         if num_outputs > 1 {
             // Build split filter with proper format conversion
-            let output_labels: Vec<String> = (0..num_outputs)
-                .map(|i| format!("[out{}]", i))
-                .collect();
+            let output_labels: Vec<String> =
+                (0..num_outputs).map(|i| format!("[out{}]", i)).collect();
             let filter_complex = format!(
                 "[0:v]format=yuv420p,split={}{}",
                 num_outputs,
@@ -210,16 +221,22 @@ impl WebcamSplitter {
 
             // Map each output label to a device with rawvideo codec
             for (i, device) in self.config.output_devices.iter().enumerate() {
-                cmd.arg("-map").arg(format!("[out{}]", i))
-                    .arg("-f").arg("v4l2")
-                    .arg("-pix_fmt").arg("yuv420p")
+                cmd.arg("-map")
+                    .arg(format!("[out{}]", i))
+                    .arg("-f")
+                    .arg("v4l2")
+                    .arg("-pix_fmt")
+                    .arg("yuv420p")
                     .arg(device);
             }
         } else {
             // Single output with format conversion
-            cmd.arg("-vf").arg("format=yuv420p")
-                .arg("-f").arg("v4l2")
-                .arg("-pix_fmt").arg("yuv420p")
+            cmd.arg("-vf")
+                .arg("format=yuv420p")
+                .arg("-f")
+                .arg("v4l2")
+                .arg("-pix_fmt")
+                .arg("yuv420p")
                 .arg(&self.config.output_devices[0]);
         }
 

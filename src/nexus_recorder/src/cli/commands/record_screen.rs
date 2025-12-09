@@ -1,5 +1,5 @@
 use crate::error::{RecorderError, Result};
-use crate::services::{ScreenRecordingConfig as RecordingConfig, ScreenRecorder};
+use crate::services::{ScreenRecorder, ScreenRecordingConfig as RecordingConfig};
 use clap::Args;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -95,8 +95,9 @@ pub async fn run_record(args: RecordArgs) -> Result<()> {
     };
 
     // Create recorder with config
-    let recorder = ScreenRecorder::new_with_config(config.clone())
-        .map_err(|e| RecorderError::ScreenCapture(format!("Failed to initialize recorder: {}", e)))?;
+    let recorder = ScreenRecorder::new_with_config(config.clone()).map_err(|e| {
+        RecorderError::ScreenCapture(format!("Failed to initialize recorder: {}", e))
+    })?;
 
     println!("🎬 Starting screen recording...");
     println!("   Output: {}", config.output_path.display());
@@ -143,7 +144,10 @@ pub async fn run_record(args: RecordArgs) -> Result<()> {
                 .map_err(|e| RecorderError::VideoEncoding(format!("Recording failed: {}", e)))?;
         }
         Err(e) => {
-            return Err(RecorderError::Other(format!("Recording task failed: {}", e)));
+            return Err(RecorderError::Other(format!(
+                "Recording task failed: {}",
+                e
+            )));
         }
     }
 

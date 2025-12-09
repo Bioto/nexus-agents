@@ -38,15 +38,13 @@ pub struct PdfArgs {
 pub fn run_pdf(args: PdfArgs) -> Result<()> {
     // Ensure output directory exists
     if let Some(parent) = args.output.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| crate::error::ExporterError::Io(e))?;
+        std::fs::create_dir_all(parent).map_err(|e| crate::error::ExporterError::Io(e))?;
     }
 
     // Determine content source
     let content = if let Some(input_path) = &args.input {
         // Read from input file
-        std::fs::read_to_string(input_path)
-            .map_err(|e| crate::error::ExporterError::Io(e))?
+        std::fs::read_to_string(input_path).map_err(|e| crate::error::ExporterError::Io(e))?
     } else if let Some(text) = &args.text {
         // Use provided text
         text.clone()
@@ -73,4 +71,3 @@ pub fn run_pdf(args: PdfArgs) -> Result<()> {
 
     Ok(())
 }
-

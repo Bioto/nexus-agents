@@ -1,6 +1,5 @@
 /// Unified recording library for AI agents.
 /// Provides audio recording, screen capture, input logging, and unified recording sessions.
-
 pub mod cli;
 pub mod error;
 pub mod services;
@@ -18,29 +17,55 @@ pub use error::{RecorderError, Result};
 /// Core services for recording operations.
 /// All services are re-exported from the services module for convenience.
 pub use services::{
+    // Webcam services
+    list_v4l2_devices,
+    mjpeg_to_rgb,
+    show_device_info,
+    yuv_to_rgb,
+    yuyv_to_rgb,
     // Audio services
-    AudioRecorder, AudioRecordingConfig, AudioStream, DeviceInfo,
-    TextToSpeech, TtsConfig,
-    VoiceListener, VoiceListenerConfig,
-    
-    // Screen services
-    MonitorInfo, ScreenRecordingConfig, ScreenRecorder,
-    WindowGeometry, WindowInfo, WindowInfoService,
-    
+    AudioRecorder,
+    AudioRecordingConfig,
+    AudioStream,
+    // Storage services
+    BatchEvent,
+    BatchInserterConfig,
+    Database,
+    // Unified recording
+    DefaultEventCallback,
+    DeviceInfo,
+    EventCallback,
+    EventWriterConfig,
+
+    InputCaptureConfig,
     // Input capture services
     InputEvent,
-    
-    // Unified recording
-        DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel, RecordingSession,
-        UnifiedRecordingConfig, UnifiedRecordingService,
-    
-    // Storage services
-    BatchEvent, BatchInserterConfig, Database, EventWriterConfig,
-    
-    // Webcam services
-    list_v4l2_devices, show_device_info, WebcamDevice, WebcamDeviceInfo,
-    mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb,
-    WebcamRecorder, WebcamRecordingConfig,
-    WebcamController, PtzControl, PtzState,
-    WebcamSplitter, SplitterConfig, SplitterHandle,
+
+    // Screen services
+    MonitorInfo,
+    OverlayLabel,
+    PtzControl,
+    PtzState,
+    RecordingSession,
+    ScreenRecorder,
+    ScreenRecordingConfig,
+    SplitterConfig,
+    SplitterHandle,
+    TextToSpeech,
+    TtsConfig,
+    UnifiedRecordingConfig,
+    UnifiedRecordingService,
+
+    VoiceListener,
+    VoiceListenerConfig,
+
+    WebcamController,
+    WebcamDevice,
+    WebcamDeviceInfo,
+    WebcamRecorder,
+    WebcamRecordingConfig,
+    WebcamSplitter,
+    WindowGeometry,
+    WindowInfo,
+    WindowInfoService,
 };

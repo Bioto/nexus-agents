@@ -304,4 +304,3 @@ impl Default for AudioRecordingConfig {
         }
     }
 }
-

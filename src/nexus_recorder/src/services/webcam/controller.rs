@@ -18,10 +18,10 @@ const V4L2_CID_TILT_ABSOLUTE: u32 = V4L2_CID_CAMERA_CLASS_BASE + 9;
 const V4L2_CID_ZOOM_ABSOLUTE: u32 = V4L2_CID_CAMERA_CLASS_BASE + 13;
 
 // Default ranges for PTZ (in arc-seconds)
-const DEFAULT_PAN_MIN: i64 = -648000;  // -180 degrees
-const DEFAULT_PAN_MAX: i64 = 648000;   // +180 degrees
+const DEFAULT_PAN_MIN: i64 = -648000; // -180 degrees
+const DEFAULT_PAN_MAX: i64 = 648000; // +180 degrees
 const DEFAULT_TILT_MIN: i64 = -324000; // -90 degrees
-const DEFAULT_TILT_MAX: i64 = 324000;  // +90 degrees
+const DEFAULT_TILT_MAX: i64 = 324000; // +90 degrees
 const DEFAULT_ZOOM_MIN: i64 = 100;
 const DEFAULT_ZOOM_MAX: i64 = 500;
 
@@ -81,9 +81,10 @@ impl WebcamController {
     /// The device can be shared with other services (like WebcamRecorder)
     /// by wrapping it in an Arc<Mutex<>>.
     pub fn new(device: Arc<Mutex<WebcamDevice>>) -> Result<Self> {
-        let device_guard = device.lock()
+        let device_guard = device
+            .lock()
             .map_err(|e| RecorderError::Other(format!("Failed to lock device: {}", e)))?;
-        
+
         let controls: Vec<_> = device_guard.device().query_controls().unwrap_or_default();
         drop(device_guard);
 
@@ -92,14 +93,16 @@ impl WebcamController {
         let mut tilt_ctrl = None;
         let mut zoom_ctrl = None;
 
-        let device_guard = device.lock()
+        let device_guard = device
+            .lock()
             .map_err(|e| RecorderError::Other(format!("Failed to lock device: {}", e)))?;
 
         // Try reading pan control
         match device_guard.device().control(V4L2_CID_PAN_ABSOLUTE) {
             Ok(ctrl) => {
                 if let Value::Integer(val) = ctrl.value {
-                    let (min, max) = controls.iter()
+                    let (min, max) = controls
+                        .iter()
                         .find(|c| c.id == V4L2_CID_PAN_ABSOLUTE)
                         .map(|c| (c.minimum, c.maximum))
                         .unwrap_or((DEFAULT_PAN_MIN, DEFAULT_PAN_MAX));
@@ -116,7 +119,8 @@ impl WebcamController {
         match device_guard.device().control(V4L2_CID_TILT_ABSOLUTE) {
             Ok(ctrl) => {
                 if let Value::Integer(val) = ctrl.value {
-                    let (min, max) = controls.iter()
+                    let (min, max) = controls
+                        .iter()
                         .find(|c| c.id == V4L2_CID_TILT_ABSOLUTE)
                         .map(|c| (c.minimum, c.maximum))
                         .unwrap_or((DEFAULT_TILT_MIN, DEFAULT_TILT_MAX));
@@ -133,7 +137,8 @@ impl WebcamController {
         match device_guard.device().control(V4L2_CID_ZOOM_ABSOLUTE) {
             Ok(ctrl) => {
                 if let Value::Integer(val) = ctrl.value {
-                    let (min, max) = controls.iter()
+                    let (min, max) = controls
+                        .iter()
                         .find(|c| c.id == V4L2_CID_ZOOM_ABSOLUTE)
                         .map(|c| (c.minimum, c.maximum))
                         .unwrap_or((DEFAULT_ZOOM_MIN, DEFAULT_ZOOM_MAX));
@@ -168,7 +173,9 @@ impl WebcamController {
 
     /// Execute a PTZ control command.
     pub fn control(&self, cmd: PtzControl) -> Result<PtzState> {
-        let mut device_guard = self.device.lock()
+        let mut device_guard = self
+            .device
+            .lock()
             .map_err(|e| RecorderError::Other(format!("Failed to lock device: {}", e)))?;
 
         match cmd {
@@ -213,18 +220,24 @@ impl WebcamController {
         delta: i64,
     ) -> Result<()> {
         if let Some((id, min, max)) = ctrl {
-            let current = device.device().control(id)
-                .map_err(|e| RecorderError::Other(format!("Failed to read control {}: {}", id, e)))?;
+            let current = device.device().control(id).map_err(|e| {
+                RecorderError::Other(format!("Failed to read control {}: {}", id, e))
+            })?;
 
             if let Value::Integer(val) = current.value {
                 // Small step: ~2 degrees for pan/tilt, small increment for zoom
                 let step = ((max - min) / 100).max(7200);
                 let new_val = (val + delta * step).clamp(min, max);
-                
-                device.device_mut().set_control(Control {
-                    id,
-                    value: Value::Integer(new_val),
-                }).map_err(|e| RecorderError::Other(format!("Failed to set control {}: {}", id, e)))?;
+
+                device
+                    .device_mut()
+                    .set_control(Control {
+                        id,
+                        value: Value::Integer(new_val),
+                    })
+                    .map_err(|e| {
+                        RecorderError::Other(format!("Failed to set control {}: {}", id, e))
+                    })?;
 
                 debug!("Control {} adjusted to {}", id, new_val);
             }
@@ -241,11 +254,16 @@ impl WebcamController {
     ) -> Result<()> {
         if let Some((id, min, max)) = ctrl {
             let clamped_value = value.clamp(min, max);
-            
-            device.device_mut().set_control(Control {
-                id,
-                value: Value::Integer(clamped_value),
-            }).map_err(|e| RecorderError::Other(format!("Failed to set control {}: {}", id, e)))?;
+
+            device
+                .device_mut()
+                .set_control(Control {
+                    id,
+                    value: Value::Integer(clamped_value),
+                })
+                .map_err(|e| {
+                    RecorderError::Other(format!("Failed to set control {}: {}", id, e))
+                })?;
 
             debug!("Control {} set to {}", id, clamped_value);
         }
@@ -256,26 +274,35 @@ impl WebcamController {
     fn reset_ptz(&self, device: &mut WebcamDevice) -> Result<()> {
         if let Some((id, min, max)) = self.pan_ctrl {
             let center = (min + max) / 2;
-            device.device_mut().set_control(Control {
-                id,
-                value: Value::Integer(center),
-            }).map_err(|e| RecorderError::Other(format!("Failed to reset pan: {}", e)))?;
+            device
+                .device_mut()
+                .set_control(Control {
+                    id,
+                    value: Value::Integer(center),
+                })
+                .map_err(|e| RecorderError::Other(format!("Failed to reset pan: {}", e)))?;
         }
 
         if let Some((id, min, max)) = self.tilt_ctrl {
             let center = (min + max) / 2;
-            device.device_mut().set_control(Control {
-                id,
-                value: Value::Integer(center),
-            }).map_err(|e| RecorderError::Other(format!("Failed to reset tilt: {}", e)))?;
+            device
+                .device_mut()
+                .set_control(Control {
+                    id,
+                    value: Value::Integer(center),
+                })
+                .map_err(|e| RecorderError::Other(format!("Failed to reset tilt: {}", e)))?;
         }
 
         if let Some((id, min, _max)) = self.zoom_ctrl {
             let default = min; // Usually zoom out is minimum
-            device.device_mut().set_control(Control {
-                id,
-                value: Value::Integer(default),
-            }).map_err(|e| RecorderError::Other(format!("Failed to reset zoom: {}", e)))?;
+            device
+                .device_mut()
+                .set_control(Control {
+                    id,
+                    value: Value::Integer(default),
+                })
+                .map_err(|e| RecorderError::Other(format!("Failed to reset zoom: {}", e)))?;
         }
 
         Ok(())
@@ -318,7 +345,9 @@ impl WebcamController {
 
     /// Get current PTZ state (convenience method).
     pub fn state(&self) -> Result<PtzState> {
-        let device_guard = self.device.lock()
+        let device_guard = self
+            .device
+            .lock()
             .map_err(|e| RecorderError::Other(format!("Failed to lock device: {}", e)))?;
         let state = self.get_state(&device_guard)?;
         drop(device_guard);
@@ -340,4 +369,3 @@ impl WebcamController {
         self.zoom_ctrl.is_some()
     }
 }
-

@@ -1,10 +1,10 @@
 use crate::error::{RecorderError, Result};
-use log::{info, warn};
-use crate::services::storage::Database;
 use crate::services::screen::ScreenRecorder;
+use crate::services::storage::Database;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Local, Utc};
 use image::ImageReader;
+use log::{info, warn};
 use nexus_core::models::{ContentPart, ImageUrl};
 use nexus_core::{ChatCompletionRequest, Message, MessageContent, NexusApiService};
 use serde_json::{json, Value};
@@ -271,12 +271,16 @@ impl ProcessingService {
                 // Extract a frame from a few seconds ago (to ensure data exists)
                 let frame_timestamp = (elapsed - 3.0).max(1.0);
 
-                let job = ProcessingJob::new("webcam_analysis", format!("frame_{}", frame_index), Utc::now())
-                    .with_session_id(Some(session_id.clone()))
-                    .with_video_context(Some(frame_timestamp), Some(video_path.clone()))
-                    .with_metadata(json!({
-                        "frame_index": frame_index,
-                    }));
+                let job = ProcessingJob::new(
+                    "webcam_analysis",
+                    format!("frame_{}", frame_index),
+                    Utc::now(),
+                )
+                .with_session_id(Some(session_id.clone()))
+                .with_video_context(Some(frame_timestamp), Some(video_path.clone()))
+                .with_metadata(json!({
+                    "frame_index": frame_index,
+                }));
 
                 handle.trigger(job);
 
@@ -284,7 +288,10 @@ impl ProcessingService {
                 tokio::time::sleep(interval).await;
             }
 
-            info!("🎭 Webcam analysis queuing stopped: {} frames queued for processing", frame_index);
+            info!(
+                "🎭 Webcam analysis queuing stopped: {} frames queued for processing",
+                frame_index
+            );
         });
 
         Ok(())
@@ -1726,7 +1733,10 @@ impl ProcessingService {
     }
 
     /// Extract a single frame from a video file at a specific timestamp.
-    fn extract_single_frame_from_video(video_path: &PathBuf, timestamp_secs: f64) -> Result<Vec<u8>> {
+    fn extract_single_frame_from_video(
+        video_path: &PathBuf,
+        timestamp_secs: f64,
+    ) -> Result<Vec<u8>> {
         let temp_dir = tempdir().map_err(RecorderError::Io)?;
         let output_path = temp_dir.path().join("frame.jpg");
 
@@ -1752,12 +1762,12 @@ impl ProcessingService {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("Output file is empty") || stderr.contains("nothing was encoded") {
                 return Err(RecorderError::Other(
-                    "Video file doesn't have enough data yet (try again later)".to_string()
+                    "Video file doesn't have enough data yet (try again later)".to_string(),
                 ));
             }
             let error_lines: Vec<&str> = stderr.lines().collect();
             let error_msg = if error_lines.len() > 10 {
-                error_lines[error_lines.len()-10..].join("\n")
+                error_lines[error_lines.len() - 10..].join("\n")
             } else {
                 error_lines.join("\n")
             };
@@ -1770,17 +1780,16 @@ impl ProcessingService {
 
         if !output_path.exists() {
             return Err(RecorderError::Other(
-                "FFmpeg succeeded but output file not created".to_string()
+                "FFmpeg succeeded but output file not created".to_string(),
             ));
         }
 
-        let data = std::fs::read(&output_path).map_err(|e| {
-            RecorderError::Other(format!("Failed to read extracted frame: {}", e))
-        })?;
+        let data = std::fs::read(&output_path)
+            .map_err(|e| RecorderError::Other(format!("Failed to read extracted frame: {}", e)))?;
 
         if data.is_empty() {
             return Err(RecorderError::Other(
-                "Extracted frame is empty (video may not have enough data yet)".to_string()
+                "Extracted frame is empty (video may not have enough data yet)".to_string(),
             ));
         }
 
@@ -1843,11 +1852,13 @@ impl ProcessingService {
         })?;
 
         // Get interval metadata
-        let interval_end = job.metadata
+        let interval_end = job
+            .metadata
             .get("interval_end")
             .and_then(|v| v.as_f64())
             .unwrap_or(interval_start);
-        let frames_per_interval = job.metadata
+        let frames_per_interval = job
+            .metadata
             .get("frames_per_interval")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
@@ -1859,9 +1870,7 @@ impl ProcessingService {
 
         info!(
             "🔄 Processing periodic context: {:.1}s - {:.1}s ({} frames)",
-            interval_start,
-            interval_end,
-            frames_per_interval
+            interval_start, interval_end, frames_per_interval
         );
 
         // Check for .ts extension first (for live streaming recordings), then fall back to original path
@@ -1882,7 +1891,7 @@ impl ProcessingService {
         let mut frame_timestamps = Vec::new();
         let interval_duration = (interval_end - interval_start).max(1.0);
         let frame_interval = interval_duration / (frames_per_interval as f64).max(1.0);
-        
+
         for i in 0..frames_per_interval {
             let offset = (i as f64) * frame_interval;
             let frame_timestamp = (interval_start + offset).max(0.0);
@@ -1935,25 +1944,34 @@ impl ProcessingService {
                         warn!("⚠️  Failed to extract frame at +{:.2}s: {}", offset_secs, e);
                     }
                     Err(e) => {
-                        warn!("⚠️  Frame extraction task at +{:.2}s failed: {}", offset_secs, e);
+                        warn!(
+                            "⚠️  Frame extraction task at +{:.2}s failed: {}",
+                            offset_secs, e
+                        );
                     }
                 }
             }
         } else {
-            warn!("⚠️  Video file not found: {}, skipping frame extraction", live_video_path.display());
+            warn!(
+                "⚠️  Video file not found: {}, skipping frame extraction",
+                live_video_path.display()
+            );
         }
 
         // Gather events from the time window
-        let events = db.get_events_in_window(
-            session_id,
-            interval_start,
-            interval_duration / 2.0, // window_before
-            interval_duration / 2.0, // window_after
-        ).await.unwrap_or_default();
+        let events = db
+            .get_events_in_window(
+                session_id,
+                interval_start,
+                interval_duration / 2.0, // window_before
+                interval_duration / 2.0, // window_after
+            )
+            .await
+            .unwrap_or_default();
 
         // Reconstruct text from keyboard events
         let reconstructed_text = Self::reconstruct_text_from_keys(&events);
-        
+
         // Collect click summaries
         let mut clicks = Vec::new();
         for event in &events {
@@ -1998,7 +2016,8 @@ impl ProcessingService {
             &clicks,
             interval_start,
             interval_end,
-        ).await?;
+        )
+        .await?;
 
         // Print result
         println!(
@@ -2030,7 +2049,8 @@ impl ProcessingService {
             &clicks,
             interval_start,
             interval_end,
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -2075,7 +2095,7 @@ impl ProcessingService {
         prompt.push_str(
             "\nGenerate a comprehensive summary of what the user was doing during this interval. \
             Focus on the user's activities, tasks, and context. This summary will be part of a \
-            'second brain' history, so make it detailed and useful for future reference."
+            'second brain' history, so make it detailed and useful for future reference.",
         );
 
         let messages = vec![

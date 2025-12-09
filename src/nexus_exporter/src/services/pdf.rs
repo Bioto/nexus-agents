@@ -19,7 +19,7 @@ pub struct PdfExportConfig {
 impl Default for PdfExportConfig {
     fn default() -> Self {
         Self {
-            page_width_mm: 210.0, // A4 width
+            page_width_mm: 210.0,  // A4 width
             page_height_mm: 297.0, // A4 height
             title: "Exported Document".to_string(),
             author: None,
@@ -70,7 +70,8 @@ impl PdfExporter {
         let current_layer = doc.get_page(page).get_layer(layer);
 
         // Add Helvetica font
-        let font = doc.add_builtin_font(BuiltinFont::Helvetica)
+        let font = doc
+            .add_builtin_font(BuiltinFont::Helvetica)
             .map_err(|e| ExporterError::Pdf(format!("Failed to add font: {}", e)))?;
 
         // Split content into lines and add to PDF
@@ -85,20 +86,13 @@ impl PdfExporter {
                 break;
             }
 
-            current_layer.use_text(
-                line,
-                line_height,
-                Mm(margin as f32),
-                Mm(y_position),
-                &font,
-            );
+            current_layer.use_text(line, line_height, Mm(margin as f32), Mm(y_position), &font);
 
             y_position -= line_height * 1.5;
         }
 
         // Save PDF to file
-        let file = File::create(output_path)
-            .map_err(|e| ExporterError::Io(e))?;
+        let file = File::create(output_path).map_err(|e| ExporterError::Io(e))?;
         let mut writer = BufWriter::new(file);
         doc.save(&mut writer)
             .map_err(|e| ExporterError::Pdf(format!("Failed to save PDF: {}", e)))?;
@@ -114,12 +108,15 @@ impl PdfExporter {
     ///
     /// # Errors
     /// Returns an error if file creation, JSON parsing, or PDF generation fails.
-    pub fn export_json(&self, output_path: &std::path::Path, data: &serde_json::Value) -> Result<()> {
+    pub fn export_json(
+        &self,
+        output_path: &std::path::Path,
+        data: &serde_json::Value,
+    ) -> Result<()> {
         // Format JSON as pretty-printed text
         let formatted = serde_json::to_string_pretty(data)
             .map_err(|e| ExporterError::Other(format!("Failed to format JSON: {}", e)))?;
-        
+
         self.export_text(output_path, &formatted)
     }
 }
-

@@ -294,7 +294,13 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                     .recipe
                     .name
                     .chars()
-                    .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == ' ' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect::<String>()
                     .replace(' ', "_");
                 output_dir.join(format!("{}.pdf", sanitized_name))
@@ -321,13 +327,12 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
             html,
         } => {
             let meal_plan_uuid = Uuid::parse_str(&meal_plan_id)?;
-            let meal_plan = NutritionService::get_meal_plan_with_entries(pool, meal_plan_uuid).await?;
+            let meal_plan =
+                NutritionService::get_meal_plan_with_entries(pool, meal_plan_uuid).await?;
 
             // Calculate nutrition if requested
             let nutrition = if include_nutrition {
-                Some(
-                    NutritionService::calculate_meal_plan_nutrition(pool, meal_plan_uuid).await?,
-                )
+                Some(NutritionService::calculate_meal_plan_nutrition(pool, meal_plan_uuid).await?)
             } else {
                 None
             };
@@ -343,7 +348,13 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                     .meal_plan
                     .name
                     .chars()
-                    .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == ' ' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect::<String>()
                     .replace(' ', "_");
                 output_dir.join(format!("{}.pdf", sanitized_name))
@@ -364,7 +375,10 @@ pub async fn run_nutrition(args: NutritionArgs) -> Result<()> {
                     &output_path,
                 )
                 .await?;
-                println!("✅ Meal plan exported to PDF (HTML): {}", output_path.display());
+                println!(
+                    "✅ Meal plan exported to PDF (HTML): {}",
+                    output_path.display()
+                );
             } else {
                 // Use printpdf-based renderer
                 crate::nutrition::pdf_export::RecipePdfExporter::export_meal_plan(

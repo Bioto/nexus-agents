@@ -9,5 +9,6 @@ pub mod context_processing;
 
 // Re-exports for convenience
 pub use click_context::{ClickContextEvent, ClickContextHandle, ClickContextService};
-pub use context_processing::{ProcessingConfig, ProcessingHandle, ProcessingJob, ProcessingService};
-
+pub use context_processing::{
+    ProcessingConfig, ProcessingHandle, ProcessingJob, ProcessingService,
+};

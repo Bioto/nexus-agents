@@ -18,4 +18,3 @@ pub enum ExporterError {
 
 /// Result type alias for the nexus-exporter crate.
 pub type Result<T> = std::result::Result<T, ExporterError>;
-

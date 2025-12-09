@@ -35,11 +35,7 @@ pub async fn run_start_servers(args: StartServersArgs) -> Result<(), NexusError>
     for server_config in config.servers {
         // Display server information
         if let Some(description) = &server_config.description {
-            eprintln!(
-                "[{}] {}",
-                server_config.name,
-                description
-            );
+            eprintln!("[{}] {}", server_config.name, description);
         } else {
             eprintln!("[{}] Starting server...", server_config.name);
         }

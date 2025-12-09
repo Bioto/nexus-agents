@@ -19,4 +19,3 @@ pub mod service;
 pub use mcp_server::FitnessMcpServer;
 pub use models::*;
 pub use service::FitnessService;
-

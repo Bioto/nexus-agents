@@ -8,4 +8,3 @@ pub mod window_info;
 // Re-exports for convenience
 pub use screen_recorder::{MonitorInfo, RecordingConfig as ScreenRecordingConfig, ScreenRecorder};
 pub use window_info::{WindowGeometry, WindowInfo, WindowInfoService};
-

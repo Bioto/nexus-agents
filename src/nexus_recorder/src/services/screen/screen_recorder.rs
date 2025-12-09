@@ -14,12 +14,12 @@ use ffmpeg::{
     Dictionary, Rational,
 };
 use ffmpeg_next as ffmpeg;
+use log::{debug, info, warn};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use log::{debug, info, warn};
 
 use super::window_info::{WindowInfo, WindowInfoService};
 
@@ -720,7 +720,11 @@ impl ScreenRecorder {
 
         let mut ictx = match ctx {
             format::Context::Input(ictx) => ictx,
-            _ => return Err(RecorderError::VideoEncoding("Expected input context".into())),
+            _ => {
+                return Err(RecorderError::VideoEncoding(
+                    "Expected input context".into(),
+                ))
+            }
         };
 
         let input_stream = ictx
@@ -1146,8 +1150,9 @@ impl ScreenRecorder {
 
             if needs_scaling {
                 if let Some(ref mut s) = scaler {
-                    s.run(&input_frame, &mut scaled_frame)
-                        .map_err(|e| RecorderError::VideoEncoding(format!("Scaling error: {}", e)))?;
+                    s.run(&input_frame, &mut scaled_frame).map_err(|e| {
+                        RecorderError::VideoEncoding(format!("Scaling error: {}", e))
+                    })?;
                 }
                 scaled_frame.set_pts(Some(frame_num));
             } else {
@@ -1290,7 +1295,9 @@ impl ScreenRecorder {
         use std::io::{BufRead, BufReader};
         use std::process::{Command, Stdio};
 
-        let segment_duration = config.segment_duration_secs.unwrap_or(DEFAULT_SEGMENT_DURATION_SECS);
+        let segment_duration = config
+            .segment_duration_secs
+            .unwrap_or(DEFAULT_SEGMENT_DURATION_SECS);
 
         // Generate output pattern: recording.mp4 -> recording_%03d.mp4
         let stem = config

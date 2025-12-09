@@ -123,7 +123,10 @@ impl NutritionMcpServer {
             }
             "add_nutrition" => {
                 let ingredient_id = params.0.ingredient_id.ok_or_else(|| {
-                    McpError::invalid_params("ingredient_id is required for add_nutrition action", None)
+                    McpError::invalid_params(
+                        "ingredient_id is required for add_nutrition action",
+                        None,
+                    )
                 })?;
                 let uuid = Uuid::parse_str(&ingredient_id)
                     .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
@@ -131,44 +134,60 @@ impl NutritionMcpServer {
                 let nutritional_info = NutritionService::upsert_nutritional_info(
                     &self.pool,
                     uuid,
-                    params.0.calories_per_100g.ok_or_else(|| {
-                        McpError::invalid_params("calories_per_100g is required", None)
-                    })?
-                    .to_string()
-                    .parse()
-                    .map_err(|e| {
-                        McpError::invalid_params(format!("Invalid calories value: {}", e), None)
-                    })?,
-                    params.0.protein_g.ok_or_else(|| {
-                        McpError::invalid_params("protein_g is required", None)
-                    })?
-                    .to_string()
-                    .parse()
-                    .map_err(|e| {
-                        McpError::invalid_params(format!("Invalid protein value: {}", e), None)
-                    })?,
-                    params.0.carbs_g.ok_or_else(|| {
-                        McpError::invalid_params("carbs_g is required", None)
-                    })?
-                    .to_string()
-                    .parse()
-                    .map_err(|e| {
-                        McpError::invalid_params(format!("Invalid carbs value: {}", e), None)
-                    })?,
-                    params.0.fat_g.ok_or_else(|| {
-                        McpError::invalid_params("fat_g is required", None)
-                    })?
-                    .to_string()
-                    .parse()
-                    .map_err(|e| {
-                        McpError::invalid_params(format!("Invalid fat value: {}", e), None)
-                    })?,
-                    params.0.fiber_g.map(|f| f.to_string().parse()).transpose().map_err(|e| {
-                        McpError::invalid_params(format!("Invalid fiber value: {}", e), None)
-                    })?,
-                    params.0.sugar_g.map(|s| s.to_string().parse()).transpose().map_err(|e| {
-                        McpError::invalid_params(format!("Invalid sugar value: {}", e), None)
-                    })?,
+                    params
+                        .0
+                        .calories_per_100g
+                        .ok_or_else(|| {
+                            McpError::invalid_params("calories_per_100g is required", None)
+                        })?
+                        .to_string()
+                        .parse()
+                        .map_err(|e| {
+                            McpError::invalid_params(format!("Invalid calories value: {}", e), None)
+                        })?,
+                    params
+                        .0
+                        .protein_g
+                        .ok_or_else(|| McpError::invalid_params("protein_g is required", None))?
+                        .to_string()
+                        .parse()
+                        .map_err(|e| {
+                            McpError::invalid_params(format!("Invalid protein value: {}", e), None)
+                        })?,
+                    params
+                        .0
+                        .carbs_g
+                        .ok_or_else(|| McpError::invalid_params("carbs_g is required", None))?
+                        .to_string()
+                        .parse()
+                        .map_err(|e| {
+                            McpError::invalid_params(format!("Invalid carbs value: {}", e), None)
+                        })?,
+                    params
+                        .0
+                        .fat_g
+                        .ok_or_else(|| McpError::invalid_params("fat_g is required", None))?
+                        .to_string()
+                        .parse()
+                        .map_err(|e| {
+                            McpError::invalid_params(format!("Invalid fat value: {}", e), None)
+                        })?,
+                    params
+                        .0
+                        .fiber_g
+                        .map(|f| f.to_string().parse())
+                        .transpose()
+                        .map_err(|e| {
+                            McpError::invalid_params(format!("Invalid fiber value: {}", e), None)
+                        })?,
+                    params
+                        .0
+                        .sugar_g
+                        .map(|s| s.to_string().parse())
+                        .transpose()
+                        .map_err(|e| {
+                            McpError::invalid_params(format!("Invalid sugar value: {}", e), None)
+                        })?,
                 )
                 .await
                 .map_err(convert_error)?;
@@ -183,7 +202,10 @@ impl NutritionMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: create, update, delete, add_nutrition", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: create, update, delete, add_nutrition",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -201,12 +223,10 @@ impl NutritionMcpServer {
 
         match params.0.query_type.as_str() {
             "search" => {
-                let ingredients = NutritionService::list_ingredients(
-                    &self.pool,
-                    params.0.search_term.as_deref(),
-                )
-                .await
-                .map_err(convert_error)?;
+                let ingredients =
+                    NutritionService::list_ingredients(&self.pool, params.0.search_term.as_deref())
+                        .await
+                        .map_err(convert_error)?;
 
                 let mut output = format!("Found {} ingredient(s):\n\n", ingredients.len());
                 for ing in ingredients {
@@ -263,7 +283,8 @@ impl NutritionMcpServer {
                 }))
                 .await;
 
-                let mut output = format!("Batch get ingredients ({} requested):\n\n", results.len());
+                let mut output =
+                    format!("Batch get ingredients ({} requested):\n\n", results.len());
                 let mut success_count = 0;
                 let mut error_count = 0;
 
@@ -293,7 +314,10 @@ impl NutritionMcpServer {
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, get, batch", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, get, batch",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -322,11 +346,15 @@ impl NutritionMcpServer {
                     .into_iter()
                     .map(|ri| {
                         let uuid = Uuid::parse_str(&ri.ingredient_id).map_err(|e| {
-                            McpError::invalid_params(format!("Invalid ingredient UUID: {}", e), None)
+                            McpError::invalid_params(
+                                format!("Invalid ingredient UUID: {}", e),
+                                None,
+                            )
                         })?;
-                        let quantity: BigDecimal = ri.quantity.to_string().parse().map_err(|e| {
-                            McpError::invalid_params(format!("Invalid quantity: {}", e), None)
-                        })?;
+                        let quantity: BigDecimal =
+                            ri.quantity.to_string().parse().map_err(|e| {
+                                McpError::invalid_params(format!("Invalid quantity: {}", e), None)
+                            })?;
                         Ok((uuid, quantity, ri.unit))
                     })
                     .collect();
@@ -405,7 +433,10 @@ impl NutritionMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: create, update, delete", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: create, update, delete",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -419,9 +450,10 @@ impl NutritionMcpServer {
         &self,
         params: Parameters<ManageRecipeContentParams>,
     ) -> Result<CallToolResult, McpError> {
-        let recipe_id = params.0.recipe_id.ok_or_else(|| {
-            McpError::invalid_params("recipe_id is required", None)
-        })?;
+        let recipe_id = params
+            .0
+            .recipe_id
+            .ok_or_else(|| McpError::invalid_params("recipe_id is required", None))?;
         let recipe_uuid = Uuid::parse_str(&recipe_id)
             .map_err(|e| McpError::invalid_params(format!("Invalid recipe UUID: {}", e), None))?;
 
@@ -593,10 +625,7 @@ impl NutritionMcpServer {
                     }
                     output.push_str("\nSteps:\n");
                     for step in &recipe.steps {
-                        output.push_str(&format!(
-                            "  {}. {}\n",
-                            step.step_number, step.instruction
-                        ));
+                        output.push_str(&format!("  {}. {}\n", step.step_number, step.instruction));
                     }
                     Ok(CallToolResult::success(vec![Content::text(output)]))
                 } else {
@@ -704,7 +733,8 @@ impl NutritionMcpServer {
                     }))
                     .await;
 
-                    let mut output = format!("Batch get recipes ({} requested):\n\n", results.len());
+                    let mut output =
+                        format!("Batch get recipes ({} requested):\n\n", results.len());
                     let mut success_count = 0;
                     let mut error_count = 0;
 
@@ -764,7 +794,8 @@ impl NutritionMcpServer {
 
                 output.push_str("\nIngredients:\n");
                 for ing in &extracted.ingredients {
-                    let qty_str = ing.quantity
+                    let qty_str = ing
+                        .quantity
                         .map(|q| q.to_string())
                         .unwrap_or_else(|| "?".to_string());
                     let unit_str = ing.unit.as_deref().unwrap_or("?");
@@ -785,7 +816,10 @@ impl NutritionMcpServer {
                 ]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, get, batch, extract", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, get, batch, extract",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -811,7 +845,10 @@ impl NutritionMcpServer {
                         .into_iter()
                         .map(|id| {
                             Uuid::parse_str(&id).map_err(|e| {
-                                McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                                McpError::invalid_params(
+                                    format!("Invalid UUID '{}': {}", id, e),
+                                    None,
+                                )
                             })
                         })
                         .collect();
@@ -820,9 +857,13 @@ impl NutritionMcpServer {
                     let results: Vec<_> = join_all(uuids.iter().map(|&id| {
                         let pool = &self.pool;
                         async move {
-                            NutritionService::calculate_recipe_nutrition(pool, id, params.0.servings)
-                                .await
-                                .map_err(convert_error)
+                            NutritionService::calculate_recipe_nutrition(
+                                pool,
+                                id,
+                                params.0.servings,
+                            )
+                            .await
+                            .map_err(convert_error)
                         }
                     }))
                     .await;
@@ -854,7 +895,10 @@ impl NutritionMcpServer {
                                     output.push_str(&format!("  Total sugar: {}g\n", sugar));
                                 }
                                 if let Some(cal_per_serving) = nutrition.per_serving_calories {
-                                    output.push_str(&format!("  Per serving: {} calories", cal_per_serving));
+                                    output.push_str(&format!(
+                                        "  Per serving: {} calories",
+                                        cal_per_serving
+                                    ));
                                     if let Some(protein) = nutrition.per_serving_protein_g {
                                         output.push_str(&format!(", {}g protein", protein));
                                     }
@@ -883,15 +927,22 @@ impl NutritionMcpServer {
                 } else {
                     // Single calculation
                     let id = params.0.id.ok_or_else(|| {
-                        McpError::invalid_params("id is required for single recipe calculation", None)
+                        McpError::invalid_params(
+                            "id is required for single recipe calculation",
+                            None,
+                        )
                     })?;
-                    let uuid = Uuid::parse_str(&id)
-                        .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
+                    let uuid = Uuid::parse_str(&id).map_err(|e| {
+                        McpError::invalid_params(format!("Invalid UUID: {}", e), None)
+                    })?;
 
-                    let nutrition =
-                        NutritionService::calculate_recipe_nutrition(&self.pool, uuid, params.0.servings)
-                            .await
-                            .map_err(convert_error)?;
+                    let nutrition = NutritionService::calculate_recipe_nutrition(
+                        &self.pool,
+                        uuid,
+                        params.0.servings,
+                    )
+                    .await
+                    .map_err(convert_error)?;
 
                     let mut output = format!(
                         "Nutritional Information for Recipe {}\n\nTotal:\n  Calories: {}\n  Protein: {}g\n  Carbs: {}g\n  Fat: {}g",
@@ -956,7 +1007,10 @@ impl NutritionMcpServer {
                         .into_iter()
                         .map(|id| {
                             Uuid::parse_str(&id).map_err(|e| {
-                                McpError::invalid_params(format!("Invalid UUID '{}': {}", id, e), None)
+                                McpError::invalid_params(
+                                    format!("Invalid UUID '{}': {}", id, e),
+                                    None,
+                                )
                             })
                         })
                         .collect();
@@ -1017,7 +1071,10 @@ impl NutritionMcpServer {
                 }
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown calc_type: {}. Valid types: recipe, meal_plan", params.0.calc_type),
+                format!(
+                    "Unknown calc_type: {}. Valid types: recipe, meal_plan",
+                    params.0.calc_type
+                ),
                 None,
             )),
         }
@@ -1418,7 +1475,8 @@ impl NutritionMcpServer {
                     }))
                     .await;
 
-                    let mut output = format!("Batch get meal plans ({} requested):\n\n", results.len());
+                    let mut output =
+                        format!("Batch get meal plans ({} requested):\n\n", results.len());
                     let mut success_count = 0;
                     let mut error_count = 0;
 
@@ -1449,7 +1507,10 @@ impl NutritionMcpServer {
                 }
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, get, batch", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, get, batch",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -1495,16 +1556,20 @@ impl NutritionMcpServer {
         &self,
         params: Parameters<GenerateMealPrepReportParams>,
     ) -> Result<CallToolResult, McpError> {
-        let meal_plan_id = params.0.meal_plan_id.ok_or_else(|| {
-            McpError::invalid_params("meal_plan_id is required", None)
-        })?;
+        let meal_plan_id = params
+            .0
+            .meal_plan_id
+            .ok_or_else(|| McpError::invalid_params("meal_plan_id is required", None))?;
         let uuid = Uuid::parse_str(&meal_plan_id)
             .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
 
         let format = params.0.format.as_deref().unwrap_or("markdown");
         if format != "markdown" {
             return Err(McpError::invalid_params(
-                format!("Unsupported format: {}. Only 'markdown' is currently supported", format),
+                format!(
+                    "Unsupported format: {}. Only 'markdown' is currently supported",
+                    format
+                ),
                 None,
             ));
         }
@@ -1517,9 +1582,10 @@ impl NutritionMcpServer {
 
         // Check cache
         {
-            let cache = self.report_cache.read().map_err(|e| {
-                McpError::internal_error(format!("Cache lock error: {}", e), None)
-            })?;
+            let cache = self
+                .report_cache
+                .read()
+                .map_err(|e| McpError::internal_error(format!("Cache lock error: {}", e), None))?;
 
             if let Some(cached) = cache.get(&uuid) {
                 // Check if cached version matches current version
@@ -1538,9 +1604,10 @@ impl NutritionMcpServer {
 
         // Store in cache
         {
-            let mut cache = self.report_cache.write().map_err(|e| {
-                McpError::internal_error(format!("Cache lock error: {}", e), None)
-            })?;
+            let mut cache = self
+                .report_cache
+                .write()
+                .map_err(|e| McpError::internal_error(format!("Cache lock error: {}", e), None))?;
             cache.insert(
                 uuid,
                 CachedReport {
@@ -1619,7 +1686,10 @@ impl NutritionMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: create, update, delete", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: create, update, delete",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -1637,10 +1707,12 @@ impl NutritionMcpServer {
 
         match params.0.query_type.as_str() {
             "search" | "list" => {
-                let family_members =
-                    NutritionService::list_family_members(&self.pool, params.0.search_term.as_deref())
-                        .await
-                        .map_err(convert_error)?;
+                let family_members = NutritionService::list_family_members(
+                    &self.pool,
+                    params.0.search_term.as_deref(),
+                )
+                .await
+                .map_err(convert_error)?;
 
                 if family_members.is_empty() {
                     return Ok(CallToolResult::success(vec![Content::text(
@@ -1663,9 +1735,10 @@ impl NutritionMcpServer {
                     .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
 
                 if params.0.with_allergies.unwrap_or(false) {
-                    let family_member = NutritionService::get_family_member_with_allergies(&self.pool, uuid)
-                        .await
-                        .map_err(convert_error)?;
+                    let family_member =
+                        NutritionService::get_family_member_with_allergies(&self.pool, uuid)
+                            .await
+                            .map_err(convert_error)?;
 
                     let mut output = format!(
                         "Family Member: {}\nID: {}\n\n",
@@ -1675,7 +1748,8 @@ impl NutritionMcpServer {
                     if family_member.allergies.is_empty() {
                         output.push_str("No allergies recorded.\n");
                     } else {
-                        output.push_str(&format!("Allergies ({}):\n", family_member.allergies.len()));
+                        output
+                            .push_str(&format!("Allergies ({}):\n", family_member.allergies.len()));
                         for allergy in family_member.allergies {
                             output.push_str(&format!(
                                 "- {} (severity: {})\n",
@@ -1757,12 +1831,19 @@ impl NutritionMcpServer {
                                 if family_member.allergies.is_empty() {
                                     output.push_str("  No allergies recorded.\n");
                                 } else {
-                                    output.push_str(&format!("  Allergies ({}):\n", family_member.allergies.len()));
+                                    output.push_str(&format!(
+                                        "  Allergies ({}):\n",
+                                        family_member.allergies.len()
+                                    ));
                                     for allergy in family_member.allergies {
                                         output.push_str(&format!(
                                             "    - {} (severity: {})\n",
                                             allergy.ingredient.name,
-                                            allergy.allergy.severity.as_deref().unwrap_or("unknown")
+                                            allergy
+                                                .allergy
+                                                .severity
+                                                .as_deref()
+                                                .unwrap_or("unknown")
                                         ));
                                         if let Some(notes) = allergy.allergy.notes {
                                             output.push_str(&format!("      Notes: {}\n", notes));
@@ -1834,7 +1915,10 @@ impl NutritionMcpServer {
                 }
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, list, get, batch", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, list, get, batch",
+                    params.0.query_type
+                ),
                 None,
             )),
         }

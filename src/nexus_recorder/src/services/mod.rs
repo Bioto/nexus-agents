@@ -11,12 +11,12 @@
 
 // Service modules
 pub mod audio;
-pub mod screen;
-pub mod input;
-pub mod storage;
 pub mod context;
-pub mod video;
+pub mod input;
+pub mod screen;
+pub mod storage;
 pub mod unified_recording;
+pub mod video;
 pub mod webcam;
 
 // Re-exports for convenience (maintaining backward compatibility)
@@ -24,20 +24,27 @@ pub use audio::{
     AudioRecorder, AudioRecordingConfig, AudioStream, DeviceInfo, TextToSpeech, TtsConfig,
     VoiceListener, VoiceListenerConfig,
 };
-pub use screen::{MonitorInfo, ScreenRecordingConfig, ScreenRecorder, WindowGeometry, WindowInfo, WindowInfoService};
+pub use context::{
+    ClickContextEvent, ClickContextHandle, ClickContextService, ProcessingConfig, ProcessingHandle,
+    ProcessingJob, ProcessingService,
+};
 pub use input::InputEvent;
+pub use screen::{
+    MonitorInfo, ScreenRecorder, ScreenRecordingConfig, WindowGeometry, WindowInfo,
+    WindowInfoService,
+};
 pub use storage::{BatchEvent, BatchInserterConfig, Database, EventWriterConfig};
-pub use context::{ClickContextEvent, ClickContextHandle, ClickContextService, ProcessingConfig, ProcessingHandle, ProcessingJob, ProcessingService};
-pub use video::{create_overlay_channel, format_timestamp, get_current_overlay, OverlayReceiver, OverlaySender, VideoOverlay};
 pub use unified_recording::{
-    AudioRecordingConfig as UnifiedAudioConfig, DefaultEventCallback, EventCallback,
-    InputCaptureConfig, OverlayLabel, RecordingSession, ScreenRecordingConfig as UnifiedScreenConfig,
-    UnifiedRecordingConfig, UnifiedRecordingService, print_timeline,
+    print_timeline, AudioRecordingConfig as UnifiedAudioConfig, DefaultEventCallback,
+    EventCallback, InputCaptureConfig, OverlayLabel, RecordingSession,
+    ScreenRecordingConfig as UnifiedScreenConfig, UnifiedRecordingConfig, UnifiedRecordingService,
+};
+pub use video::{
+    create_overlay_channel, format_timestamp, get_current_overlay, OverlayReceiver, OverlaySender,
+    VideoOverlay,
 };
 pub use webcam::{
-    list_v4l2_devices, show_device_info, WebcamDevice, WebcamDeviceInfo,
-    mjpeg_to_rgb, yuyv_to_rgb, yuv_to_rgb,
-    WebcamRecorder, WebcamRecordingConfig,
-    WebcamController, PtzControl, PtzState,
-    WebcamSplitter, SplitterConfig, SplitterHandle,
+    list_v4l2_devices, mjpeg_to_rgb, show_device_info, yuv_to_rgb, yuyv_to_rgb, PtzControl,
+    PtzState, SplitterConfig, SplitterHandle, WebcamController, WebcamDevice, WebcamDeviceInfo,
+    WebcamRecorder, WebcamRecordingConfig, WebcamSplitter,
 };

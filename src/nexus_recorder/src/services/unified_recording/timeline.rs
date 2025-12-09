@@ -23,7 +23,7 @@ fn parse_webcam_analysis(metadata: &serde_json::Map<String, Value>) -> Option<Va
                 .strip_suffix("```")
                 .unwrap_or(text)
                 .trim();
-            
+
             // Parse the JSON
             serde_json::from_str::<Value>(cleaned).ok()
         })
@@ -97,38 +97,41 @@ pub fn print_timeline(
                     if let Some(metadata) = event.metadata.as_object() {
                         // The analysis data is stored in analysis_text as a JSON string wrapped in markdown code blocks
                         let analysis_json = parse_webcam_analysis(metadata);
-                        
+
                         // Extract fields from parsed JSON, with fallback to direct metadata access
                         let sentiment = analysis_json
                             .as_ref()
                             .and_then(|json| json.get("sentiment").and_then(|v| v.as_str()))
                             .or_else(|| metadata.get("sentiment").and_then(|v| v.as_str()))
                             .unwrap_or("unknown");
-                        
+
                         let attention = analysis_json
                             .as_ref()
                             .and_then(|json| json.get("attention").and_then(|v| v.as_str()))
                             .or_else(|| metadata.get("attention").and_then(|v| v.as_str()))
                             .unwrap_or("unknown");
-                        
+
                         let energy = analysis_json
                             .as_ref()
                             .and_then(|json| json.get("energy").and_then(|v| v.as_str()))
                             .or_else(|| metadata.get("energy").and_then(|v| v.as_str()))
                             .unwrap_or("unknown");
-                        
+
                         let notes = analysis_json
                             .as_ref()
                             .and_then(|json| json.get("notes").and_then(|v| v.as_str()))
                             .or_else(|| metadata.get("notes").and_then(|v| v.as_str()));
-                        
-                        let mut desc = format!("Sentiment: {}, Attention: {}, Energy: {}", sentiment, attention, energy);
+
+                        let mut desc = format!(
+                            "Sentiment: {}, Attention: {}, Energy: {}",
+                            sentiment, attention, energy
+                        );
                         if let Some(n) = notes {
                             if !n.is_empty() {
                                 desc.push_str(&format!(" - {}", n));
                             }
                         }
-                        
+
                         timed_events.push(TimedEvent {
                             timecode: event_timecode,
                             event_type: "webcam_sentiment".to_string(),
@@ -547,4 +550,3 @@ fn pad_right(s: &str, width: usize) -> String {
         format!("{:<width$}", s, width = width)
     }
 }
-

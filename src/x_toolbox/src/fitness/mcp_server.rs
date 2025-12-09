@@ -74,7 +74,9 @@ impl FitnessMcpServer {
                     .calories_per_minute
                     .map(|c| c.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid calories value: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid calories value: {}", e), None)
+                    })?;
 
                 let exercise = FitnessService::create_exercise(
                     &self.pool,
@@ -83,7 +85,11 @@ impl FitnessMcpServer {
                     muscle_groups,
                     equipment,
                     params.0.exercise_type.as_deref().unwrap_or("strength"),
-                    params.0.difficulty_level.as_deref().unwrap_or("intermediate"),
+                    params
+                        .0
+                        .difficulty_level
+                        .as_deref()
+                        .unwrap_or("intermediate"),
                     params.0.instructions.as_deref(),
                     params.0.video_url.as_deref(),
                     calories,
@@ -115,7 +121,9 @@ impl FitnessMcpServer {
                     .calories_per_minute
                     .map(|c| c.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid calories value: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid calories value: {}", e), None)
+                    })?;
 
                 let exercise = FitnessService::update_exercise(
                     &self.pool,
@@ -155,7 +163,10 @@ impl FitnessMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: create, update, delete", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: create, update, delete",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -248,7 +259,11 @@ impl FitnessMcpServer {
 
                 let results: Vec<_> = join_all(uuids.iter().map(|&id| {
                     let pool = &self.pool;
-                    async move { FitnessService::get_exercise(pool, id).await.map_err(convert_error) }
+                    async move {
+                        FitnessService::get_exercise(pool, id)
+                            .await
+                            .map_err(convert_error)
+                    }
                 }))
                 .await;
 
@@ -273,7 +288,10 @@ impl FitnessMcpServer {
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, get, batch", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, get, batch",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -325,7 +343,11 @@ impl FitnessMcpServer {
                     &name,
                     params.0.description.as_deref(),
                     params.0.workout_type.as_deref().unwrap_or("strength"),
-                    params.0.difficulty_level.as_deref().unwrap_or("intermediate"),
+                    params
+                        .0
+                        .difficulty_level
+                        .as_deref()
+                        .unwrap_or("intermediate"),
                     params.0.estimated_duration_minutes,
                     exercises,
                 )
@@ -382,7 +404,10 @@ impl FitnessMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: create, update, delete", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: create, update, delete",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -396,9 +421,10 @@ impl FitnessMcpServer {
         &self,
         params: Parameters<ManageWorkoutContentParams>,
     ) -> Result<CallToolResult, McpError> {
-        let workout_id = params.0.workout_id.ok_or_else(|| {
-            McpError::invalid_params("workout_id is required", None)
-        })?;
+        let workout_id = params
+            .0
+            .workout_id
+            .ok_or_else(|| McpError::invalid_params("workout_id is required", None))?;
         let workout_uuid = Uuid::parse_str(&workout_id)
             .map_err(|e| McpError::invalid_params(format!("Invalid workout UUID: {}", e), None))?;
 
@@ -407,8 +433,9 @@ impl FitnessMcpServer {
                 let exercise_id = params.0.exercise_id.ok_or_else(|| {
                     McpError::invalid_params("exercise_id is required for add_exercise", None)
                 })?;
-                let exercise_uuid = Uuid::parse_str(&exercise_id)
-                    .map_err(|e| McpError::invalid_params(format!("Invalid exercise UUID: {}", e), None))?;
+                let exercise_uuid = Uuid::parse_str(&exercise_id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid exercise UUID: {}", e), None)
+                })?;
 
                 let we = FitnessService::add_workout_exercise(
                     &self.pool,
@@ -433,8 +460,9 @@ impl FitnessMcpServer {
                 let exercise_id = params.0.exercise_id.ok_or_else(|| {
                     McpError::invalid_params("exercise_id is required for remove_exercise", None)
                 })?;
-                let exercise_uuid = Uuid::parse_str(&exercise_id)
-                    .map_err(|e| McpError::invalid_params(format!("Invalid exercise UUID: {}", e), None))?;
+                let exercise_uuid = Uuid::parse_str(&exercise_id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid exercise UUID: {}", e), None)
+                })?;
 
                 FitnessService::remove_workout_exercise(&self.pool, workout_uuid, exercise_uuid)
                     .await
@@ -446,7 +474,10 @@ impl FitnessMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: add_exercise, remove_exercise", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: add_exercise, remove_exercise",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -477,7 +508,11 @@ impl FitnessMcpServer {
                 for w in workouts {
                     output.push_str(&format!(
                         "- {} ({})\n  Type: {} | Difficulty: {} | Duration: {:?} min\n",
-                        w.name, w.id, w.workout_type, w.difficulty_level, w.estimated_duration_minutes
+                        w.name,
+                        w.id,
+                        w.workout_type,
+                        w.difficulty_level,
+                        w.estimated_duration_minutes
                     ));
                 }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
@@ -524,7 +559,11 @@ impl FitnessMcpServer {
 
                     Ok(CallToolResult::success(vec![Content::text(format!(
                         "Workout Plan: {}\nID: {}\nType: {}\nDifficulty: {}\nDuration: {:?} min",
-                        workout.name, workout.id, workout.workout_type, workout.difficulty_level, workout.estimated_duration_minutes
+                        workout.name,
+                        workout.id,
+                        workout.workout_type,
+                        workout.difficulty_level,
+                        workout.estimated_duration_minutes
                     ))]))
                 }
             }
@@ -545,17 +584,26 @@ impl FitnessMcpServer {
 
                 let results: Vec<_> = join_all(uuids.iter().map(|&id| {
                     let pool = &self.pool;
-                    async move { FitnessService::get_workout_plan(pool, id).await.map_err(convert_error) }
+                    async move {
+                        FitnessService::get_workout_plan(pool, id)
+                            .await
+                            .map_err(convert_error)
+                    }
                 }))
                 .await;
 
-                let mut output = format!("Batch get workout plans ({} requested):\n\n", results.len());
+                let mut output =
+                    format!("Batch get workout plans ({} requested):\n\n", results.len());
                 for (idx, result) in results.into_iter().enumerate() {
                     match result {
                         Ok(w) => {
                             output.push_str(&format!(
                                 "[{}] {} ({}) - {} | {}\n",
-                                idx + 1, w.name, w.id, w.workout_type, w.difficulty_level
+                                idx + 1,
+                                w.name,
+                                w.id,
+                                w.workout_type,
+                                w.difficulty_level
                             ));
                         }
                         Err(e) => {
@@ -566,7 +614,10 @@ impl FitnessMcpServer {
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, get, batch", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, get, batch",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -779,9 +830,10 @@ impl FitnessMcpServer {
                     .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
 
                 if params.0.full.unwrap_or(false) {
-                    let program = FitnessService::get_training_program_with_entries(&self.pool, uuid)
-                        .await
-                        .map_err(convert_error)?;
+                    let program =
+                        FitnessService::get_training_program_with_entries(&self.pool, uuid)
+                            .await
+                            .map_err(convert_error)?;
 
                     let mut output = format!(
                         "Training Program: {}\nID: {}\nTemplate: {}\nGoal: {:?}\nWeeks: {:?}\n\nEntries ({}):\n",
@@ -796,14 +848,30 @@ impl FitnessMcpServer {
                     for entry in &program.entries {
                         let day_info = if let Some(date) = entry.entry.date {
                             format!("{}", date)
-                        } else if let (Some(week), Some(day)) = (entry.entry.week_number, entry.entry.day_of_week) {
+                        } else if let (Some(week), Some(day)) =
+                            (entry.entry.week_number, entry.entry.day_of_week)
+                        {
                             let day_name = match day {
-                                0 => "Mon", 1 => "Tue", 2 => "Wed", 3 => "Thu", 4 => "Fri", 5 => "Sat", 6 => "Sun", _ => "?"
+                                0 => "Mon",
+                                1 => "Tue",
+                                2 => "Wed",
+                                3 => "Thu",
+                                4 => "Fri",
+                                5 => "Sat",
+                                6 => "Sun",
+                                _ => "?",
                             };
                             format!("Week {}, {}", week, day_name)
                         } else if let Some(day) = entry.entry.day_of_week {
                             let day_name = match day {
-                                0 => "Mon", 1 => "Tue", 2 => "Wed", 3 => "Thu", 4 => "Fri", 5 => "Sat", 6 => "Sun", _ => "?"
+                                0 => "Mon",
+                                1 => "Tue",
+                                2 => "Wed",
+                                3 => "Thu",
+                                4 => "Fri",
+                                5 => "Sat",
+                                6 => "Sun",
+                                _ => "?",
                             };
                             day_name.to_string()
                         } else {
@@ -844,17 +912,28 @@ impl FitnessMcpServer {
 
                 let results: Vec<_> = join_all(uuids.iter().map(|&id| {
                     let pool = &self.pool;
-                    async move { FitnessService::get_training_program(pool, id).await.map_err(convert_error) }
+                    async move {
+                        FitnessService::get_training_program(pool, id)
+                            .await
+                            .map_err(convert_error)
+                    }
                 }))
                 .await;
 
-                let mut output = format!("Batch get training programs ({} requested):\n\n", results.len());
+                let mut output = format!(
+                    "Batch get training programs ({} requested):\n\n",
+                    results.len()
+                );
                 for (idx, result) in results.into_iter().enumerate() {
                     match result {
                         Ok(p) => {
                             output.push_str(&format!(
                                 "[{}] {} ({}) - Template: {} | Goal: {:?}\n",
-                                idx + 1, p.name, p.id, p.is_template, p.goal
+                                idx + 1,
+                                p.name,
+                                p.id,
+                                p.is_template,
+                                p.goal
                             ));
                         }
                         Err(e) => {
@@ -865,7 +944,10 @@ impl FitnessMcpServer {
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: search, get, batch", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: search, get, batch",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -888,21 +970,34 @@ impl FitnessMcpServer {
                 let family_member_id = params.0.family_member_id.ok_or_else(|| {
                     McpError::invalid_params("family_member_id is required for create action", None)
                 })?;
-                let family_member_uuid = Uuid::parse_str(&family_member_id)
-                    .map_err(|e| McpError::invalid_params(format!("Invalid family_member UUID: {}", e), None))?;
+                let family_member_uuid = Uuid::parse_str(&family_member_id).map_err(|e| {
+                    McpError::invalid_params(format!("Invalid family_member UUID: {}", e), None)
+                })?;
 
-                let current_weight = params.0.current_weight_kg
+                let current_weight = params
+                    .0
+                    .current_weight_kg
                     .map(|w| w.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid weight: {}", e), None))?;
-                let target_weight = params.0.target_weight_kg
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid weight: {}", e), None)
+                    })?;
+                let target_weight = params
+                    .0
+                    .target_weight_kg
                     .map(|w| w.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid target weight: {}", e), None))?;
-                let height = params.0.height_cm
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid target weight: {}", e), None)
+                    })?;
+                let height = params
+                    .0
+                    .height_cm
                     .map(|h| h.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid height: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid height: {}", e), None)
+                    })?;
 
                 let goals = params.0.goals.map(|g| serde_json::json!(g));
                 let restrictions = params.0.restrictions.map(|r| serde_json::json!(r));
@@ -933,18 +1028,30 @@ impl FitnessMcpServer {
                 let uuid = Uuid::parse_str(&id)
                     .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
 
-                let current_weight = params.0.current_weight_kg
+                let current_weight = params
+                    .0
+                    .current_weight_kg
                     .map(|w| w.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid weight: {}", e), None))?;
-                let target_weight = params.0.target_weight_kg
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid weight: {}", e), None)
+                    })?;
+                let target_weight = params
+                    .0
+                    .target_weight_kg
                     .map(|w| w.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid target weight: {}", e), None))?;
-                let height = params.0.height_cm
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid target weight: {}", e), None)
+                    })?;
+                let height = params
+                    .0
+                    .height_cm
                     .map(|h| h.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid height: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid height: {}", e), None)
+                    })?;
 
                 let goals = params.0.goals.map(|g| serde_json::json!(g));
                 let restrictions = params.0.restrictions.map(|r| serde_json::json!(r));
@@ -985,7 +1092,10 @@ impl FitnessMcpServer {
                 ))]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown action: {}. Valid actions: create, update, delete", params.0.action),
+                format!(
+                    "Unknown action: {}. Valid actions: create, update, delete",
+                    params.0.action
+                ),
                 None,
             )),
         }
@@ -1006,7 +1116,9 @@ impl FitnessMcpServer {
                     .map_err(convert_error)?;
 
                 if profiles.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text("No fitness profiles found.")]));
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "No fitness profiles found.",
+                    )]));
                 }
 
                 let mut output = format!("Found {} fitness profile(s):\n\n", profiles.len());
@@ -1034,8 +1146,14 @@ impl FitnessMcpServer {
                     "Fitness Profile: {}\nFamily member: {}\nFitness level: {}\nActivity level: {:?}\n",
                     profile.id, profile.family_member_id, profile.fitness_level, profile.activity_level
                 );
-                output.push_str(&format!("Current weight: {:?} kg\n", profile.current_weight_kg));
-                output.push_str(&format!("Target weight: {:?} kg\n", profile.target_weight_kg));
+                output.push_str(&format!(
+                    "Current weight: {:?} kg\n",
+                    profile.current_weight_kg
+                ));
+                output.push_str(&format!(
+                    "Target weight: {:?} kg\n",
+                    profile.target_weight_kg
+                ));
                 output.push_str(&format!("Height: {:?} cm\n", profile.height_cm));
                 output.push_str(&format!("Goals: {:?}\n", profile.goals));
                 output.push_str(&format!("Restrictions: {:?}\n", profile.restrictions));
@@ -1044,21 +1162,31 @@ impl FitnessMcpServer {
             }
             "by_family_member" => {
                 let family_member_id = params.0.family_member_id.ok_or_else(|| {
-                    McpError::invalid_params("family_member_id is required for by_family_member query", None)
+                    McpError::invalid_params(
+                        "family_member_id is required for by_family_member query",
+                        None,
+                    )
                 })?;
                 let uuid = Uuid::parse_str(&family_member_id)
                     .map_err(|e| McpError::invalid_params(format!("Invalid UUID: {}", e), None))?;
 
-                let profile = FitnessService::get_fitness_profile_by_family_member(&self.pool, uuid)
-                    .await
-                    .map_err(convert_error)?;
+                let profile =
+                    FitnessService::get_fitness_profile_by_family_member(&self.pool, uuid)
+                        .await
+                        .map_err(convert_error)?;
 
                 let mut output = format!(
                     "Fitness Profile: {}\nFamily member: {}\nFitness level: {}\nActivity level: {:?}\n",
                     profile.id, profile.family_member_id, profile.fitness_level, profile.activity_level
                 );
-                output.push_str(&format!("Current weight: {:?} kg\n", profile.current_weight_kg));
-                output.push_str(&format!("Target weight: {:?} kg\n", profile.target_weight_kg));
+                output.push_str(&format!(
+                    "Current weight: {:?} kg\n",
+                    profile.current_weight_kg
+                ));
+                output.push_str(&format!(
+                    "Target weight: {:?} kg\n",
+                    profile.target_weight_kg
+                ));
                 output.push_str(&format!("Height: {:?} cm\n", profile.height_cm));
                 output.push_str(&format!("Goals: {:?}\n", profile.goals));
                 output.push_str(&format!("Restrictions: {:?}\n", profile.restrictions));
@@ -1066,7 +1194,10 @@ impl FitnessMcpServer {
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             _ => Err(McpError::invalid_params(
-                format!("Unknown query_type: {}. Valid types: list, get, by_family_member", params.0.query_type),
+                format!(
+                    "Unknown query_type: {}. Valid types: list, get, by_family_member",
+                    params.0.query_type
+                ),
                 None,
             )),
         }
@@ -1087,7 +1218,9 @@ impl FitnessMcpServer {
         let fitness_profile_id = Uuid::parse_str(&params.0.fitness_profile_id)
             .map_err(|e| McpError::invalid_params(format!("Invalid profile UUID: {}", e), None))?;
 
-        let workout_id = params.0.workout_id
+        let workout_id = params
+            .0
+            .workout_id
             .as_ref()
             .map(|id| Uuid::parse_str(id))
             .transpose()
@@ -1112,21 +1245,30 @@ impl FitnessMcpServer {
         // Log individual exercises if provided
         if let Some(exercise_logs) = params.0.exercise_logs {
             for (idx, ex) in exercise_logs.into_iter().enumerate() {
-                let exercise_id = ex.exercise_id
+                let exercise_id = ex
+                    .exercise_id
                     .as_ref()
                     .map(|id| Uuid::parse_str(id))
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid exercise UUID: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid exercise UUID: {}", e), None)
+                    })?;
 
-                let weight = ex.weight_kg
+                let weight = ex
+                    .weight_kg
                     .map(|w| w.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid weight: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid weight: {}", e), None)
+                    })?;
 
-                let distance = ex.distance_meters
+                let distance = ex
+                    .distance_meters
                     .map(|d| d.to_string().parse::<BigDecimal>())
                     .transpose()
-                    .map_err(|e| McpError::invalid_params(format!("Invalid distance: {}", e), None))?;
+                    .map_err(|e| {
+                        McpError::invalid_params(format!("Invalid distance: {}", e), None)
+                    })?;
 
                 let reps_json = ex.reps_per_set.map(|r| serde_json::json!(r));
 
@@ -1171,25 +1313,65 @@ impl FitnessMcpServer {
         let fitness_profile_id = Uuid::parse_str(&params.0.fitness_profile_id)
             .map_err(|e| McpError::invalid_params(format!("Invalid profile UUID: {}", e), None))?;
 
-        let weight = params.0.weight_kg.map(|w| w.to_string().parse::<BigDecimal>()).transpose()
+        let weight = params
+            .0
+            .weight_kg
+            .map(|w| w.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid weight: {}", e), None))?;
-        let body_fat = params.0.body_fat_percentage.map(|bf| bf.to_string().parse::<BigDecimal>()).transpose()
+        let body_fat = params
+            .0
+            .body_fat_percentage
+            .map(|bf| bf.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid body fat: {}", e), None))?;
-        let waist = params.0.waist_cm.map(|w| w.to_string().parse::<BigDecimal>()).transpose()
+        let waist = params
+            .0
+            .waist_cm
+            .map(|w| w.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid waist: {}", e), None))?;
-        let chest = params.0.chest_cm.map(|c| c.to_string().parse::<BigDecimal>()).transpose()
+        let chest = params
+            .0
+            .chest_cm
+            .map(|c| c.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid chest: {}", e), None))?;
-        let hips = params.0.hips_cm.map(|h| h.to_string().parse::<BigDecimal>()).transpose()
+        let hips = params
+            .0
+            .hips_cm
+            .map(|h| h.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid hips: {}", e), None))?;
-        let left_arm = params.0.left_arm_cm.map(|la| la.to_string().parse::<BigDecimal>()).transpose()
+        let left_arm = params
+            .0
+            .left_arm_cm
+            .map(|la| la.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid left arm: {}", e), None))?;
-        let right_arm = params.0.right_arm_cm.map(|ra| ra.to_string().parse::<BigDecimal>()).transpose()
+        let right_arm = params
+            .0
+            .right_arm_cm
+            .map(|ra| ra.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid right arm: {}", e), None))?;
-        let left_thigh = params.0.left_thigh_cm.map(|lt| lt.to_string().parse::<BigDecimal>()).transpose()
+        let left_thigh = params
+            .0
+            .left_thigh_cm
+            .map(|lt| lt.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid left thigh: {}", e), None))?;
-        let right_thigh = params.0.right_thigh_cm.map(|rt| rt.to_string().parse::<BigDecimal>()).transpose()
+        let right_thigh = params
+            .0
+            .right_thigh_cm
+            .map(|rt| rt.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid right thigh: {}", e), None))?;
-        let neck = params.0.neck_cm.map(|n| n.to_string().parse::<BigDecimal>()).transpose()
+        let neck = params
+            .0
+            .neck_cm
+            .map(|n| n.to_string().parse::<BigDecimal>())
+            .transpose()
             .map_err(|e| McpError::invalid_params(format!("Invalid neck: {}", e), None))?;
 
         let measurement = FitnessService::log_body_measurement(
@@ -1408,20 +1590,26 @@ impl FitnessMcpServer {
         let workout_id = Uuid::parse_str(&params.0.workout_id)
             .map_err(|e| McpError::invalid_params(format!("Invalid workout UUID: {}", e), None))?;
 
-        let warnings = FitnessService::check_workout_restrictions(&self.pool, fitness_profile_id, workout_id)
-            .await
-            .map_err(convert_error)?;
+        let warnings =
+            FitnessService::check_workout_restrictions(&self.pool, fitness_profile_id, workout_id)
+                .await
+                .map_err(convert_error)?;
 
         if warnings.is_empty() {
             Ok(CallToolResult::success(vec![Content::text(
                 "✓ Workout is safe - no conflicts with user restrictions found.",
             )]))
         } else {
-            let mut output = format!("⚠️ WARNING: {} potential conflict(s) found:\n\n", warnings.len());
+            let mut output = format!(
+                "⚠️ WARNING: {} potential conflict(s) found:\n\n",
+                warnings.len()
+            );
             for warning in warnings {
                 output.push_str(&format!("- {}\n", warning));
             }
-            output.push_str("\nPlease review these exercises and consider modifications or alternatives.");
+            output.push_str(
+                "\nPlease review these exercises and consider modifications or alternatives.",
+            );
             Ok(CallToolResult::success(vec![Content::text(output)]))
         }
     }
@@ -1695,4 +1883,3 @@ impl ServerHandler for FitnessMcpServer {
         }
     }
 }
-

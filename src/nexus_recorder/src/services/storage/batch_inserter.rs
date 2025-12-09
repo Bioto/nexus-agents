@@ -6,8 +6,8 @@
 //! - After a time interval (default: 1 second)
 //! - On explicit flush or shutdown
 
-use crate::error::{RecorderError, Result};
 use super::database::Database;
+use crate::error::{RecorderError, Result};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;

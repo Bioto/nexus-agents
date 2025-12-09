@@ -7,7 +7,8 @@ pub mod tts;
 pub mod voice_listener;
 
 // Re-exports for convenience
-pub use audio_recorder::{AudioRecorder, AudioStream, DeviceInfo, RecordingConfig as AudioRecordingConfig};
+pub use audio_recorder::{
+    AudioRecorder, AudioStream, DeviceInfo, RecordingConfig as AudioRecordingConfig,
+};
 pub use tts::{TextToSpeech, TtsConfig};
 pub use voice_listener::{VoiceListener, VoiceListenerConfig};
-

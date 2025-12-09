@@ -495,10 +495,9 @@ impl Database {
             mouse_moves
         );
 
-        self.service
-            .insert(&query)
-            .await
-            .map_err(|e| RecorderError::Other(format!("Failed to update session metrics: {}", e)))?;
+        self.service.insert(&query).await.map_err(|e| {
+            RecorderError::Other(format!("Failed to update session metrics: {}", e))
+        })?;
 
         Ok(())
     }
@@ -589,11 +588,18 @@ impl Database {
     }
 
     /// Count session events by type
-    pub async fn count_session_events_by_type(&self, session_id: &str) -> Result<SessionEventCounts> {
+    pub async fn count_session_events_by_type(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionEventCounts> {
         use nexus_core::services::ClickHouseConfig;
 
         let config = ClickHouseConfig::from_env();
-        let http_port = if config.port == 9000 { 8123 } else { config.port };
+        let http_port = if config.port == 9000 {
+            8123
+        } else {
+            config.port
+        };
         let url = format!("http://{}:{}", config.host, http_port);
 
         let query = format!(
@@ -620,11 +626,19 @@ impl Database {
             .map_err(|e| RecorderError::Other(format!("Failed to count events: {}", e)))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(RecorderError::Other(format!("ClickHouse query failed: {}", error_text)));
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(RecorderError::Other(format!(
+                "ClickHouse query failed: {}",
+                error_text
+            )));
         }
 
-        let text = response.text().await
+        let text = response
+            .text()
+            .await
             .map_err(|e| RecorderError::Other(format!("Failed to read response: {}", e)))?;
 
         // Parse the single JSON line
@@ -633,10 +647,22 @@ impl Database {
                 .map_err(|e| RecorderError::Other(format!("Failed to parse JSON: {}", e)))?;
 
             Ok(SessionEventCounts {
-                keyboard_presses: row.get("keyboard_presses").and_then(|v| v.as_u64()).unwrap_or(0),
-                keyboard_releases: row.get("keyboard_releases").and_then(|v| v.as_u64()).unwrap_or(0),
-                mouse_clicks: row.get("mouse_clicks").and_then(|v| v.as_u64()).unwrap_or(0),
-                mouse_releases: row.get("mouse_releases").and_then(|v| v.as_u64()).unwrap_or(0),
+                keyboard_presses: row
+                    .get("keyboard_presses")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                keyboard_releases: row
+                    .get("keyboard_releases")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                mouse_clicks: row
+                    .get("mouse_clicks")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                mouse_releases: row
+                    .get("mouse_releases")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
                 mouse_moves: row.get("mouse_moves").and_then(|v| v.as_u64()).unwrap_or(0),
             })
         } else {
@@ -763,7 +789,9 @@ impl Database {
             Ok(dt) => dt.with_timezone(&Utc),
             Err(_) => {
                 chrono::NaiveDateTime::parse_from_str(&start_time_str, "%Y-%m-%d %H:%M:%S%.f")
-                    .map_err(|e| RecorderError::Other(format!("Failed to parse start_time: {}", e)))?
+                    .map_err(|e| {
+                        RecorderError::Other(format!("Failed to parse start_time: {}", e))
+                    })?
                     .and_utc()
             }
         };
@@ -810,7 +838,9 @@ impl Database {
                 session_id.replace('\'', "''")
             ))
             .await
-            .map_err(|e| RecorderError::Other(format!("Failed to query button frequency: {}", e)))?;
+            .map_err(|e| {
+                RecorderError::Other(format!("Failed to query button frequency: {}", e))
+            })?;
 
         let mut mouse_button_frequency = HashMap::new();
         for row in button_block.rows() {
@@ -1070,7 +1100,9 @@ impl Database {
                         start_time_str,
                         "%Y-%m-%d %H:%M:%S%.f",
                     )
-                    .map_err(|e| RecorderError::Other(format!("Failed to parse start_time: {}", e)))?
+                    .map_err(|e| {
+                        RecorderError::Other(format!("Failed to parse start_time: {}", e))
+                    })?
                     .and_utc(),
                 };
                 return Ok(Some(start_time));

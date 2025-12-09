@@ -117,8 +117,9 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         },
         Commands::Exporter { command } => match command {
-            ExporterCommands::Pdf(args) => nexus_exporter::run_pdf(args)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+            ExporterCommands::Pdf(args) => {
+                nexus_exporter::run_pdf(args).map_err(|e| anyhow::anyhow!(e.to_string()))?
+            }
         },
         Commands::McpAgent(args) => cli::commands::mcp_agent::run_mcp_agent(args)
             .await

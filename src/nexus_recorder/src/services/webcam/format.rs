@@ -102,4 +102,3 @@ pub fn yuv_to_rgb(y: i32, u: i32, v: i32) -> (u8, u8, u8) {
 
     (r, g, b)
 }
-

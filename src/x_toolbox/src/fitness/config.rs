@@ -29,4 +29,3 @@ pub const DEFAULT_MCP_PORT: u16 = 8082;
 
 /// Default HTTP server port for the fitness REST API
 pub const DEFAULT_HTTP_PORT: u16 = 8081;
-

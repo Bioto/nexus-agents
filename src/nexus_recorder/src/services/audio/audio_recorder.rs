@@ -527,10 +527,9 @@ impl AudioRecorder {
         }
 
         // Fallback: construct monitor name from output device
-        let default_output_idx = self
-            .pa
-            .default_output_device()
-            .map_err(|e| RecorderError::Audio(format!("No default output device available: {}", e)))?;
+        let default_output_idx = self.pa.default_output_device().map_err(|e| {
+            RecorderError::Audio(format!("No default output device available: {}", e))
+        })?;
         let default_output_info = self.pa.device_info(default_output_idx).map_err(|e| {
             RecorderError::Audio(format!("Failed to get default output device info: {}", e))
         })?;

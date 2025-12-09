@@ -290,7 +290,7 @@ pub struct FitnessProfile {
     pub target_weight_kg: Option<BigDecimal>,
     pub height_cm: Option<BigDecimal>,
     pub fitness_level: String,
-    pub goals: Option<serde_json::Value>,       // JSONB array
+    pub goals: Option<serde_json::Value>,        // JSONB array
     pub restrictions: Option<serde_json::Value>, // JSONB array
     pub activity_level: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -498,12 +498,12 @@ pub struct ProgressSummary {
 /// Caloric needs calculation result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaloricNeeds {
-    pub bmr: f64,           // Basal Metabolic Rate
-    pub tdee: f64,          // Total Daily Energy Expenditure
-    pub weight_loss: f64,   // Calories for weight loss (-500)
-    pub maintenance: f64,   // Maintenance calories
-    pub weight_gain: f64,   // Calories for weight gain (+500)
-    pub protein_g: f64,     // Recommended protein intake
+    pub bmr: f64,         // Basal Metabolic Rate
+    pub tdee: f64,        // Total Daily Energy Expenditure
+    pub weight_loss: f64, // Calories for weight loss (-500)
+    pub maintenance: f64, // Maintenance calories
+    pub weight_gain: f64, // Calories for weight gain (+500)
+    pub protein_g: f64,   // Recommended protein intake
     pub activity_level: String,
 }
 
@@ -665,4 +665,3 @@ pub struct ExerciseLogInput {
     pub notes: Option<String>,
     pub is_personal_record: Option<bool>,
 }
-

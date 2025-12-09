@@ -126,7 +126,10 @@ impl FitnessService {
         let mut bind_idx = 1;
 
         if search.is_some() {
-            conditions.push(format!("(name ILIKE ${} OR description ILIKE ${})", bind_idx, bind_idx));
+            conditions.push(format!(
+                "(name ILIKE ${} OR description ILIKE ${})",
+                bind_idx, bind_idx
+            ));
             bind_idx += 1;
         }
         if exercise_type.is_some() {
@@ -251,7 +254,15 @@ impl FitnessService {
         workout_type: &str,
         difficulty_level: &str,
         estimated_duration_minutes: Option<i32>,
-        exercises: Vec<(Uuid, i32, Option<i32>, Option<i32>, Option<i32>, Option<i32>, Option<String>)>,
+        exercises: Vec<(
+            Uuid,
+            i32,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<i32>,
+            Option<String>,
+        )>,
     ) -> Result<WorkoutPlan> {
         let mut tx = pool.begin().await?;
 
@@ -272,7 +283,9 @@ impl FitnessService {
         .await?;
 
         // Add exercises
-        for (exercise_id, order_index, sets, reps, duration_seconds, rest_seconds, notes) in exercises {
+        for (exercise_id, order_index, sets, reps, duration_seconds, rest_seconds, notes) in
+            exercises
+        {
             sqlx::query(
                 r#"
                 INSERT INTO workout_exercises (workout_id, exercise_id, order_index, sets, reps, duration_seconds, rest_seconds, notes)
@@ -313,7 +326,10 @@ impl FitnessService {
     }
 
     /// Get workout plan with full details (exercises)
-    pub async fn get_workout_plan_with_details(pool: &PgPool, id: Uuid) -> Result<WorkoutPlanWithDetails> {
+    pub async fn get_workout_plan_with_details(
+        pool: &PgPool,
+        id: Uuid,
+    ) -> Result<WorkoutPlanWithDetails> {
         let workout = Self::get_workout_plan(pool, id).await?;
 
         // Get workout exercises
@@ -553,14 +569,17 @@ impl FitnessService {
     }
 
     /// Remove exercise from workout plan
-    pub async fn remove_workout_exercise(pool: &PgPool, workout_id: Uuid, exercise_id: Uuid) -> Result<()> {
-        let result = sqlx::query(
-            "DELETE FROM workout_exercises WHERE workout_id = $1 AND exercise_id = $2",
-        )
-        .bind(workout_id)
-        .bind(exercise_id)
-        .execute(pool)
-        .await?;
+    pub async fn remove_workout_exercise(
+        pool: &PgPool,
+        workout_id: Uuid,
+        exercise_id: Uuid,
+    ) -> Result<()> {
+        let result =
+            sqlx::query("DELETE FROM workout_exercises WHERE workout_id = $1 AND exercise_id = $2")
+                .bind(workout_id)
+                .bind(exercise_id)
+                .execute(pool)
+                .await?;
 
         if result.rows_affected() == 0 {
             return Err(ToolboxError::NotFound(format!(
@@ -1544,7 +1563,9 @@ impl FitnessService {
                 if restriction_lower.contains("knee") || restriction_lower.contains("leg") {
                     if muscle_groups.iter().any(|mg| {
                         let mg_lower = mg.to_lowercase();
-                        mg_lower.contains("quad") || mg_lower.contains("hamstring") || mg_lower.contains("leg")
+                        mg_lower.contains("quad")
+                            || mg_lower.contains("hamstring")
+                            || mg_lower.contains("leg")
                     }) {
                         warnings.push(format!(
                             "Exercise '{}' targets legs - may conflict with restriction: {}",
@@ -1554,7 +1575,10 @@ impl FitnessService {
                 }
 
                 if restriction_lower.contains("back") {
-                    if muscle_groups.iter().any(|mg| mg.to_lowercase().contains("back")) {
+                    if muscle_groups
+                        .iter()
+                        .any(|mg| mg.to_lowercase().contains("back"))
+                    {
                         warnings.push(format!(
                             "Exercise '{}' targets back - may conflict with restriction: {}",
                             exercise.name, restriction
@@ -1563,7 +1587,10 @@ impl FitnessService {
                 }
 
                 if restriction_lower.contains("shoulder") {
-                    if muscle_groups.iter().any(|mg| mg.to_lowercase().contains("shoulder")) {
+                    if muscle_groups
+                        .iter()
+                        .any(|mg| mg.to_lowercase().contains("shoulder"))
+                    {
                         warnings.push(format!(
                             "Exercise '{}' targets shoulders - may conflict with restriction: {}",
                             exercise.name, restriction
@@ -1571,7 +1598,9 @@ impl FitnessService {
                     }
                 }
 
-                if restriction_lower.contains("no running") || restriction_lower.contains("no cardio") {
+                if restriction_lower.contains("no running")
+                    || restriction_lower.contains("no cardio")
+                {
                     if exercise.exercise_type == "cardio" {
                         warnings.push(format!(
                             "Exercise '{}' is cardio - may conflict with restriction: {}",
@@ -1650,11 +1679,14 @@ impl FitnessService {
         let personal_records_count: i64 = pr_stats.get("count");
 
         // Get recent measurements
-        let recent_measurements = Self::get_body_measurements(pool, fitness_profile_id, Some(5)).await?;
+        let recent_measurements =
+            Self::get_body_measurements(pool, fitness_profile_id, Some(5)).await?;
 
         // Calculate weight change
         let weight_change_kg = if recent_measurements.len() >= 2 {
-            let latest = recent_measurements.first().and_then(|m| m.weight_kg.clone());
+            let latest = recent_measurements
+                .first()
+                .and_then(|m| m.weight_kg.clone());
             let oldest = recent_measurements.last().and_then(|m| m.weight_kg.clone());
             match (latest, oldest) {
                 (Some(l), Some(o)) => Some(l - o),
@@ -1684,4 +1716,3 @@ impl FitnessService {
         })
     }
 }
-

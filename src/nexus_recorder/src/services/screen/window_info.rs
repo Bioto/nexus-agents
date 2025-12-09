@@ -43,7 +43,7 @@ impl WindowInfoService {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             Err(RecorderError::Other(
-                "Window enumeration not supported on this platform".to_string()
+                "Window enumeration not supported on this platform".to_string(),
             ))
         }
     }
@@ -63,7 +63,7 @@ impl WindowInfoService {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             Err(RecorderError::Other(
-                "Active window detection not supported on this platform".to_string()
+                "Active window detection not supported on this platform".to_string(),
             ))
         }
     }
@@ -83,7 +83,7 @@ impl WindowInfoService {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             Err(RecorderError::Other(
-                "Window lookup not supported on this platform".to_string()
+                "Window lookup not supported on this platform".to_string(),
             ))
         }
     }
@@ -103,7 +103,7 @@ impl WindowInfoService {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             Err(RecorderError::Other(
-                "Window lookup by PID not supported on this platform".to_string()
+                "Window lookup by PID not supported on this platform".to_string(),
             ))
         }
     }
@@ -361,7 +361,9 @@ impl WindowInfoService {
             }
         }
 
-        Err(RecorderError::Other("Window geometry not found".to_string()))
+        Err(RecorderError::Other(
+            "Window geometry not found".to_string(),
+        ))
     }
 
     #[cfg(target_os = "linux")]
@@ -372,7 +374,9 @@ impl WindowInfoService {
             .output()?;
 
         if !output.status.success() {
-            return Err(RecorderError::Other("xdotool getwindowgeometry failed".to_string()));
+            return Err(RecorderError::Other(
+                "xdotool getwindowgeometry failed".to_string(),
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

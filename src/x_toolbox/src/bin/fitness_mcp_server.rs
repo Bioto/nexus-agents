@@ -17,7 +17,9 @@ use x_toolbox::nutrition::Database;
 
 #[derive(Parser, Debug)]
 #[command(name = "fitness-mcp-server")]
-#[command(about = "Fitness/Personal Trainer MCP Server - supports both stdio and streamable HTTP transports")]
+#[command(
+    about = "Fitness/Personal Trainer MCP Server - supports both stdio and streamable HTTP transports"
+)]
 struct Args {
     /// Transport type to use: "stdio" or "http"
     #[arg(short, long, default_value = "stdio")]
@@ -111,4 +113,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[DEBUG] Server ended");
     Ok(())
 }
-

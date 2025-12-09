@@ -20,4 +20,3 @@ pub mod report;
 
 // Webcam splitter
 pub mod splitter;
-

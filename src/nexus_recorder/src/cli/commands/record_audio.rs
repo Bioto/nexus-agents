@@ -87,9 +87,7 @@ pub fn run_record(args: RecordArgs) -> Result<()> {
             println!("\n\n🛑 Stopping recording...");
             std::process::exit(0);
         })
-        .map_err(|e| {
-            RecorderError::Other(format!("Failed to set Ctrl+C handler: {}", e))
-        })?;
+        .map_err(|e| RecorderError::Other(format!("Failed to set Ctrl+C handler: {}", e)))?;
     }
 
     // Start recording

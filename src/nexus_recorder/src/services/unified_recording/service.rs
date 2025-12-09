@@ -5,10 +5,14 @@
 
 use crate::error::{RecorderError, Result};
 use crate::services::audio::{AudioRecorder, AudioRecordingConfig as AudioRecordingConfigInternal};
-use crate::services::storage::{BatchEvent, BatchEventInserter, Database, RotatingEventWriter, RotatingEventWriterHandle};
-use crate::services::input::InputEvent;
+use crate::services::context::context_processing::{
+    ProcessingHandle, ProcessingJob, ProcessingService,
+};
 use crate::services::context::{ClickContextHandle, ClickContextService};
-use crate::services::context::context_processing::{ProcessingHandle, ProcessingJob, ProcessingService};
+use crate::services::input::InputEvent;
+use crate::services::storage::{
+    BatchEvent, BatchEventInserter, Database, RotatingEventWriter, RotatingEventWriterHandle,
+};
 use chrono::{DateTime, Local, Utc};
 use log::{error, info, warn};
 use serde_json::json;
@@ -22,7 +26,8 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 use super::config::{
     AudioRecordingConfig, DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel,
-    ScreenRecordingConfig, UnifiedRecordingConfig, AUDIO_BUFFER_DURATION_MS, INPUT_POLL_INTERVAL_MS,
+    ScreenRecordingConfig, UnifiedRecordingConfig, AUDIO_BUFFER_DURATION_MS,
+    INPUT_POLL_INTERVAL_MS,
 };
 use super::timeline::print_timeline;
 
@@ -203,11 +208,11 @@ impl UnifiedRecordingService {
         let capture_mouse = self.config.capture_mouse;
         let capture_mouse_moves = self.config.capture_mouse_moves;
         let callback_clone = Arc::clone(&self.callback);
-        
+
         // Create shared context for spawned tasks (single struct clone vs multiple Arc clones)
         let ctx = RecordingContext::new(Arc::clone(&db), Arc::clone(&session_id));
         let ctx_for_process = ctx.clone();
-        
+
         let recording_start_clone = recording_start;
         let stop_signal_input = stop_signal.clone();
 
@@ -215,9 +220,17 @@ impl UnifiedRecordingService {
         let session_id_for_input = Arc::clone(&session_id);
         // Use screen output path for input events (clicks/keyboard are associated with desktop)
         // Webcam video won't have input events, only desktop recording will
-        let video_path_for_input = self.config.screen_config.as_ref()
+        let video_path_for_input = self
+            .config
+            .screen_config
+            .as_ref()
             .map(|c| c.output_path.clone())
-            .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
+            .or_else(|| {
+                self.config
+                    .webcam_config
+                    .as_ref()
+                    .map(|c| c.output_path.clone())
+            })
             .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
         let rotating_writer_for_input = rotating_writer_handle.clone();
         let input_handle = tokio::task::spawn_blocking(move || {
@@ -259,7 +272,10 @@ impl UnifiedRecordingService {
         // Use the same ProcessingService that handles click context
         let webcam_analysis_handle = if self.config.webcam_config.is_some() {
             if let Some(analysis_config) = self.config.webcam_analysis_config.clone() {
-                let video_path = self.config.webcam_config.as_ref()
+                let video_path = self
+                    .config
+                    .webcam_config
+                    .as_ref()
                     .map(|c| c.output_path.clone())
                     .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
                 let video_path = if video_path.is_absolute() {
@@ -270,7 +286,7 @@ impl UnifiedRecordingService {
                         .map(|cwd| cwd.join(&video_path))
                         .unwrap_or(video_path)
                 };
-                
+
                 // Start or reuse ProcessingService for webcam analysis
                 match Database::new().await {
                     Ok(db) => {
@@ -319,24 +335,37 @@ impl UnifiedRecordingService {
                     ctx.inner().clone()
                 } else {
                     // Create new ProcessingService if click context is disabled
-                    let processing_config = crate::services::context::context_processing::ProcessingConfig::from_env();
+                    let processing_config =
+                        crate::services::context::context_processing::ProcessingConfig::from_env();
                     match ProcessingService::start(processing_config, (*db).clone()) {
                         Ok(handle) => handle,
                         Err(e) => {
-                            warn!("⚠️  Failed to start processing service for periodic context: {}", e);
+                            warn!(
+                                "⚠️  Failed to start processing service for periodic context: {}",
+                                e
+                            );
                             return Err(RecorderError::Other(format!(
-                                "Failed to start processing service: {}", e
+                                "Failed to start processing service: {}",
+                                e
                             )));
                         }
                     }
                 };
 
                 // Use screen video for periodic context (input events are associated with desktop)
-                let video_path = self.config.screen_config.as_ref()
+                let video_path = self
+                    .config
+                    .screen_config
+                    .as_ref()
                     .map(|c| c.output_path.clone())
-                    .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
+                    .or_else(|| {
+                        self.config
+                            .webcam_config
+                            .as_ref()
+                            .map(|c| c.output_path.clone())
+                    })
                     .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
-                
+
                 let video_path = if video_path.is_absolute() {
                     video_path
                 } else {
@@ -408,7 +437,10 @@ impl UnifiedRecordingService {
                         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
                     }
 
-                    info!("🔄 Periodic context processing completed: {} intervals processed", interval_count);
+                    info!(
+                        "🔄 Periodic context processing completed: {} intervals processed",
+                        interval_count
+                    );
                 }))
             } else {
                 None
@@ -466,9 +498,7 @@ impl UnifiedRecordingService {
                             // DON'T change the default source - we'll use the monitor source name directly
                             // This allows the microphone to continue using the default source
                             info!("ℹ️  Using monitor source '{}' directly (not changing default source)", monitor_name);
-                            info!(
-                                "   This allows microphone to use default source simultaneously"
-                            );
+                            info!("   This allows microphone to use default source simultaneously");
                         }
                         Err(e) => {
                             warn!("⚠️  Failed to create loopback sink: {}", e);
@@ -537,8 +567,11 @@ impl UnifiedRecordingService {
                 }
 
                 // Try to receive event with timeout to allow periodic stop signal checks
-                let event_result =
-                    tokio::time::timeout(Duration::from_millis(AUDIO_BUFFER_DURATION_MS), event_rx.recv()).await;
+                let event_result = tokio::time::timeout(
+                    Duration::from_millis(AUDIO_BUFFER_DURATION_MS),
+                    event_rx.recv(),
+                )
+                .await;
 
                 let (event, event_time) = match event_result {
                     Ok(Some(event)) => event,
@@ -594,7 +627,8 @@ impl UnifiedRecordingService {
                             "x": label_x,
                             "y": label_y,
                         });
-                        if let Err(e) = ctx.db
+                        if let Err(e) = ctx
+                            .db
                             .insert_event(
                                 &ctx.session_id,
                                 "overlay",
@@ -650,11 +684,9 @@ impl UnifiedRecordingService {
                                     let ctx = ctx_for_process.clone();
                                     let key_for_freq = key.clone();
                                     tokio::spawn(async move {
-                                        if let Err(e) = ctx.db
-                                            .update_key_frequency(
-                                                &ctx.session_id,
-                                                &key_for_freq,
-                                            )
+                                        if let Err(e) = ctx
+                                            .db
+                                            .update_key_frequency(&ctx.session_id, &key_for_freq)
                                             .await
                                         {
                                             warn!("⚠️  Failed to update key frequency: {}", e);
@@ -693,7 +725,8 @@ impl UnifiedRecordingService {
                                         let ctx = ctx_for_process.clone();
                                         let btn_for_freq = btn.clone();
                                         tokio::spawn(async move {
-                                            if let Err(e) = ctx.db
+                                            if let Err(e) = ctx
+                                                .db
                                                 .update_mouse_button_frequency(
                                                     &ctx.session_id,
                                                     &btn_for_freq,
@@ -716,7 +749,8 @@ impl UnifiedRecordingService {
                                 let timestamp_for_event = timestamp.clone();
                                 let pressed_for_event = *pressed;
                                 tokio::spawn(async move {
-                                    if let Err(e) = ctx.db
+                                    if let Err(e) = ctx
+                                        .db
                                         .insert_event(
                                             &ctx.session_id,
                                             "keyboard",
@@ -744,11 +778,9 @@ impl UnifiedRecordingService {
                                     }
 
                                     if pressed_for_event {
-                                        if let Err(e) = ctx.db
-                                            .update_key_frequency(
-                                                &ctx.session_id,
-                                                &key_for_event,
-                                            )
+                                        if let Err(e) = ctx
+                                            .db
+                                            .update_key_frequency(&ctx.session_id, &key_for_event)
                                             .await
                                         {
                                             warn!("⚠️  Failed to update key frequency: {}", e);
@@ -770,7 +802,8 @@ impl UnifiedRecordingService {
                                 let y_for_event = *y;
                                 let timestamp_for_event = timestamp.clone();
                                 tokio::spawn(async move {
-                                    if let Err(e) = ctx.db
+                                    if let Err(e) = ctx
+                                        .db
                                         .insert_event(
                                             &ctx.session_id,
                                             "mouse",
@@ -787,19 +820,14 @@ impl UnifiedRecordingService {
                                         )
                                         .await
                                     {
-                                        warn!(
-                                            "⚠️  Failed to store mouse event in database: {}",
-                                            e
-                                        );
+                                        warn!("⚠️  Failed to store mouse event in database: {}", e);
                                     }
 
                                     if event_type_for_event == "click" {
                                         if let Some(ref btn) = button_for_event {
-                                            if let Err(e) = ctx.db
-                                                .update_mouse_button_frequency(
-                                                    &ctx.session_id,
-                                                    btn,
-                                                )
+                                            if let Err(e) = ctx
+                                                .db
+                                                .update_mouse_button_frequency(&ctx.session_id, btn)
                                                 .await
                                             {
                                                 warn!(
@@ -1025,7 +1053,7 @@ impl UnifiedRecordingService {
         config: ScreenRecordingConfig,
         stop_signal: Arc<AtomicBool>,
     ) -> Result<()> {
-        use crate::services::screen::{ScreenRecordingConfig as RecordingConfig, ScreenRecorder};
+        use crate::services::screen::{ScreenRecorder, ScreenRecordingConfig as RecordingConfig};
 
         // Convert our config to nexus_screen's RecordingConfig
         let recording_config = RecordingConfig {
@@ -1076,7 +1104,7 @@ impl UnifiedRecordingService {
         match WebcamRecorder::new(config.clone()) {
             Ok(recorder) => {
                 info!("📹 Using v4l2 format detection");
-                
+
                 // Wrap recorder in Arc so we can share it with the monitor thread
                 let recorder_arc = StdArc::new(std::sync::Mutex::new(recorder));
                 let recorder_for_monitor = StdArc::clone(&recorder_arc);
@@ -1107,14 +1135,20 @@ impl UnifiedRecordingService {
 
                 if let Err(e) = result {
                     error!("Webcam recording error: {}", e);
-                    return Err(RecorderError::Other(format!("Webcam recording failed: {}", e)));
+                    return Err(RecorderError::Other(format!(
+                        "Webcam recording failed: {}",
+                        e
+                    )));
                 }
             }
             Err(e) => {
                 // v4l2 format detection failed - use direct FFmpeg recording
                 // This is common for v4l2loopback virtual camera devices
-                warn!("📹 v4l2 format detection failed: {}. Using direct FFmpeg recording.", e);
-                
+                warn!(
+                    "📹 v4l2 format detection failed: {}. Using direct FFmpeg recording.",
+                    e
+                );
+
                 WebcamRecorder::record_direct(&config, stop_signal)?;
             }
         }
@@ -1624,15 +1658,17 @@ impl UnifiedRecordingService {
                 "FFmpeg is installed but returned an error. Please check your FFmpeg installation."
                     .to_string(),
             )),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(RecorderError::Other(format!(
-                "FFmpeg is not installed or not found in PATH. \
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(RecorderError::Other(format!(
+                    "FFmpeg is not installed or not found in PATH. \
                     Please install FFmpeg to enable video overlays:\n\
                     - Linux (Ubuntu/Debian): sudo apt-get install ffmpeg\n\
                     - macOS: brew install ffmpeg\n\
                     - Or download from: https://ffmpeg.org/download.html\n\
                     Error: {}",
-                e
-            ))),
+                    e
+                )))
+            }
             Err(e) => Err(RecorderError::Other(format!(
                 "Failed to check FFmpeg availability: {}",
                 e
@@ -1864,11 +1900,19 @@ impl RecordingSession {
 
         // Store video recording path (prefer screen, fallback to webcam)
         // Input events are associated with desktop/screen recording
-        let video_path = self.config.screen_config.as_ref()
+        let video_path = self
+            .config
+            .screen_config
+            .as_ref()
             .map(|c| c.output_path.clone())
-            .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
+            .or_else(|| {
+                self.config
+                    .webcam_config
+                    .as_ref()
+                    .map(|c| c.output_path.clone())
+            })
             .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
-        
+
         let video_path = if video_path.is_absolute() {
             video_path
         } else {
@@ -1879,11 +1923,17 @@ impl RecordingSession {
         };
 
         let timestamp = Local::now().to_rfc3339();
-        let framerate = self.config.webcam_config.as_ref()
+        let framerate = self
+            .config
+            .webcam_config
+            .as_ref()
             .map(|c| c.framerate)
             .or_else(|| self.config.screen_config.as_ref().map(|c| c.framerate))
             .unwrap_or(30);
-        let include_audio = self.config.screen_config.as_ref()
+        let include_audio = self
+            .config
+            .screen_config
+            .as_ref()
             .map(|c| c.include_audio)
             .unwrap_or(false);
         let video_metadata = json!({
@@ -1966,15 +2016,17 @@ impl RecordingSession {
         // Wait for screen recording if enabled
         if let Some(screen_handle) = self.screen_handle {
             let screen_result = screen_handle.await;
-            screen_result
-                .map_err(|e| RecorderError::Other(format!("Screen recording task failed: {}", e)))??;
+            screen_result.map_err(|e| {
+                RecorderError::Other(format!("Screen recording task failed: {}", e))
+            })??;
         }
 
         // Wait for webcam recording if enabled
         if let Some(webcam_handle) = self.webcam_handle {
             let webcam_result = webcam_handle.await;
-            webcam_result
-                .map_err(|e| RecorderError::Other(format!("Webcam recording task failed: {}", e)))??;
+            webcam_result.map_err(|e| {
+                RecorderError::Other(format!("Webcam recording task failed: {}", e))
+            })??;
         }
 
         // Stop and wait for webcam analysis if enabled
@@ -2135,10 +2187,7 @@ impl RecordingSession {
                                             println!("✅ {} transcription completed", audio_type);
                                         }
                                         Err(e) => {
-                                            warn!(
-                                                "⚠️  {} transcription failed: {}",
-                                                audio_type, e
-                                            );
+                                            warn!("⚠️  {} transcription failed: {}", audio_type, e);
                                         }
                                     }
                                 }
@@ -2233,7 +2282,9 @@ impl RecordingSession {
             tokio::time::sleep(Duration::from_millis(500)).await;
 
             if let Err(e) = UnifiedRecordingService::apply_video_overlays(
-                self.config.webcam_config.as_ref()
+                self.config
+                    .webcam_config
+                    .as_ref()
                     .map(|c| &c.output_path)
                     .or_else(|| self.config.screen_config.as_ref().map(|c| &c.output_path))
                     .unwrap_or(&PathBuf::from("output/recording.mp4")),
@@ -2249,11 +2300,19 @@ impl RecordingSession {
 
         // Store video recording stop event with final path
         // Prefer screen video (where input events are associated)
-        let video_path = self.config.screen_config.as_ref()
+        let video_path = self
+            .config
+            .screen_config
+            .as_ref()
             .map(|c| c.output_path.clone())
-            .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
+            .or_else(|| {
+                self.config
+                    .webcam_config
+                    .as_ref()
+                    .map(|c| c.output_path.clone())
+            })
             .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
-        
+
         let video_path = if video_path.is_absolute() {
             video_path
         } else {
@@ -2265,11 +2324,17 @@ impl RecordingSession {
 
         let timestamp = Local::now().to_rfc3339();
         let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
-        let framerate = self.config.webcam_config.as_ref()
+        let framerate = self
+            .config
+            .webcam_config
+            .as_ref()
             .map(|c| c.framerate)
             .or_else(|| self.config.screen_config.as_ref().map(|c| c.framerate))
             .unwrap_or(30);
-        let include_audio = self.config.screen_config.as_ref()
+        let include_audio = self
+            .config
+            .screen_config
+            .as_ref()
             .map(|c| c.include_audio)
             .unwrap_or(false);
         let video_stop_metadata = json!({
@@ -2302,8 +2367,9 @@ impl RecordingSession {
         info!("📊 Finalizing session metrics...");
         if let Ok(event_counts) = db.count_session_events_by_type(&self.session_id).await {
             let keyboard_events = event_counts.keyboard_presses + event_counts.keyboard_releases;
-            let mouse_events = event_counts.mouse_clicks + event_counts.mouse_releases + event_counts.mouse_moves;
-            
+            let mouse_events =
+                event_counts.mouse_clicks + event_counts.mouse_releases + event_counts.mouse_moves;
+
             if let Err(e) = db
                 .update_session_metrics(
                     &self.session_id,
@@ -2320,7 +2386,7 @@ impl RecordingSession {
                 warn!("⚠️  Failed to update session metrics: {}", e);
             }
         }
-        
+
         // Set session end time
         if let Err(e) = db.end_session(&self.session_id).await {
             warn!("⚠️  Failed to end session: {}", e);
@@ -2334,9 +2400,17 @@ impl RecordingSession {
                 );
                 tokio::time::sleep(Duration::from_millis(1000)).await;
                 // Use screen video for context analysis (input events are associated with desktop)
-                let video_path = self.config.screen_config.as_ref()
+                let video_path = self
+                    .config
+                    .screen_config
+                    .as_ref()
                     .map(|c| c.output_path.clone())
-                    .or_else(|| self.config.webcam_config.as_ref().map(|c| c.output_path.clone()))
+                    .or_else(|| {
+                        self.config
+                            .webcam_config
+                            .as_ref()
+                            .map(|c| c.output_path.clone())
+                    })
                     .unwrap_or_else(|| PathBuf::from("output/recording.mp4"));
                 let video_duration = UnifiedRecordingService::get_video_duration(&video_path).ok();
 
