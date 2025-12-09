@@ -7,12 +7,14 @@
 //! - On explicit flush or shutdown
 
 use super::database::Database;
-use crate::error::{RecorderError, Result};
+use crate::error::{Result, StorageError};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+type RecorderError = StorageError;
 
 /// Configuration for the batch inserter.
 #[derive(Clone, Debug)]

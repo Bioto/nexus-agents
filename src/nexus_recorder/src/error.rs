@@ -1,4 +1,5 @@
 use ffmpeg_next as ffmpeg;
+use nexus_storage::StorageError;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, RecorderError>;
@@ -74,6 +75,19 @@ impl From<anyhow::Error> for RecorderError {
 impl From<nexus_core::models::Error> for RecorderError {
     fn from(err: nexus_core::models::Error) -> Self {
         RecorderError::Other(err.to_string())
+    }
+}
+
+impl From<StorageError> for RecorderError {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::Configuration(msg) => RecorderError::Configuration(msg),
+            StorageError::Database(msg) => RecorderError::Database(msg),
+            StorageError::Network(msg) => RecorderError::Api(msg),
+            StorageError::Io(io_err) => RecorderError::Io(io_err),
+            StorageError::Serialization(msg) => RecorderError::Other(msg),
+            StorageError::Other(msg) => RecorderError::Other(msg),
+        }
     }
 }
 

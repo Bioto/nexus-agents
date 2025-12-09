@@ -1,3 +1,4 @@
+use nexus_storage::StorageError;
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, ToolboxError>;
@@ -54,5 +55,18 @@ impl From<rust_decimal::Error> for ToolboxError {
 impl From<serde_json::Error> for ToolboxError {
     fn from(err: serde_json::Error) -> Self {
         ToolboxError::Validation(format!("JSON serialization error: {}", err))
+    }
+}
+
+impl From<StorageError> for ToolboxError {
+    fn from(err: StorageError) -> Self {
+        match err {
+            StorageError::Configuration(msg) => ToolboxError::Configuration(msg),
+            StorageError::Database(msg) => ToolboxError::Database(msg),
+            StorageError::Network(msg) => ToolboxError::Other(msg),
+            StorageError::Io(io_err) => ToolboxError::Io(io_err),
+            StorageError::Serialization(msg) => ToolboxError::Validation(msg),
+            StorageError::Other(msg) => ToolboxError::Other(msg),
+        }
     }
 }

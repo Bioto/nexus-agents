@@ -71,6 +71,7 @@ tray-icon = "0.21"
 
 # Core dependency
 nexus-core = { path = "../nexus_core" }
+nexus-storage = { path = "../nexus_storage", default-features = false, features = ["clickhouse"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

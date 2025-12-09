@@ -14,7 +14,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { workspace = true }
 log = "0.4"
 nexus-core = { path = "../nexus_core" }
-nexus-recorder = { path = "../nexus_recorder" }
+nexus-storage = { path = "../nexus_storage", default-features = false, features = ["clickhouse"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 simplelog = "0.12"

@@ -1,10 +1,12 @@
-use crate::error::{RecorderError, Result};
+use super::service::{ClickHouseConfig, ClickHouseService};
+use crate::error::{Result, StorageError};
 use chrono::{DateTime, Utc};
-use nexus_core::services::{ClickHouseConfig, ClickHouseService};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+type RecorderError = StorageError;
 
 /// ClickHouse-based database for storing events, sessions, and screenshots
 #[derive(Clone)]
@@ -592,8 +594,6 @@ impl Database {
         &self,
         session_id: &str,
     ) -> Result<SessionEventCounts> {
-        use nexus_core::services::ClickHouseConfig;
-
         let config = ClickHouseConfig::from_env();
         let http_port = if config.port == 9000 {
             8123
@@ -672,8 +672,6 @@ impl Database {
 
     /// Get session metrics
     pub async fn get_session_metrics(&self, session_id: &str) -> Result<Metrics> {
-        use nexus_core::services::ClickHouseConfig;
-
         // Use HTTP interface to avoid DateTime64 type issues with native protocol
         let config = ClickHouseConfig::from_env();
         let http_port = if config.port == 9000 {
@@ -931,8 +929,6 @@ impl Database {
     /// Get all events for a session ordered by timestamp/timecode
     /// Uses HTTP interface to avoid LowCardinality type issues with native protocol
     pub async fn get_session_events(&self, session_id: &str) -> Result<Vec<TimelineEvent>> {
-        use nexus_core::services::ClickHouseConfig;
-
         // Get config to build HTTP URL
         let config = ClickHouseConfig::from_env();
         let http_port = if config.port == 9000 {
@@ -1051,8 +1047,6 @@ impl Database {
 
     /// Get session start time from database
     pub async fn get_session_start_time(&self, session_id: &str) -> Result<Option<DateTime<Utc>>> {
-        use nexus_core::services::ClickHouseConfig;
-
         // Get config to build HTTP URL
         let config = ClickHouseConfig::from_env();
         let http_port = if config.port == 9000 {
@@ -1121,8 +1115,6 @@ impl Database {
         window_before: f64,
         window_after: f64,
     ) -> Result<Vec<TimelineEvent>> {
-        use nexus_core::services::ClickHouseConfig;
-
         let config = ClickHouseConfig::from_env();
         let http_port = if config.port == 9000 {
             8123

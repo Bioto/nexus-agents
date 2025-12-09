@@ -19,23 +19,28 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 const FRAME_SYSTEM_PROMPT: &str = "You are an expert UI and user behavior analyst. Analyze the provided screenshot and, if given, use any prior frame descriptions to infer the user's likely action. In one or two clear sentences, describe what the user is doing, referencing salient UI elements, visible text, and any change or intent you can deduce from the visual context.";
+
 const SUMMARY_SYSTEM_PROMPT: &str = "\
 You are an expert in interpreting user behavior from UI activity logs. Given a sequence of frame descriptions around a click event, provide a detailed summary of what likely happened, focusing on both the immediate action and surrounding context. Consider user intent, what the user might already know about the navigation target or item, and any visible clues about task progression or discovery. Explain not just what was clicked, but also what the user may have been seeking (e.g., navigating to a new item, reviewing existing information, taking action on a new element, etc.), and how the interface state or prior actions contribute to your reasoning. Write a clear, multi-sentence summary describing both the user's action and their probable understanding or goal in this context.";
+
 const WEBCAM_ANALYSIS_SYSTEM_PROMPT: &str = r#"You are an expert in analyzing human behavior and emotions from video frames. 
 Analyze the webcam frame of a computer user and provide observations about their current state.
 Be objective and concise. Focus on observable cues like facial expression, posture, and gaze direction.
 Do not make assumptions beyond what is visually apparent."#;
+
 const WEBCAM_ANALYSIS_USER_PROMPT: &str = r#"Analyze this webcam frame of a computer user. Describe:
 1. Emotional state: happy, neutral, frustrated, confused, focused, tired, or other
 2. Attention: focused on screen, distracted, looking away, engaged, multitasking
 3. Energy level: high, medium, low
-4. Notable observations about posture, gestures, or behavior
+4. Glasses: is the user wearing glasses or not?
+5. Notable observations about posture, gestures, or behavior
 
 Be concise. Respond with a JSON object containing these fields:
 {
   "sentiment": "string - primary emotional state",
   "attention": "string - attention/focus state", 
   "energy": "string - energy level",
+  "glasses": "string - 'glasses' or 'no glasses'",
   "confidence": "number 0-1 - how confident you are in this assessment",
   "notes": "string - brief additional observations"
 }"#;

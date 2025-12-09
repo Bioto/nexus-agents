@@ -2,8 +2,7 @@ use crate::Result;
 use chrono::{DateTime, Utc};
 use log::{debug, info};
 use nexus_core::{ChatCompletionRequest, Message, NexusApiService};
-use nexus_recorder::services::storage::{Metrics, TimelineEvent};
-use nexus_recorder::services::Database;
+use nexus_storage::clickhouse::{Database, Metrics, TimelineEvent};
 use serde_json::Value;
 use std::fmt::Write as _;
 

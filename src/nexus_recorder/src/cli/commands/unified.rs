@@ -1,10 +1,10 @@
 use crate::error::Result;
-use crate::services::InputEvent;
 use crate::services::unified_recording::{
     AudioRecordingConfig, DefaultEventCallback, EventCallback, InputCaptureConfig, OverlayLabel,
     ScreenRecordingConfig, UnifiedRecordingConfig, UnifiedRecordingService,
 };
 use crate::services::webcam::splitter::{SplitterConfig, SplitterHandle, WebcamSplitter};
+use crate::services::InputEvent;
 use chrono::DateTime;
 use clap::Args;
 use log::{info, warn};
@@ -218,19 +218,19 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     let effective_webcam_device = if args.enable_splitter {
         info!("Starting webcam splitter...");
         println!("📹 Starting webcam splitter...");
-        
+
         let output_devices: Vec<String> = args
             .splitter_outputs
             .split(',')
             .map(|s| s.trim().to_string())
             .collect();
-        
+
         if output_devices.is_empty() {
             return Err(crate::error::RecorderError::Configuration(
                 "Splitter requires at least one output device".to_string(),
             ));
         }
-        
+
         let splitter_config = SplitterConfig {
             input_device: args.splitter_input.clone(),
             output_devices: output_devices.clone(),
@@ -239,25 +239,25 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
             height: None,
             input_format: None,
         };
-        
+
         let mut splitter = WebcamSplitter::new(splitter_config)?;
         let handle = splitter.start()?;
-        
+
         println!("   Physical camera: {}", args.splitter_input);
         println!("   Virtual cameras: {:?}", output_devices);
         println!("   Nexus will use: {}", output_devices[0]);
         if output_devices.len() > 1 {
             println!("   Others can use: {:?}", &output_devices[1..]);
         }
-        
+
         let nexus_device = output_devices[0].clone();
         splitter_handle = Some(handle);
-        
+
         // Wait for the splitter to fully initialize and start writing to loopback devices
         // FFmpeg needs time to open the camera, decode, and start outputting to v4l2loopback
         println!("   Waiting for splitter to initialize...");
         std::thread::sleep(std::time::Duration::from_secs(2));
-        
+
         nexus_device
     } else {
         args.webcam_device.clone()
@@ -267,7 +267,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     // Screen and webcam can now run simultaneously
     // If splitter is enabled, automatically enable webcam recording
     let webcam_enabled = args.webcam || args.enable_splitter;
-    
+
     let config = UnifiedRecordingConfig {
         screen_config: if args.no_screen {
             None
@@ -298,7 +298,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
                 enable_preview: args.webcam_preview,
                 preview_title: Some("Webcam Recording".to_string()),
                 skip_ptz_reset: !args.ptz_reset, // Default skips PTZ reset to preserve AI tracking
-                ai_reinit: args.ai_reinit, // Reset PTZ and reconnect to reinitialize AI
+                ai_reinit: args.ai_reinit,       // Reset PTZ and reconnect to reinitialize AI
             })
         } else {
             None
@@ -458,10 +458,12 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         // Webcam sentiment analysis configuration
         // Enabled by default when webcam recording is active, unless explicitly disabled
         webcam_analysis_config: if webcam_enabled && !args.no_webcam_analysis {
-            Some(crate::services::unified_recording::WebcamAnalysisConfig::with_device(
-                args.webcam_analysis_interval,
-                effective_webcam_device.clone(),
-            ))
+            Some(
+                crate::services::unified_recording::WebcamAnalysisConfig::with_device(
+                    args.webcam_analysis_interval,
+                    effective_webcam_device.clone(),
+                ),
+            )
         } else {
             None
         },
@@ -503,7 +505,11 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     if webcam_enabled {
         println!(
             "   Webcam analysis: {}",
-            if !args.no_webcam_analysis { "✓" } else { "✗" }
+            if !args.no_webcam_analysis {
+                "✓"
+            } else {
+                "✗"
+            }
         );
         if !args.no_webcam_analysis {
             println!("     Interval: {} seconds", args.webcam_analysis_interval);
@@ -610,9 +616,11 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
     println!(
         "   Periodic context: {}",
         if config.periodic_context_enabled {
-            format!("every {}s ({} frames)", 
+            format!(
+                "every {}s ({} frames)",
                 config.periodic_context_interval_secs.unwrap_or(0),
-                config.periodic_context_frames_per_interval)
+                config.periodic_context_frames_per_interval
+            )
         } else {
             "disabled".to_string()
         }
@@ -820,10 +828,10 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         info!("Stopping webcam splitter...");
         println!("📹 Stopping webcam splitter...");
         handle.stop();
-        
+
         // Wait a moment for FFmpeg to fully release the device
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        
+
         // Explicitly disconnect the webcam device by opening and closing it
         // This ensures the device is fully released
         if args.enable_splitter {
@@ -884,7 +892,7 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
         .get_session_start_time(&session_id)
         .await?
         .unwrap_or(recording_start);
-    
+
     // Build absolute paths for all output files
     let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let make_absolute = |path: &PathBuf| {
@@ -958,12 +966,14 @@ pub async fn run_unified(args: UnifiedArgs) -> Result<()> {
 
     // Write JSON file
     let json_path = output_dir.join(format!("{}_results.json", session_id));
-    let json_string = serde_json::to_string_pretty(&results)
-        .map_err(|e| crate::error::RecorderError::Other(format!("Failed to serialize JSON: {}", e)))?;
-    
-    fs::write(&json_path, json_string)
-        .map_err(|e| crate::error::RecorderError::Other(format!("Failed to write JSON file: {}", e)))?;
-    
+    let json_string = serde_json::to_string_pretty(&results).map_err(|e| {
+        crate::error::RecorderError::Other(format!("Failed to serialize JSON: {}", e))
+    })?;
+
+    fs::write(&json_path, json_string).map_err(|e| {
+        crate::error::RecorderError::Other(format!("Failed to write JSON file: {}", e))
+    })?;
+
     println!("   ✅ Results exported to: {}", json_path.display());
 
     Ok(())

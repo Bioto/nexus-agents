@@ -5,7 +5,7 @@
 //! - Rotates files based on time intervals
 //! - Compresses rotated files in the background using gzip
 
-use crate::error::{RecorderError, Result};
+use crate::error::{Result, StorageError};
 use chrono::Local;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+type RecorderError = StorageError;
 
 /// Configuration for the rotating event writer.
 #[derive(Clone, Debug)]
