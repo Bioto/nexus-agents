@@ -600,14 +600,22 @@ impl ScreenRecorder {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let mut found = None;
                         for line in stdout.lines() {
-                            // Match line like: "DP-0 connected 2560x1440+0+1080 ..."
+                            // Match line like: "DP-2 connected primary 3840x2160+0+0 ..."
                             if line.contains(&format!("{} connected", name)) {
                                 let parts: Vec<&str> = line.split_whitespace().collect();
-                                if parts.len() >= 3 {
-                                    let pos_str = parts[2]; // This is "2560x1440+0+1080"
-                                                            // Extract resolution by removing everything after first '+'
+                                // Look for the first geometry token after the connection status,
+                                // skipping optional "primary" or other flags.
+                                let geom_token = parts.iter().skip(2).find(|token| {
+                                    let t = **token;
+                                    t.contains('x')
+                                        && t.contains('+')
+                                        && t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+                                });
+
+                                if let Some(pos_str) = geom_token {
+                                    // Extract resolution by removing everything after first '+'
                                     if let Some(plus_pos) = pos_str.find('+') {
-                                        let resolution = &pos_str[..plus_pos]; // "2560x1440"
+                                        let resolution = &pos_str[..plus_pos]; // e.g., "3840x2160"
                                         found = Some(resolution.to_string());
                                         break; // Found it, exit loop
                                     }

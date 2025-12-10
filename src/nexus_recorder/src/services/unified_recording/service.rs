@@ -1585,6 +1585,12 @@ impl UnifiedRecordingService {
         params.set_translate(false);
         params.set_print_progress(false);
         params.set_print_special(false);
+        
+        // Lower the no-speech threshold to capture more audio segments
+        // Default is 0.6 - lower values (0.0-1.0) will transcribe more segments
+        // This is especially important for desktop audio which may include background
+        // music, sound effects, or unclear speech that Whisper might otherwise skip
+        params.set_no_speech_thold(300.0);
 
         // Run transcription
         state
