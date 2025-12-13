@@ -11,6 +11,19 @@ members = [
     "src/nexus_storage",
     "src/x_toolbox",
 ]
+# x_toolbox is excluded from default builds (Linux-only, requires specific DB setup)
+# Build explicitly with: cargo build -p x_toolbox
+default-members = [
+    "src/nexus_core",
+    "src/nexus_gui",
+    "src/nexus",
+    "src/nexus_sandbox",
+    "src/nexus_mcp",
+    "src/nexus_recorder",
+    "src/nexus_exporter",
+    "src/nexus_notetaker",
+    "src/nexus_storage",
+]
 resolver = "2"
 
 [workspace.dependencies]
